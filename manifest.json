@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "Accord · Raccolta album",
+  "short_name": "Accord Album",
+  "description": "Raccolta album personale Accord",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#090909",
+  "theme_color": "#090909",
+  "icons": [
+    {
+      "src": "./assets/malt_metal.ico",
+      "sizes": "any",
+      "type": "image/x-icon",
+      "purpose": "any"
+    }
+  ]
+}
