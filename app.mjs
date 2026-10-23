@@ -7,11 +7,12 @@ import {
   listenBrainzRecommendations,
   playlistAlbumRecords,
   sortAlbumsByManualOrder,
+  spotifyAlbumId,
   spotifyPlaylistId,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=5";
+} from "./core.mjs?v=6";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -24,6 +25,7 @@ const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascolt
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();
+let automaticSyncQueued = false;
 $("#sortOrder").value = state.sortOrder;
 const viewTabs = [...document.querySelectorAll(".view-tabs [role='tab']")];
 
@@ -211,6 +213,10 @@ $("#settingsForm").addEventListener("submit", (event) => {
   $("#tokenInput").value = "";
   $("#settingsDialog").close();
   setSyncState("Configurazione salvata");
+  if (automaticSyncQueued) {
+    automaticSyncQueued = false;
+    void sync();
+  }
 });
 
 $("#clearCredentials").addEventListener("click", () => {
@@ -502,7 +508,24 @@ function renderSuggestedArtists(result) {
   $("#suggestionStatus").textContent = `${result.artists.length} ${label} per ${result.seed}.`;
 }
 
-function addSuggestedAlbum(album) {
+function requestAutomaticSync() {
+  automaticSyncQueued = true;
+  const { owner, token } = credentials();
+  if (!owner || !token) {
+    setSyncState("Album aggiunto localmente · configura GitHub per sincronizzare");
+    openSettings();
+    return;
+  }
+  if ($("#syncButton").disabled) {
+    setSyncState("Album aggiunto localmente · sincronizzazione GitHub in coda");
+    return;
+  }
+  automaticSyncQueued = false;
+  void sync();
+}
+
+function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
+  if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
   const previous = state.albums;
   const result = addPlaylistAlbums(previous, [album]);
   if (!result.added) return false;
@@ -514,7 +537,8 @@ function addSuggestedAlbum(album) {
     throw error;
   }
   render();
-  setSyncState("Album aggiunto localmente · sincronizza per inviarlo");
+  if (syncAutomatically) requestAutomaticSync();
+  else setSyncState("Album aggiunto localmente · sincronizza per inviarlo");
   return true;
 }
 
@@ -567,7 +591,7 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
       button.textContent = "Aggiungi";
       button.addEventListener("click", () => {
         try {
-          if (addSuggestedAlbum(album)) {
+          if (addAlbumToCollection(album)) {
             button.textContent = "Aggiunto";
             button.disabled = true;
             button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
@@ -583,6 +607,89 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
     $("#suggestionStatus").textContent = `Esplorazione album non riuscita: ${error.message}`;
   } finally {
     if (trigger?.isConnected) trigger.disabled = false;
+  }
+}
+
+function renderManualAlbumResults(albums) {
+  const container = $("#manualAlbumResults");
+  container.replaceChildren();
+  if (!albums.length) {
+    const empty = document.createElement("p");
+    empty.className = "suggestion-detail";
+    empty.textContent = "Nessun album completo e verificabile trovato su Spotify.";
+    container.append(empty);
+    return;
+  }
+  for (const album of albums) {
+    const card = document.createElement("article");
+    card.className = "suggestion-album";
+    const info = document.createElement("p");
+    const name = document.createElement("strong");
+    name.textContent = album.name;
+    const detail = document.createElement("span");
+    detail.className = "suggestion-detail";
+    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
+    info.append(name, detail);
+    const button = document.createElement("button");
+    button.className = "secondary";
+    button.type = "button";
+    const alreadyAdded = state.albums.some((existing) => existing.id === album.id);
+    button.textContent = alreadyAdded ? "Già in raccolta" : "Aggiungi";
+    button.disabled = alreadyAdded;
+    button.addEventListener("click", () => {
+      try {
+        if (addAlbumToCollection(album, { syncAutomatically: true })) {
+          button.textContent = "Aggiunto";
+          button.disabled = true;
+          button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
+          $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente; sincronizzazione GitHub avviata o in attesa di configurazione.`;
+        }
+      } catch (error) {
+        $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
+      }
+    });
+    card.append(info, button);
+    container.append(card);
+  }
+}
+
+async function searchSpotifyAlbums(input = $("#manualAlbumQuery").value, accessToken = null) {
+  const query = input.trim();
+  const button = $("#manualAlbumSearchButton");
+  button.disabled = true;
+  $("#manualAlbumStatus").textContent = "Ricerca su Spotify in corso…";
+  $("#manualAlbumResults").replaceChildren();
+  try {
+    if (!query) throw new Error("Inserisci il titolo, l’artista o un link Spotify.");
+    const token = accessToken || await spotifyAccessToken();
+    if (!token) {
+      const { clientId, redirectUri } = spotifySettings();
+      if (!clientId || !redirectUri) {
+        $("#manualAlbumStatus").textContent = "Configura il Client ID e il Redirect URI Spotify nelle impostazioni, poi riprova.";
+        return;
+      }
+      await startSpotifyAuthorization(query, "manual-search");
+      return;
+    }
+    const id = spotifyAlbumId(query);
+    let albums;
+    if (id) {
+      const album = await spotifyRequest(`albums/${encodeURIComponent(id)}`, token);
+      albums = playlistAlbumRecords([{ item: { type: "track", album } }]);
+    } else {
+      const parameters = new URLSearchParams({ q: query, type: "album", limit: "10" });
+      const response = await spotifyRequest(`search?${parameters}`, token);
+      if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza risultati verificabili.");
+      albums = playlistAlbumRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })));
+    }
+    renderManualAlbumResults(albums);
+    $("#manualAlbumStatus").textContent = albums.length
+      ? `${albums.length} album trovati. Scegli quali aggiungere alla raccolta.`
+      : "Nessun nuovo album verificabile trovato su Spotify.";
+  } catch (error) {
+    $("#manualAlbumStatus").textContent = `Ricerca Spotify non riuscita: ${error.message}`;
+  } finally {
+    if (button.isConnected) button.disabled = false;
   }
 }
 
@@ -858,9 +965,15 @@ async function startSpotifyAuthorization(input, task = "playlist") {
   const challenge = btoa(String.fromCharCode(...new Uint8Array(challengeBytes)))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const oauthState = randomValue(32);
-  sessionStorage.removeItem("accord-spotify-pending-playlist");
-  sessionStorage.removeItem("accord-spotify-pending-albums");
-  sessionStorage.setItem(task === "albums" ? "accord-spotify-pending-albums" : "accord-spotify-pending-playlist", input);
+  const pendingKeys = {
+    playlist: "accord-spotify-pending-playlist",
+    albums: "accord-spotify-pending-albums",
+    "manual-search": "accord-spotify-pending-manual-search",
+  };
+  const pendingKey = pendingKeys[task];
+  if (!pendingKey) throw new Error("Operazione Spotify non valida.");
+  for (const key of Object.values(pendingKeys)) sessionStorage.removeItem(key);
+  sessionStorage.setItem(pendingKey, input);
   sessionStorage.setItem("accord-spotify-code-verifier", verifier);
   sessionStorage.setItem("accord-spotify-oauth-state", oauthState);
   sessionStorage.setItem("accord-spotify-oauth-redirect", redirectUri);
@@ -888,9 +1001,10 @@ async function finishSpotifyAuthorization() {
   const redirectUri = sessionStorage.getItem("accord-spotify-oauth-redirect");
   const pendingPlaylist = sessionStorage.getItem("accord-spotify-pending-playlist");
   const pendingAlbums = sessionStorage.getItem("accord-spotify-pending-albums");
+  const pendingManualSearch = sessionStorage.getItem("accord-spotify-pending-manual-search");
   for (const key of ["accord-spotify-oauth-state", "accord-spotify-code-verifier",
     "accord-spotify-oauth-redirect", "accord-spotify-pending-playlist",
-    "accord-spotify-pending-albums"]) sessionStorage.removeItem(key);
+    "accord-spotify-pending-albums", "accord-spotify-pending-manual-search"]) sessionStorage.removeItem(key);
   if (error) {
     showMessage("Autorizzazione Spotify annullata", "Autorizzazione non completata; nessun dato è stato aggiunto.");
     return;
@@ -912,6 +1026,11 @@ async function finishSpotifyAuthorization() {
     storeSpotifyTokens(tokens);
     if (pendingPlaylist) await importSpotifyPlaylist(pendingPlaylist, tokens.access_token);
     else if (pendingAlbums) await loadSuggestedAlbums(pendingAlbums, null, tokens.access_token);
+    else if (pendingManualSearch) {
+      $("#manualAlbumQuery").value = pendingManualSearch;
+      $("#manualAlbumDialog").showModal();
+      await searchSpotifyAlbums(pendingManualSearch, tokens.access_token);
+    }
     else setSyncState("Spotify collegato per questa sessione");
   } catch (tokenError) {
     clearSpotifySession();
@@ -923,6 +1042,20 @@ async function finishSpotifyAuthorization() {
 $("#playlistImportButton").addEventListener("click", () => {
   $("#playlistInput").value = "";
   $("#playlistDialog").showModal();
+});
+
+$("#manualAlbumButton").addEventListener("click", () => {
+  $("#manualAlbumQuery").value = "";
+  $("#manualAlbumStatus").textContent = "";
+  $("#manualAlbumResults").replaceChildren();
+  $("#manualAlbumDialog").showModal();
+  $("#manualAlbumQuery").focus();
+});
+
+$("#manualAlbumSearchForm").addEventListener("submit", (event) => {
+  if (event.submitter?.value !== "search") return;
+  event.preventDefault();
+  void searchSpotifyAlbums($("#manualAlbumQuery").value);
 });
 
 $("#playlistForm").addEventListener("submit", (event) => {
@@ -1158,6 +1291,10 @@ async function sync(choices = {}) {
     showMessage("Errore di sincronizzazione", error.message);
   } finally {
     $("#syncButton").disabled = false;
+    if (automaticSyncQueued && credentials().owner && credentials().token) {
+      automaticSyncQueued = false;
+      queueMicrotask(() => void sync());
+    }
   }
 }
 

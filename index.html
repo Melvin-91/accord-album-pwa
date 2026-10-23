@@ -9,7 +9,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="./assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="stylesheet" href="style.css?v=7">
     <title>Accord · La mia raccolta</title>
   </head>
   <body>
@@ -38,8 +38,8 @@
       </section>
 
       <section class="playlist-import">
-        <div><p class="eyebrow">SPOTIFY</p><h2>Aggiungi album da una playlist</h2><p>Importa solo gli album mancanti nella raccolta; generi e voti degli album esistenti restano invariati.</p></div>
-        <button id="playlistImportButton" class="secondary" type="button">Importa playlist</button>
+        <div><p class="eyebrow">SPOTIFY</p><h2>Aggiungi album</h2><p>Cerca un album o importa quelli mancanti da una playlist. La ricerca singola avvia la sincronizzazione se GitHub è configurato; le importazioni da playlist restano locali.</p></div>
+        <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Cerca su Spotify</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>
       </section>
 
       <section class="filters" aria-label="Ricerca e filtri album">
@@ -111,7 +111,7 @@
         <p class="notice">Crea un token limitato al solo repository privato <code>accord-music-data</code>, con permesso Contents in lettura/scrittura. Il token viene memorizzato in questo profilo browser; chiunque possa usare il profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token non viene inviato a servizi diversi da api.github.com.</p>
         <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza automaticamente all’avvio (può inviare le modifiche locali al repository)</label>
         <hr>
-        <p class="eyebrow">IMPORTAZIONE PLAYLIST SPOTIFY</p>
+        <p class="eyebrow">SPOTIFY</p>
         <label>Client ID dell’app Spotify
           <input id="spotifyClientIdInput" autocomplete="off" placeholder="Client ID (32 caratteri)">
         </label>
@@ -142,6 +142,18 @@
         </label>
         <p class="notice">Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Verranno salvati solo i record album previsti da Accord, non brani o dati della playlist. L’importazione non avvia la sincronizzazione GitHub.</p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Continua</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="manualAlbumDialog">
+      <form id="manualAlbumSearchForm" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">RICERCA SPOTIFY</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+        <label>Cerca per album, artista, ID o link Spotify
+          <input id="manualAlbumQuery" required maxlength="300" autocomplete="off" placeholder="Album, artista o link open.spotify.com/album/…">
+        </label>
+        <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
+        <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca Spotify"></section>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Chiudi</button><button id="manualAlbumSearchButton" class="primary" value="search">Cerca</button></div>
       </form>
     </dialog>
 
@@ -187,6 +199,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=6"></script>
+    <script type="module" src="app.mjs?v=9"></script>
   </body>
 </html>

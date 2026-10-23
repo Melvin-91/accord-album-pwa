@@ -9,6 +9,7 @@ import {
   moveAlbumInManualOrder,
   playlistAlbumRecords,
   sortAlbumsByManualOrder,
+  spotifyAlbumId,
   spotifyPlaylistId,
   threeWayMerge,
   validateAlbum,
@@ -127,6 +128,15 @@ test("accepts Spotify playlist names, IDs, links, and URIs without accepting oth
   assert.equal(spotifyPlaylistId(`https://open.spotify.com/intl-it/playlist/${id}?si=example`), id);
   assert.equal(spotifyPlaylistId("La mia playlist"), null);
   assert.throws(() => spotifyPlaylistId(`https://example.com/playlist/${id}`), /link Spotify valido/);
+});
+
+test("accepts Spotify album IDs, links, and URIs without accepting other hosts", () => {
+  const id = "0123456789012345678901";
+  assert.equal(spotifyAlbumId(id), id);
+  assert.equal(spotifyAlbumId(`spotify:album:${id}`), id);
+  assert.equal(spotifyAlbumId(`https://open.spotify.com/intl-it/album/${id}?si=example`), id);
+  assert.equal(spotifyAlbumId("Album e artista"), null);
+  assert.throws(() => spotifyAlbumId(`https://example.com/album/${id}`), /link Spotify valido/);
 });
 
 test("extracts and deduplicates only valid full albums from playlist items", () => {

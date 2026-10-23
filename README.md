@@ -21,7 +21,9 @@ sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti usa MusicBrainz e ListenBrainz per trovare artisti
 affini a un artista della raccolta, senza inviare la cronologia personale.
 L'esplorazione degli album richiede l'autorizzazione Spotify; gli album
-vengono aggiunti localmente solo su scelta esplicita.
+vengono aggiunti localmente solo su scelta esplicita. Dalla scheda Raccolta si
+possono anche cercare album su Spotify per titolo, artista, ID o link e
+aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.
 
 ## Pubblicazione
 
@@ -46,3 +48,19 @@ come sorgente. Il workflow pubblica i file statici a ogni push al branch
 L'importazione playlist non avvia la sincronizzazione GitHub. Le modifiche
 locali vengono inviate solo con una sincronizzazione manuale o se l'utente
 abilita esplicitamente il sync all'avvio.
+
+## Aggiunta manuale di un album
+
+In **Raccolta album** scegli **Cerca su Spotify** e inserisci titolo, artista,
+ID o link Spotify. La funzione riutilizza il Client ID e l'autorizzazione
+Spotify configurati per le playlist. I risultati vengono verificati e
+deduplicati per ID; ogni album entra nella raccolta solo dopo aver premuto
+**Aggiungi**. Gli album già presenti non vengono modificati. Le nuove voci
+avviano subito la sincronizzazione con il repository privato se le credenziali
+GitHub sono configurate; altrimenti restano locali, viene chiesto di
+configurarle e la sincronizzazione parte dopo il salvataggio. I conflitti
+richiedono sempre una scelta esplicita. Accord desktop offre la stessa ricerca
+tramite l'icona a forma di lente nella riga della raccolta; se le credenziali
+mancano, le richiede e avvia la sincronizzazione dopo il salvataggio. Le
+copertine si aggiornano dopo che Accord desktop le carica nel repository
+privato e la PWA sincronizza.

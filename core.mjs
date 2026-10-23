@@ -91,6 +91,28 @@ export function spotifyPlaylistId(input) {
   return id;
 }
 
+export function spotifyAlbumId(input) {
+  const value = String(input || "").trim();
+  const uri = value.match(/^spotify:album:([A-Za-z0-9]{22})$/);
+  if (uri) return uri[1];
+  if (/^[A-Za-z0-9]{22}$/.test(value)) return value;
+  if (!/^https?:\/\//i.test(value)) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Inserisci una ricerca, un ID o un link Spotify valido di un album.");
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts[0]?.startsWith("intl-")) parts.shift();
+  const id = parts[1];
+  if (url.protocol !== "https:" || url.host !== "open.spotify.com" || url.username || url.password
+      || parts.length !== 2 || parts[0] !== "album" || !/^[A-Za-z0-9]{22}$/.test(id || "")) {
+    throw new Error("Inserisci una ricerca, un ID o un link Spotify valido di un album.");
+  }
+  return id;
+}
+
 export function playlistAlbumRecords(entries, playlistName = "") {
   const albums = new Map();
   for (const entry of entries) {
