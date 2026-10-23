@@ -1,4 +1,4 @@
-const CACHE = "accord-album-pwa-v7";
+const CACHE = "accord-album-pwa-v8";
 const FILES = [
   "./",
   "./index.html",
