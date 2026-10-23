@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addPlaylistAlbums,
+  decodeCoverArchive,
+  encodeCoverArchive,
   filterAlbums,
   playlistAlbumRecords,
   spotifyPlaylistId,
@@ -19,6 +21,9 @@ const album = (id, overrides = {}) => ({
   status: "queued",
   rating: null,
   genres: [],
+  collections: [],
+  tags: [],
+  cover_sha256: null,
   ...overrides,
 });
 
@@ -67,6 +72,33 @@ test("searches genres and filters state while sorting ratings and names", () => 
 test("rejects invalid or duplicate repository documents", () => {
   assert.deepEqual(validateDocument({ format: "accord-album-collection", version: 1, albums: [] }), []);
   assert.throws(() => validateDocument({ format: "accord-album-collection", version: 1, albums: [album("a"), album("a")] }), /duplicati/);
+});
+
+test("migrates v1 records and validates synced collections, tags, and cover hashes", () => {
+  const { collections, tags, cover_sha256, ...legacy } = album("a");
+  const migrated = validateDocument({ format: "accord-album-collection", version: 1, albums: [legacy] });
+  assert.deepEqual(migrated[0].collections, []);
+  assert.deepEqual(migrated[0].tags, []);
+  assert.equal(migrated[0].cover_sha256, null);
+  assert.throws(() => validateAlbum(album("a", { tags: ["x".repeat(81)] })), /80 caratteri/);
+});
+
+test("filters albums by collection and tag and searches both fields", () => {
+  const record = album("a", { collections: ["Favorites"], tags: ["mobile"] });
+  assert.deepEqual(filterAlbums([record], { collection: "favorites", tag: "mobile" }), [record]);
+  assert.deepEqual(filterAlbums([record], { search: "favorites" }), [record]);
+  assert.deepEqual(filterAlbums([record], { search: "mobile" }), [record]);
+});
+
+test("round-trips verified JPEG cover thumbnails in the desktop archive format", async () => {
+  const data = new Uint8Array([0xff, 0xd8, 0xff, 0x00, 0x01]);
+  const archive = await encodeCoverArchive(new Map([["abc123", data]]));
+  const decoded = await decodeCoverArchive(archive);
+  assert.deepEqual(decoded.get("abc123").data, data);
+  assert.equal(decoded.get("abc123").hash.length, 64);
+  const corrupted = archive.slice();
+  corrupted[corrupted.length - 1] ^= 1;
+  await assert.rejects(decodeCoverArchive(corrupted), /Verifica copertina/);
 });
 
 test("accepts Spotify playlist names, IDs, links, and URIs without accepting other hosts", () => {

@@ -1,14 +1,18 @@
 import {
   addPlaylistAlbums,
   filterAlbums,
+  decodeCoverArchive,
+  encodeCoverArchive,
   playlistAlbumRecords,
   spotifyPlaylistId,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs";
+} from "./core.mjs?v=2";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
+const COVER_DATABASE = "accord-album-covers-v1";
+const COVER_STORE = "covers";
 const REPOSITORY = "accord-music-data";
 const API = "https://api.github.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
@@ -17,6 +21,41 @@ const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascolt
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();
+let coverDatabasePromise;
+let coverRenderGeneration = 0;
+let coverObjectUrls = [];
+
+function openCoverDatabase() {
+  if (!coverDatabasePromise) {
+    coverDatabasePromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(COVER_DATABASE, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore(COVER_STORE, { keyPath: "id" });
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(new Error(`Archivio offline delle copertine non disponibile: ${request.error?.message || "errore IndexedDB"}`));
+      request.onblocked = () => reject(new Error("Aggiornamento dell'archivio offline delle copertine bloccato da un'altra scheda."));
+    });
+  }
+  return coverDatabasePromise;
+}
+
+async function getCachedCover(id) {
+  const database = await openCoverDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(COVER_STORE, "readonly").objectStore(COVER_STORE).get(id);
+    request.onsuccess = () => resolve(request.result ? new Uint8Array(request.result.data) : null);
+    request.onerror = () => reject(new Error(`Impossibile leggere la copertina offline: ${request.error?.message || "errore IndexedDB"}`));
+  });
+}
+
+async function cacheCover(id, data) {
+  const database = await openCoverDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(COVER_STORE, "readwrite")
+      .objectStore(COVER_STORE).put({ id, data: data.slice().buffer });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(new Error(`Impossibile salvare la copertina offline: ${request.error?.message || "errore IndexedDB"}`));
+  });
+}
 
 function loadState() {
   try {
@@ -130,27 +169,34 @@ $("#disconnectSpotify").addEventListener("click", () => {
   setSyncState("Spotify scollegato");
 });
 
-function refreshGenreFilter() {
-  const selected = $("#genreFilter").value;
-  const genres = new Map();
+function refreshGroupFilter(selector, key, allLabel) {
+  const selected = $(selector).value;
+  const values = new Map();
   for (const album of state.albums) {
-    for (const genre of album.genres) genres.set(genre.toLocaleLowerCase(), genre);
+    for (const value of album[key]) values.set(value.toLocaleLowerCase(), value);
   }
-  $("#genreFilter").replaceChildren(new Option("Tutti i generi", ""));
-  for (const [key, label] of [...genres].sort((a, b) => a[1].localeCompare(b[1]))) {
-    $("#genreFilter").add(new Option(label, key));
+  $(selector).replaceChildren(new Option(allLabel, ""));
+  for (const [value, label] of [...values].sort((a, b) => a[1].localeCompare(b[1]))) {
+    $(selector).add(new Option(label, value));
   }
-  $("#genreFilter").value = genres.has(selected) ? selected : "";
+  $(selector).value = values.has(selected) ? selected : "";
 }
 
 function render() {
-  refreshGenreFilter();
+  refreshGroupFilter("#genreFilter", "genres", "Tutti i generi");
+  refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
+  refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
   const albums = filterAlbums(state.albums, {
     search: $("#searchInput").value,
     genre: $("#genreFilter").value,
     status: $("#statusFilter").value,
+    collection: $("#collectionFilter").value,
+    tag: $("#tagFilter").value,
     order: $("#sortOrder").value,
   });
+  const generation = ++coverRenderGeneration;
+  for (const url of coverObjectUrls) URL.revokeObjectURL(url);
+  coverObjectUrls = [];
   $("#albumList").replaceChildren();
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
   $("#emptyState").hidden = albums.length !== 0;
@@ -159,9 +205,15 @@ function render() {
     : "La raccolta è vuota su questo dispositivo. Se gli album sono in Accord desktop, avvia prima “Sincronizza ora” sul PC con il repository accord-music-data, poi premi “Sincronizza” qui. In alternativa, importa una playlist Spotify.";
   for (const album of albums) {
     const card = template.content.firstElementChild.cloneNode(true);
+    card.dataset.albumId = album.id;
     card.querySelector(".album-title").textContent = album.name;
     card.querySelector(".album-meta").textContent =
       `${album.artist} · ${album.year || "Anno sconosciuto"} · ${labels[album.status]}`;
+    card.querySelector(".album-cover").alt = `Copertina di ${album.name}`;
+    card.querySelector(".status-input").value = album.status;
+    card.querySelector(".status-input").setAttribute("aria-label", `Stato per ${album.name}`);
+    card.querySelector(".status-input").addEventListener("change", (event) =>
+      updateAlbum(album.id, { status: event.currentTarget.value }));
     const link = card.querySelector(".spotify-link");
     link.href = album.url;
     const genres = card.querySelector(".genres-input");
@@ -169,6 +221,18 @@ function render() {
     genres.setAttribute("aria-label", `Generi per ${album.name}`);
     genres.addEventListener("change", () => updateAlbum(album.id, {
       genres: genres.value.split(",").map((value) => value.trim()).filter(Boolean),
+    }));
+    const collections = card.querySelector(".collections-input");
+    collections.value = album.collections.join(", ");
+    collections.setAttribute("aria-label", `Collezioni per ${album.name}`);
+    collections.addEventListener("change", () => updateAlbum(album.id, {
+      collections: collections.value.split(",").map((value) => value.trim()).filter(Boolean),
+    }));
+    const tags = card.querySelector(".tags-input");
+    tags.value = album.tags.join(", ");
+    tags.setAttribute("aria-label", `Tag per ${album.name}`);
+    tags.addEventListener("change", () => updateAlbum(album.id, {
+      tags: tags.value.split(",").map((value) => value.trim()).filter(Boolean),
     }));
     const rating = card.querySelector(".rating-input");
     for (let step = 1; step <= 10; step += 1) {
@@ -181,6 +245,29 @@ function render() {
       rating: rating.value ? Number(rating.value) : null,
     }));
     $("#albumList").append(card);
+  }
+  void renderCovers(albums, generation);
+}
+
+async function renderCovers(albums, generation) {
+  try {
+    for (const album of albums) {
+      if (!album.cover_sha256) continue;
+      const data = await getCachedCover(album.id);
+      if (!data) continue;
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+      const hash = [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (hash !== album.cover_sha256) continue;
+      if (generation !== coverRenderGeneration) return;
+      const card = [...$("#albumList").children].find((element) => element.dataset.albumId === album.id);
+      if (!card) continue;
+      const url = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
+      coverObjectUrls.push(url);
+      card.querySelector(".album-cover").src = url;
+    }
+  } catch (error) {
+    setSyncState("Copertine offline non disponibili");
+    showMessage("Errore archivio copertine", error.message);
   }
 }
 
@@ -197,7 +284,8 @@ function updateAlbum(id, changes) {
   }
 }
 
-for (const input of [$("#searchInput"), $("#genreFilter"), $("#statusFilter"), $("#sortOrder")]) {
+for (const input of [$("#searchInput"), $("#genreFilter"), $("#statusFilter"),
+  $("#collectionFilter"), $("#tagFilter"), $("#sortOrder")]) {
   input.addEventListener("input", render);
   input.addEventListener("change", render);
 }
@@ -531,35 +619,68 @@ async function readRemote(owner) {
   const repository = await githubRequest(repoUrl);
   if (repository.private !== true) throw new Error("Il repository accord-music-data deve essere privato.");
   if (!repository.default_branch) throw new Error("GitHub non ha restituito il branch predefinito.");
-  const fileUrl = `${repoUrl}/contents/albums.json?ref=${encodeURIComponent(repository.default_branch)}`;
+  const branch = repository.default_branch;
+  const fileUrl = `${repoUrl}/contents/albums.json?ref=${encodeURIComponent(branch)}`;
   const response = await fetch(fileUrl, { headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer" });
-  if (response.status === 404) return { albums: [], sha: null, branch: repository.default_branch };
-  if (!response.ok) {
-    if ([401, 403].includes(response.status)) throw new Error(`Accesso al file rifiutato da GitHub (HTTP ${response.status}). Verifica il permesso Contents.`);
-    throw new Error(`Errore GitHub HTTP ${response.status} durante la lettura di albums.json.`);
+  let albums = [];
+  let sha = null;
+  if (response.status !== 404) {
+    if (!response.ok) {
+      if ([401, 403].includes(response.status)) throw new Error(`Accesso al file rifiutato da GitHub (HTTP ${response.status}). Verifica il permesso Contents.`);
+      throw new Error(`Errore GitHub HTTP ${response.status} durante la lettura di albums.json.`);
+    }
+    const file = await response.json();
+    if (file.type !== "file" || typeof file.content !== "string") throw new Error("albums.json non e' un file GitHub valido.");
+    try {
+      const bytes = Uint8Array.from(atob(file.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
+      const document = JSON.parse(new TextDecoder().decode(bytes));
+      albums = validateDocument(document);
+      sha = file.sha;
+    } catch (error) {
+      throw new Error(`Il contenuto remoto non e' valido: ${error.message}`);
+    }
   }
-  const file = await response.json();
-  if (file.type !== "file" || typeof file.content !== "string") throw new Error("albums.json non e' un file GitHub valido.");
-  try {
-    const bytes = Uint8Array.from(atob(file.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
-    const document = JSON.parse(new TextDecoder().decode(bytes));
-    return { albums: validateDocument(document), sha: file.sha, branch: repository.default_branch };
-  } catch (error) {
-    throw new Error(`Il contenuto remoto non e' valido: ${error.message}`);
+  const coverUrl = `${repoUrl}/contents/covers.bin?ref=${encodeURIComponent(branch)}`;
+  const metadataResponse = await fetch(coverUrl, {
+    headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
+  });
+  if (metadataResponse.status === 404) {
+    return { albums, sha, branch, covers: new Map(), coversSha: null, coverArchive: new Uint8Array() };
   }
+  if (!metadataResponse.ok) {
+    if ([401, 403].includes(metadataResponse.status)) throw new Error(`Accesso a covers.bin rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
+    throw new Error(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura di covers.bin.`);
+  }
+  const metadata = await metadataResponse.json();
+  if (metadata.type !== "file" || typeof metadata.sha !== "string") throw new Error("covers.bin non e' un file GitHub valido.");
+  const rawResponse = await fetch(coverUrl, {
+    headers: { ...authHeaders(), Accept: "application/vnd.github.raw+json" },
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (!rawResponse.ok) throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download di covers.bin.`);
+  const coverArchive = new Uint8Array(await rawResponse.arrayBuffer());
+  const covers = await decodeCoverArchive(coverArchive);
+  return { albums, sha, branch, covers, coversSha: metadata.sha, coverArchive };
+}
+
+function encodeBase64(bytes) {
+  const chunks = [];
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return btoa(chunks.join(""));
 }
 
 async function writeRemote(owner, records, sha, branch) {
   const document = {
     format: "accord-album-collection",
-    version: 1,
+    version: 2,
     updated_at: new Date().toISOString(),
-    albums: validateDocument({ format: "accord-album-collection", version: 1, albums: records }),
+    albums: validateDocument({ format: "accord-album-collection", version: 2, albums: records }),
   };
   const bytes = new TextEncoder().encode(JSON.stringify(document, null, 2));
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  const payload = { message: "Sync Accord album collection", content: btoa(binary), branch };
+  const payload = { message: "Sync Accord album collection", content: encodeBase64(bytes), branch };
   if (sha) payload.sha = sha;
   await githubRequest(`${API}/repos/${encodeURIComponent(owner)}/${REPOSITORY}/contents/albums.json`, {
     method: "PUT",
@@ -568,9 +689,23 @@ async function writeRemote(owner, records, sha, branch) {
   });
 }
 
+async function writeRemoteCovers(owner, archive, sha, branch) {
+  const payload = {
+    message: "Sync Accord album cover thumbnails",
+    content: encodeBase64(archive),
+    branch,
+  };
+  if (sha) payload.sha = sha;
+  await githubRequest(`${API}/repos/${encodeURIComponent(owner)}/${REPOSITORY}/contents/covers.bin`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
 function albumDescription(album) {
   if (!album) return "Album assente";
-  return `${album.artist} · ${album.name} · voto ${album.rating ?? "—"} · generi ${album.genres.join(", ") || "—"} · ${labels[album.status]}`;
+  return `${album.artist} · ${album.name} · voto ${album.rating ?? "—"} · generi ${album.genres.join(", ") || "—"} · collezioni ${album.collections.join(", ") || "—"} · tag ${album.tags.join(", ") || "—"} · ${labels[album.status]}`;
 }
 
 function chooseConflicts(conflicts) {
@@ -637,6 +772,30 @@ async function sync(choices = {}) {
       await sync(resolutions);
       return;
     }
+    const selectedCovers = new Map();
+    for (const album of merged.albums) {
+      if (!album.cover_sha256) continue;
+      const localCover = await getCachedCover(album.id);
+      if (localCover) {
+        const localDigest = new Uint8Array(await crypto.subtle.digest("SHA-256", localCover));
+        const localHash = [...localDigest].map((value) => value.toString(16).padStart(2, "0")).join("");
+        if (localHash === album.cover_sha256) {
+          selectedCovers.set(album.id, localCover);
+          continue;
+        }
+      }
+      const remoteCover = remote.covers.get(album.id);
+      if (!remoteCover || remoteCover.hash !== album.cover_sha256) {
+        throw new Error(`Miniatura non verificabile per ${album.artist} · ${album.name}. Nessun dato è stato applicato.`);
+      }
+      selectedCovers.set(album.id, remoteCover.data);
+    }
+    for (const [id, cover] of selectedCovers) await cacheCover(id, cover);
+    const updatedCoverArchive = selectedCovers.size ? await encodeCoverArchive(selectedCovers) : new Uint8Array();
+    const coversChanged = updatedCoverArchive.length > 0
+      && (updatedCoverArchive.length !== remote.coverArchive.length
+        || updatedCoverArchive.some((value, index) => value !== remote.coverArchive[index]));
+    if (coversChanged) await writeRemoteCovers(owner, updatedCoverArchive, remote.coversSha, remote.branch);
     const remoteState = JSON.stringify(remote.albums);
     const finalState = JSON.stringify(merged.albums);
     if (finalState !== remoteState) await writeRemote(owner, merged.albums, remote.sha, remote.branch);

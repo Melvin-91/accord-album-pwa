@@ -5,6 +5,13 @@ contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 `albums.json`, dati personali, token o segreti. Il repository privato
 `accord-music-data` resta separato.
 
+La raccolta mostra copertina, stato, anno, generi, voto, collezioni e tag.
+I record v1 sono compatibili e vengono migrati al successivo aggiornamento.
+Le miniature JPEG sono conservate in `covers.bin` nel repository privato,
+verificate con SHA-256 e salvate in IndexedDB per l'uso offline. La
+sincronizzazione trasferisce solo i campi musicali previsti: non include
+database, feedback o note di lavoro, task, token o configurazioni personali.
+
 ## Pubblicazione
 
 Abilita GitHub Pages in **Settings → Pages**, scegliendo **GitHub Actions**

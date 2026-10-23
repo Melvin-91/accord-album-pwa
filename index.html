@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="./assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
     <title>Accord · Raccolta album</title>
   </head>
   <body>
@@ -28,7 +28,7 @@
     <main>
       <section class="intro">
         <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>Una raccolta, desktop e PWA.</h2></div>
-        <p>Modifica generi e voti anche da mobile. I dati restano nel tuo browser e nel repository privato configurato.</p>
+        <p>Consulta copertine, stato, generi, voto, collezioni e tag. Le miniature vengono archiviate nel repository privato configurato.</p>
       </section>
 
       <section class="playlist-import">
@@ -50,6 +50,12 @@
             <option value="heard">Ascoltato</option><option value="liked">Mi piace</option>
             <option value="hidden">Non proporre</option>
           </select>
+        </label>
+        <label>Collezione
+          <select id="collectionFilter"><option value="">Tutte le collezioni</option></select>
+        </label>
+        <label>Tag
+          <select id="tagFilter"><option value="">Tutti i tag</option></select>
         </label>
         <label>Ordina per
           <select id="sortOrder">
@@ -124,13 +130,23 @@
 
     <template id="albumTemplate">
       <article class="album-card">
+        <img class="album-cover" alt="" loading="lazy">
         <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a></div>
+        <label class="status-field">Stato
+          <select class="status-input">
+            <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
+            <option value="heard">Ascoltato</option><option value="liked">Mi piace</option>
+            <option value="hidden">Non proporre</option>
+          </select>
+        </label>
         <label class="genres-field">Generi <input class="genres-input" type="text" maxlength="1619" placeholder="Es. rock, jazz, elettronica"></label>
+        <label class="collections-field">Collezioni <input class="collections-input" type="text" maxlength="1619" placeholder="Separate da virgole"></label>
+        <label class="tags-field">Tag <input class="tags-input" type="text" maxlength="1619" placeholder="Separate da virgole"></label>
         <label class="rating-field">Il tuo voto
           <select class="rating-input"><option value="">Nessun voto</option></select>
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs"></script>
+    <script type="module" src="app.mjs?v=2"></script>
   </body>
 </html>
