@@ -1,8 +1,8 @@
-const CACHE = "accord-album-pwa-v21";
+const CACHE = "accord-album-pwa-v22";
 const FILES = [
   "./",
   "./index.html",
-  "./style.css?v=7",
+  "./style.css?v=8",
   "./core.mjs?v=6",
   "./app.mjs?v=9",
   "./manifest.json",
