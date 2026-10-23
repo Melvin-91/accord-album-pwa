@@ -74,9 +74,9 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
 .conflict-card input { width: 16px; min-height: 16px; accent-color: #aaa; }
 
 @media (max-width: 760px) {
-  .topbar { padding: 10px 14px; }
-  .header-actions { gap: 7px; }
-  .sync-state { display: none; }
+  .topbar { padding: 10px 14px; align-items: stretch; flex-direction: column; gap: 8px; }
+  .header-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; }
+  .sync-state { display: block; min-width: 0; overflow-wrap: anywhere; }
   main { width: calc(100% - 24px); }
   .intro { display: block; padding: 28px 2px 20px; }
   .intro > p { margin-top: 12px; }
