@@ -154,6 +154,9 @@ function render() {
   $("#albumList").replaceChildren();
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
   $("#emptyState").hidden = albums.length !== 0;
+  $("#emptyState").textContent = state.albums.length
+    ? "Nessun album corrisponde ai filtri."
+    : "La raccolta è vuota su questo dispositivo. Se gli album sono in Accord desktop, avvia prima “Sincronizza ora” sul PC con il repository accord-music-data, poi premi “Sincronizza” qui. In alternativa, importa una playlist Spotify.";
   for (const album of albums) {
     const card = template.content.firstElementChild.cloneNode(true);
     card.querySelector(".album-title").textContent = album.name;
