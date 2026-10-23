@@ -9,7 +9,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="./assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=2">
+    <link rel="stylesheet" href="style.css?v=3">
     <title>Accord · Raccolta album</title>
   </head>
   <body>
@@ -66,6 +66,7 @@
       </section>
 
       <p id="collectionSummary" class="summary" aria-live="polite"></p>
+      <p id="coverSyncNotice" class="notice cover-sync-notice" role="status" hidden></p>
       <section id="albumList" class="album-list" aria-label="Album"></section>
       <p id="emptyState" class="empty" hidden>Nessun album corrisponde ai filtri.</p>
     </main>
@@ -130,7 +131,7 @@
 
     <template id="albumTemplate">
       <article class="album-card">
-        <img class="album-cover" alt="" loading="lazy">
+        <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
         <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a></div>
         <label class="status-field">Stato
           <select class="status-input">
@@ -147,6 +148,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=2"></script>
+    <script type="module" src="app.mjs?v=3"></script>
   </body>
 </html>

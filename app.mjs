@@ -8,7 +8,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=2";
+} from "./core.mjs?v=3";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -50,10 +50,11 @@ async function getCachedCover(id) {
 async function cacheCover(id, data) {
   const database = await openCoverDatabase();
   return new Promise((resolve, reject) => {
-    const request = database.transaction(COVER_STORE, "readwrite")
-      .objectStore(COVER_STORE).put({ id, data: data.slice().buffer });
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(new Error(`Impossibile salvare la copertina offline: ${request.error?.message || "errore IndexedDB"}`));
+    const transaction = database.transaction(COVER_STORE, "readwrite");
+    const request = transaction.objectStore(COVER_STORE).put({ id, data: data.slice().buffer });
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(new Error(`Impossibile salvare la copertina offline: ${transaction.error?.message || request.error?.message || "transazione IndexedDB interrotta"}`));
+    transaction.onerror = () => reject(new Error(`Impossibile salvare la copertina offline: ${transaction.error?.message || request.error?.message || "errore IndexedDB"}`));
   });
 }
 
@@ -203,13 +204,21 @@ function render() {
   $("#emptyState").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
     : "La raccolta è vuota su questo dispositivo. Se gli album sono in Accord desktop, avvia prima “Sincronizza ora” sul PC con il repository accord-music-data, poi premi “Sincronizza” qui. In alternativa, importa una playlist Spotify.";
+  const albumsWithoutCover = state.albums.filter((album) => !album.cover_sha256).length;
+  setCoverNotice(albumsWithoutCover
+    ? `${albumsWithoutCover} album non hanno ancora una miniatura nel repository. Avvia “Sincronizza ora” in Accord desktop dopo l’aggiornamento, poi premi “Sincronizza” sul telefono.`
+    : "");
   for (const album of albums) {
     const card = template.content.firstElementChild.cloneNode(true);
     card.dataset.albumId = album.id;
     card.querySelector(".album-title").textContent = album.name;
     card.querySelector(".album-meta").textContent =
       `${album.artist} · ${album.year || "Anno sconosciuto"} · ${labels[album.status]}`;
-    card.querySelector(".album-cover").alt = `Copertina di ${album.name}`;
+    const coverImage = card.querySelector(".album-cover");
+    coverImage.alt = `Copertina di ${album.name}`;
+    card.querySelector(".cover-placeholder").textContent = album.cover_sha256
+      ? "Premi Sincronizza per scaricare"
+      : "Da sincronizzare dal PC";
     card.querySelector(".status-input").value = album.status;
     card.querySelector(".status-input").setAttribute("aria-label", `Stato per ${album.name}`);
     card.querySelector(".status-input").addEventListener("change", (event) =>
@@ -251,24 +260,54 @@ function render() {
 
 async function renderCovers(albums, generation) {
   try {
-    for (const album of albums) {
-      if (!album.cover_sha256) continue;
+    let unavailable = 0;
+    for (const [index, album] of albums.entries()) {
+      if (!album.cover_sha256) {
+        unavailable += 1;
+        continue;
+      }
       const data = await getCachedCover(album.id);
-      if (!data) continue;
+      if (!data) {
+        unavailable += 1;
+        continue;
+      }
       const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
       const hash = [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
-      if (hash !== album.cover_sha256) continue;
+      if (hash !== album.cover_sha256) {
+        unavailable += 1;
+        continue;
+      }
       if (generation !== coverRenderGeneration) return;
       const card = [...$("#albumList").children].find((element) => element.dataset.albumId === album.id);
       if (!card) continue;
       const url = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
       coverObjectUrls.push(url);
-      card.querySelector(".album-cover").src = url;
+      const image = card.querySelector(".album-cover");
+      image.loading = index < 8 ? "eager" : "lazy";
+      image.addEventListener("load", () => {
+        if (generation === coverRenderGeneration) card.classList.add("has-cover");
+      }, { once: true });
+      image.addEventListener("error", () => {
+        if (generation !== coverRenderGeneration) return;
+        card.querySelector(".cover-placeholder").textContent = "Miniatura non leggibile";
+        card.classList.add("cover-error");
+      }, { once: true });
+      image.src = url;
+    }
+    if (generation !== coverRenderGeneration) return;
+    if (unavailable && !state.albums.some((album) => !album.cover_sha256)) {
+      setCoverNotice(`${unavailable} copertine non sono disponibili su questo dispositivo. Premi “Sincronizza” per scaricarle.`);
     }
   } catch (error) {
     setSyncState("Copertine offline non disponibili");
     showMessage("Errore archivio copertine", error.message);
   }
+}
+
+function setCoverNotice(message) {
+  const notice = $("#coverSyncNotice");
+  notice.hidden = !message;
+  notice.textContent = message;
 }
 
 function updateAlbum(id, changes) {
@@ -786,7 +825,7 @@ async function sync(choices = {}) {
       }
       const remoteCover = remote.covers.get(album.id);
       if (!remoteCover || remoteCover.hash !== album.cover_sha256) {
-        throw new Error(`Miniatura non verificabile per ${album.artist} · ${album.name}. Nessun dato è stato applicato.`);
+        throw new Error(`Miniatura non verificabile per ${album.artist} · ${album.name}. Nessun dato è stato applicato. Avvia “Sincronizza ora” in Accord desktop per caricare le miniature, poi riprova.`);
       }
       selectedCovers.set(album.id, remoteCover.data);
     }

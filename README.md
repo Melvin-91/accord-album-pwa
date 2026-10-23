@@ -11,6 +11,8 @@ Le miniature JPEG sono conservate in `covers.bin` nel repository privato,
 verificate con SHA-256 e salvate in IndexedDB per l'uso offline. La
 sincronizzazione trasferisce solo i campi musicali previsti: non include
 database, feedback o note di lavoro, task, token o configurazioni personali.
+Per caricare le miniature dopo un aggiornamento desktop, esegui una
+sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 
 ## Pubblicazione
 
