@@ -7,15 +7,15 @@
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org; object-src 'none'; base-uri 'none'; form-action 'self'">
-    <link rel="icon" href="./assets/malt_metal.ico">
+    <link rel="icon" href="../assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=8">
+    <link rel="stylesheet" href="style.css?v=10">
     <title>Accord · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
-        <img src="./assets/malt_metal.ico" width="36" height="36" alt="">
+        <img src="../assets/malt_metal.ico" width="36" height="36" alt="">
         <div><p class="eyebrow">ACCORD</p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
@@ -90,8 +90,15 @@
             <label>Artista di partenza
               <select id="suggestionSeed"><option value="">Nessun artista nella raccolta</option></select>
             </label>
+            <label>Fonte suggerimenti
+              <select id="suggestionSource">
+                <option value="listenbrainz">ListenBrainz · consigli musicali</option>
+                <option value="spotify-related">Spotify · artisti correlati (sperimentale, endpoint deprecato)</option>
+              </select>
+            </label>
             <button id="suggestionSearch" class="secondary" type="button">Cerca suggerimenti</button>
           </div>
+          <p class="notice">La fonte Spotify usa un endpoint deprecato e può smettere di funzionare; ListenBrainz resta la fonte consigliata.</p>
           <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
           <section id="suggestionArtists" class="suggestion-list" aria-label="Artisti suggeriti"></section>
           <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
@@ -123,17 +130,6 @@
       </form>
     </dialog>
 
-    <dialog id="musicbrainzArtistDialog">
-    <form id="musicbrainzArtistForm" method="dialog">
-      <div class="dialog-heading"><div><p class="eyebrow">IDENTIFICAZIONE ARTISTA</p><h2>Scegli il profilo corretto</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-      <p>MusicBrainz ha trovato più artisti con questo nome. Scegli il profilo giusto per evitare suggerimenti riferiti a un omonimo.</p>
-      <label>Profili corrispondenti
-        <select id="musicbrainzArtistChoice" required></select>
-      </label>
-      <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Continua</button></div>
-    </form>
-    </dialog>
-
     <dialog id="playlistDialog">
       <form id="playlistForm" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">IMPORTAZIONE SPOTIFY</p><h2>Album da playlist</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
@@ -147,10 +143,32 @@
 
     <dialog id="manualAlbumDialog">
       <form id="manualAlbumSearchForm" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">RICERCA SPOTIFY</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-        <label>Cerca per album, artista, ID o link Spotify
-          <input id="manualAlbumQuery" required maxlength="300" autocomplete="off" placeholder="Album, artista o link open.spotify.com/album/…">
+        <div class="dialog-heading"><div><p class="eyebrow">RICERCA AVANZATA</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+        <label>Metodo di ricerca
+          <select id="manualAlbumSource">
+            <option value="search">Ricerca album Spotify</option>
+            <option value="artist-albums">Album di un artista · Spotify</option>
+            <option value="multiple-albums">Più album per ID · sperimentale, endpoint deprecato</option>
+          </select>
         </label>
+        <div class="manual-search-fields">
+          <label>Album
+            <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo, ID o link Spotify">
+          </label>
+          <label>Artista
+            <input id="manualAlbumArtist" maxlength="200" autocomplete="off" placeholder="Nome artista">
+          </label>
+          <label>Genere
+            <input id="manualAlbumGenre" maxlength="80" autocomplete="off" placeholder="Es. jazz">
+          </label>
+          <label>Anno o intervallo
+            <input id="manualAlbumYear" maxlength="9" autocomplete="off" placeholder="Es. 1990-1999">
+          </label>
+          <label id="manualAlbumIdsField" hidden>ID o link album, separati da virgola
+            <textarea id="manualAlbumIds" maxlength="1000" rows="3" autocomplete="off" placeholder="ID o link open.spotify.com/album/…"></textarea>
+          </label>
+        </div>
+        <p id="manualAlbumSourceNotice" class="notice">Spotify filtra gli album per titolo, artista e anno. Il genere viene cercato sugli artisti e i relativi album.</p>
         <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
         <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca Spotify"></section>
         <div class="dialog-actions"><button class="secondary" value="cancel">Chiudi</button><button id="manualAlbumSearchButton" class="primary" value="search">Cerca</button></div>
@@ -164,6 +182,17 @@
           <select id="playlistChoiceSelect" required></select>
         </label>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Importa</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="musicbrainzArtistDialog">
+      <form id="musicbrainzArtistForm" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">IDENTIFICAZIONE ARTISTA</p><h2>Scegli il profilo corretto</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+        <p>MusicBrainz ha trovato più artisti con questo nome. Scegli il profilo giusto per evitare suggerimenti riferiti a un omonimo.</p>
+        <label>Profili corrispondenti
+          <select id="musicbrainzArtistChoice" required></select>
+        </label>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Continua</button></div>
       </form>
     </dialog>
 
@@ -183,7 +212,7 @@
     <template id="albumTemplate">
       <article class="album-card">
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button><button class="album-drag-handle" type="button" title="Trascina per riordinare" aria-label="Trascina per riordinare">↕</button></div></div>
+        <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div>
         <label class="status-field">Stato
           <select class="status-input">
             <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
@@ -199,6 +228,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=9"></script>
+    <script type="module" src="app.mjs?v=15"></script>
   </body>
 </html>

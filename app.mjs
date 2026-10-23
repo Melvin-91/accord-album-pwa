@@ -138,6 +138,161 @@ function moveManualAlbum(albumId, targetIndex, visibleAlbums) {
   render();
 }
 
+let manualDragSession = null;
+const albumList = $("#albumList");
+const interactiveAlbumTarget = "button, a, input, select, textarea, [contenteditable='true']";
+
+function startManualDrag(session) {
+  session.dragging = true;
+  session.lastClientX = session.startX;
+  session.lastClientY = session.startY;
+  session.card.classList.add("dragging");
+  document.body.classList.add("manual-sort-dragging");
+  session.autoScrollFrame = requestAnimationFrame(() => autoScrollManualDrag(session));
+}
+
+function autoScrollManualDrag(session) {
+  if (manualDragSession !== session || !session.dragging) return;
+  const edge = 72;
+  let delta = 0;
+  if (session.lastClientY < edge) delta = -Math.ceil((edge - session.lastClientY) / 4);
+  else if (session.lastClientY > window.innerHeight - edge) {
+    delta = Math.ceil((session.lastClientY - (window.innerHeight - edge)) / 4);
+  }
+  if (delta) {
+    window.scrollBy(0, delta);
+    updateManualDragPosition(session, session.lastClientX, session.lastClientY);
+  }
+  session.autoScrollFrame = requestAnimationFrame(() => autoScrollManualDrag(session));
+}
+
+function updateManualDragPosition(session, clientX, clientY) {
+  session.lastClientX = clientX;
+  session.lastClientY = clientY;
+  if (!session.card.isConnected) return;
+  const target = document.elementFromPoint(clientX, clientY)?.closest(".album-card.manual-sortable");
+  if (!target || target === session.card || target.parentElement !== session.list) return;
+  if (session.overCard && session.overCard !== target) session.overCard.classList.remove("drag-over");
+  session.overCard = target;
+  target.classList.add("drag-over");
+  const targetBounds = target.getBoundingClientRect();
+  const insertBefore = clientY < targetBounds.top + targetBounds.height / 2;
+  const oldIndex = [...session.list.children].indexOf(session.card);
+  if (insertBefore && target.previousElementSibling !== session.card) {
+    session.list.insertBefore(session.card, target);
+  } else if (!insertBefore && target.nextElementSibling !== session.card) {
+    session.list.insertBefore(session.card, target.nextElementSibling);
+  }
+  if ([...session.list.children].indexOf(session.card) !== oldIndex) session.moved = true;
+}
+
+function finishManualDrag(commit) {
+  const session = manualDragSession;
+  if (!session) return;
+  clearTimeout(session.longPressTimer);
+  cancelAnimationFrame(session.autoScrollFrame);
+  const targetIndex = [...session.list.children].findIndex((card) => card === session.card);
+  session.card.classList.remove("dragging");
+  session.overCard?.classList.remove("drag-over");
+  document.body.classList.remove("manual-sort-dragging");
+  manualDragSession = null;
+  if (commit && session.dragging && session.moved && targetIndex >= 0) {
+    moveManualAlbum(session.albumId, targetIndex, session.visibleAlbums);
+  }
+}
+
+function isInteractiveAlbumTarget(target) {
+  return target instanceof Element && Boolean(target.closest(interactiveAlbumTarget));
+}
+
+albumList.addEventListener("pointerdown", (event) => {
+  if ($("#sortOrder").value !== "manual" || event.pointerType === "touch"
+      || event.button !== 0 || isInteractiveAlbumTarget(event.target) || manualDragSession) return;
+  const card = event.target.closest(".album-card.manual-sortable");
+  if (!card) return;
+  manualDragSession = {
+    kind: "pointer",
+    pointerId: event.pointerId,
+    card,
+    albumId: card.dataset.albumId,
+    list: albumList,
+    visibleAlbums: [...albumList.children].map((item) => state.albums.find((album) => album.id === item.dataset.albumId)),
+    startX: event.clientX,
+    startY: event.clientY,
+    dragging: false,
+    moved: false,
+  };
+});
+
+albumList.addEventListener("touchstart", (event) => {
+  if ($("#sortOrder").value !== "manual" || event.touches.length !== 1
+      || isInteractiveAlbumTarget(event.target) || manualDragSession) return;
+  const card = event.target.closest(".album-card.manual-sortable");
+  if (!card) return;
+  const touch = event.touches[0];
+  const session = {
+    kind: "touch",
+    touchId: touch.identifier,
+    card,
+    albumId: card.dataset.albumId,
+    list: albumList,
+    visibleAlbums: [...albumList.children].map((item) => state.albums.find((album) => album.id === item.dataset.albumId)),
+    startX: touch.clientX,
+    startY: touch.clientY,
+    dragging: false,
+    moved: false,
+    longPressTimer: null,
+  };
+  manualDragSession = session;
+  session.longPressTimer = setTimeout(() => {
+    if (manualDragSession === session && session.card.isConnected) startManualDrag(session);
+  }, 250);
+}, { passive: true });
+
+document.addEventListener("pointermove", (event) => {
+  const session = manualDragSession;
+  if (!session || session.kind !== "pointer" || session.pointerId !== event.pointerId) return;
+  if (!session.dragging) {
+    if (Math.hypot(event.clientX - session.startX, event.clientY - session.startY) < 6) return;
+    startManualDrag(session);
+  }
+  if (event.cancelable) event.preventDefault();
+  updateManualDragPosition(session, event.clientX, event.clientY);
+});
+document.addEventListener("pointerup", (event) => {
+  if (manualDragSession?.kind === "pointer" && manualDragSession.pointerId === event.pointerId) finishManualDrag(true);
+});
+document.addEventListener("pointercancel", (event) => {
+  if (manualDragSession?.kind === "pointer" && manualDragSession.pointerId === event.pointerId) finishManualDrag(true);
+});
+document.addEventListener("touchmove", (event) => {
+  const session = manualDragSession;
+  if (!session || session.kind !== "touch") return;
+  if (event.touches.length !== 1) {
+    finishManualDrag(session.dragging);
+    return;
+  }
+  const touch = [...event.touches].find((item) => item.identifier === session.touchId);
+  if (!touch) return;
+  if (!session.dragging) {
+    if (Math.hypot(touch.clientX - session.startX, touch.clientY - session.startY) > 8) {
+      finishManualDrag(false);
+    }
+    return;
+  }
+  if (event.cancelable) event.preventDefault();
+  updateManualDragPosition(session, touch.clientX, touch.clientY);
+}, { passive: false });
+document.addEventListener("touchend", (event) => {
+  if (manualDragSession?.kind === "touch"
+      && [...event.changedTouches].some((touch) => touch.identifier === manualDragSession.touchId)) {
+    finishManualDrag(true);
+  }
+});
+document.addEventListener("touchcancel", () => {
+  if (manualDragSession?.kind === "touch") finishManualDrag(manualDragSession.dragging);
+});
+
 function credentials() {
   return {
     owner: localStorage.getItem("accord-album-owner") || "",
@@ -250,6 +405,7 @@ function refreshGroupFilter(selector, key, allLabel) {
 }
 
 function render() {
+  finishManualDrag(false);
   ensureManualOrder();
   refreshSuggestionSeeds();
   refreshGroupFilter("#genreFilter", "genres", "Tutti i generi");
@@ -271,7 +427,7 @@ function render() {
   $("#manualOrderHint").hidden = !manualSorting;
   if (manualSorting) {
     $("#manualOrderHint").textContent =
-      "Ordine manuale salvato solo su questo dispositivo: usa le frecce o trascina l’icona ↕.";
+      "Ordine manuale salvato solo su questo dispositivo: tieni premuto un album e trascinalo; puoi anche usare le frecce.";
   }
   const generation = ++coverRenderGeneration;
   for (const url of coverObjectUrls) URL.revokeObjectURL(url);
@@ -314,35 +470,8 @@ function render() {
       moveDown.disabled = index === albums.length - 1;
       moveUp.setAttribute("aria-label", `Sposta ${album.name} in alto`);
       moveDown.setAttribute("aria-label", `Sposta ${album.name} in basso`);
-      dragHandle.draggable = true;
       moveUp.addEventListener("click", () => moveManualAlbum(album.id, index - 1, albums));
       moveDown.addEventListener("click", () => moveManualAlbum(album.id, index + 1, albums));
-      dragHandle.addEventListener("dragstart", (event) => {
-        if (!event.dataTransfer) return;
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("text/plain", album.id);
-        card.classList.add("dragging");
-      });
-      dragHandle.addEventListener("dragend", () => {
-        for (const element of $("#albumList").querySelectorAll(".dragging, .drag-over")) {
-          element.classList.remove("dragging", "drag-over");
-        }
-      });
-      card.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-        card.classList.add("drag-over");
-      });
-      card.addEventListener("dragleave", (event) => {
-        if (!card.contains(event.relatedTarget)) card.classList.remove("drag-over");
-      });
-      card.addEventListener("drop", (event) => {
-        event.preventDefault();
-        const albumId = event.dataTransfer?.getData("text/plain");
-        if (!albumId) return;
-        const targetIndex = albums.findIndex((item) => item.id === album.id);
-        moveManualAlbum(albumId, targetIndex, albums);
-      });
     }
     const genres = card.querySelector(".genres-input");
     genres.value = album.genres.join(", ");
@@ -463,7 +592,45 @@ async function identifyMusicBrainzArtist(name) {
   });
 }
 
-async function findSuggestedArtists(seedName) {
+async function findSpotifyRelatedArtists(seedName, accessToken) {
+  const artistQuery = new URLSearchParams({
+    q: `artist:"${seedName.replace(/["\\]/g, "\\$&")}"`,
+    type: "artist",
+    limit: "5",
+  });
+  const matches = await spotifyRequest(`search?${artistQuery}`, accessToken);
+  const artists = matches.artists?.items;
+  if (!Array.isArray(artists)) throw new Error("Spotify non ha restituito profili artista verificabili.");
+  const seed = artists.find((artist) => artist.name?.trim().toLocaleLowerCase()
+    === seedName.trim().toLocaleLowerCase() && /^[A-Za-z0-9]{22}$/.test(artist.id || ""));
+  if (!seed) throw new Error(`Spotify non ha trovato un profilo esatto per “${seedName}”.`);
+  const response = await spotifyRequest(`artists/${encodeURIComponent(seed.id)}/related-artists`, accessToken);
+  if (!Array.isArray(response.artists)) throw new Error("Risposta Spotify degli artisti correlati non valida.");
+  const seen = new Set([seedName.trim().toLocaleLowerCase()]);
+  const related = response.artists.filter((artist) => typeof artist?.name === "string"
+    && artist.name.trim() && /^[A-Za-z0-9]{22}$/.test(artist.id || "")
+    && !seen.has(artist.name.trim().toLocaleLowerCase()) && seen.add(artist.name.trim().toLocaleLowerCase()))
+    .slice(0, 20)
+    .map((artist) => ({ name: artist.name.trim(), score: 0, source: "Spotify" }));
+  if (!related.length) throw new Error("Spotify non ha trovato artisti correlati.");
+  return { seed: seed.name, artists: related, source: "Spotify" };
+}
+
+async function findSuggestedArtists(seedName, source = "listenbrainz", accessToken = null) {
+  if (source === "spotify-related") {
+    const token = accessToken || await spotifyAccessToken();
+    if (!token) {
+      const { clientId, redirectUri } = spotifySettings();
+      if (!clientId || !redirectUri) {
+        openSettings();
+        showMessage("Configura Spotify", "Per usare i suggerimenti sperimentali Spotify, configura il Client ID e il Redirect URI.");
+        return null;
+      }
+      await startSpotifyAuthorization(seedName, "related");
+      return null;
+    }
+    return findSpotifyRelatedArtists(seedName, token);
+  }
   const seed = await identifyMusicBrainzArtist(seedName);
   if (!seed) {
     $("#suggestionStatus").textContent = "Ricerca annullata.";
@@ -478,7 +645,7 @@ async function findSuggestedArtists(seedName) {
   if (!response.ok) throw new Error(`Ricerca ListenBrainz non riuscita (HTTP ${response.status}).`);
   const artists = listenBrainzRecommendations(await response.json(), seed.id);
   if (!artists.length) throw new Error("ListenBrainz non ha trovato artisti affini per questo profilo.");
-  return { seed: seed.name, artists };
+  return { seed: seed.name, artists, source: "ListenBrainz" };
 }
 
 function renderSuggestedArtists(result) {
@@ -494,7 +661,9 @@ function renderSuggestedArtists(result) {
     name.textContent = artist.name;
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
-    detail.textContent = ` · Punteggio ListenBrainz ${artist.score}`;
+    detail.textContent = result.source === "Spotify"
+      ? " · Spotify (endpoint sperimentale)"
+      : ` · Punteggio ListenBrainz ${artist.score}`;
     info.append(name, detail);
     const button = document.createElement("button");
     button.className = "secondary";
@@ -540,6 +709,201 @@ function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
   if (syncAutomatically) requestAutomaticSync();
   else setSyncState("Album aggiunto localmente · sincronizza per inviarlo");
   return true;
+}
+
+function renderManualAlbumResults(albums) {
+  const container = $("#manualAlbumResults");
+  container.replaceChildren();
+  if (!albums.length) {
+    const empty = document.createElement("p");
+    empty.className = "suggestion-detail";
+    empty.textContent = "Nessun album completo e verificabile trovato su Spotify.";
+    container.append(empty);
+    return;
+  }
+  for (const album of albums) {
+    const card = document.createElement("article");
+    card.className = "suggestion-album";
+    const info = document.createElement("p");
+    const name = document.createElement("strong");
+    name.textContent = album.name;
+    const detail = document.createElement("span");
+    detail.className = "suggestion-detail";
+    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
+    info.append(name, detail);
+    const button = document.createElement("button");
+    button.className = "secondary";
+    button.type = "button";
+    const alreadyAdded = state.albums.some((existing) => existing.id === album.id);
+    button.textContent = alreadyAdded ? "Già in raccolta" : "Aggiungi";
+    button.disabled = alreadyAdded;
+    button.addEventListener("click", () => {
+      try {
+        if (addAlbumToCollection(album, { syncAutomatically: true })) {
+          button.textContent = "Aggiunto";
+          button.disabled = true;
+          button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
+          $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente; sincronizzazione GitHub avviata o in attesa di configurazione.`;
+        }
+      } catch (error) {
+        $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
+      }
+    });
+    card.append(info, button);
+    container.append(card);
+  }
+}
+
+function manualAlbumSearchInput() {
+  return {
+    source: $("#manualAlbumSource").value,
+    album: $("#manualAlbumQuery").value.trim(),
+    artist: $("#manualAlbumArtist").value.trim(),
+    genre: $("#manualAlbumGenre").value.trim(),
+    year: $("#manualAlbumYear").value.trim(),
+    ids: $("#manualAlbumIds").value.trim(),
+  };
+}
+
+function spotifySearchField(field, value) {
+  return `${field}:"${value.trim().replace(/["\\]/g, "\\$&")}"`;
+}
+
+function albumMatchesManualFilters(album, filters) {
+  const normalized = (value) => value.trim().toLocaleLowerCase();
+  if (filters.album && !normalized(album.name).includes(normalized(filters.album))) return false;
+  if (filters.artist && !normalized(album.artist).includes(normalized(filters.artist))) return false;
+  if (filters.year) {
+    const [first, last = first] = filters.year.split("-");
+    const year = Number(album.year);
+    if (!Number.isInteger(year) || year < Number(first) || year > Number(last)) return false;
+  }
+  return true;
+}
+
+function validateManualAlbumFilters(filters) {
+  if (!["search", "artist-albums", "multiple-albums"].includes(filters.source)) {
+    throw new Error("Scegli un metodo di ricerca valido.");
+  }
+  if (filters.year && !/^\d{4}(?:-\d{4})?$/.test(filters.year)) {
+    throw new Error("Inserisci un anno a quattro cifre o un intervallo, ad esempio 1990-1999.");
+  }
+  if (filters.year && Number(filters.year.split("-")[0]) > Number(filters.year.split("-")[1] || filters.year)) {
+    throw new Error("L’anno iniziale deve precedere quello finale.");
+  }
+  if (filters.source === "multiple-albums") {
+    if (!filters.ids) throw new Error("Inserisci almeno un ID o link di album Spotify.");
+    return;
+  }
+  if (!filters.album && !filters.artist && !filters.genre && !filters.year) {
+    throw new Error("Inserisci almeno album, artista, genere o anno.");
+  }
+  if (filters.source === "artist-albums" && !filters.artist) {
+    throw new Error("Inserisci l’artista da esplorare.");
+  }
+}
+
+async function albumsByArtists(artists, filters, accessToken) {
+  const records = [];
+  for (const artist of artists.slice(0, 5)) {
+    const pageQuery = new URLSearchParams({ include_groups: "album", limit: "10" });
+    const page = await spotifyRequest(
+      `artists/${encodeURIComponent(artist.id)}/albums?${pageQuery}`, accessToken,
+    );
+    if (!Array.isArray(page.items)) throw new Error("Risposta album artista Spotify non valida.");
+    records.push(...playlistAlbumRecords(page.items.map((album) => ({ item: { type: "track", album } }))));
+  }
+  return [...new Map(records.filter((album) => albumMatchesManualFilters(album, filters))
+    .map((album) => [album.id, album])).values()];
+}
+
+async function searchSpotifyAlbums(input = manualAlbumSearchInput(), accessToken = null) {
+  const filters = typeof input === "string"
+    ? { ...manualAlbumSearchInput(), album: input.trim() }
+    : { ...input };
+  const button = $("#manualAlbumSearchButton");
+  button.disabled = true;
+  $("#manualAlbumStatus").textContent = "Ricerca Spotify in corso…";
+  $("#manualAlbumResults").replaceChildren();
+  try {
+    validateManualAlbumFilters(filters);
+    const token = accessToken || await spotifyAccessToken();
+    if (!token) {
+      const { clientId, redirectUri } = spotifySettings();
+      if (!clientId || !redirectUri) {
+        $("#manualAlbumStatus").textContent = "Configura il Client ID e il Redirect URI Spotify nelle impostazioni, poi riprova.";
+        return;
+      }
+      await startSpotifyAuthorization(JSON.stringify(filters), "manual-search");
+      return;
+    }
+    let albums;
+    const directId = filters.source === "search" && filters.album ? spotifyAlbumId(filters.album) : null;
+    if (directId) {
+      if (filters.genre) throw new Error("Il filtro genere non si applica a un ID album diretto.");
+      const album = await spotifyRequest(`albums/${encodeURIComponent(directId)}`, token);
+      albums = playlistAlbumRecords([{ item: { type: "track", album } }])
+        .filter((entry) => albumMatchesManualFilters(entry, { ...filters, album: "" }));
+    } else if (filters.source === "multiple-albums") {
+      const ids = [...new Set(filters.ids.split(/[\s,;]+/).filter(Boolean).map((value) => {
+        const id = spotifyAlbumId(value);
+        if (!id) throw new Error(`ID o link album non valido: ${value}`);
+        return id;
+      }))];
+      if (ids.length > 20) throw new Error("L’endpoint sperimentale accetta al massimo 20 album per richiesta.");
+      const response = await spotifyRequest(`albums?ids=${encodeURIComponent(ids.join(","))}`, token);
+      if (!Array.isArray(response.albums)) throw new Error("Risposta Spotify degli album multipli non valida.");
+      albums = playlistAlbumRecords(response.albums.map((album) => ({ item: { type: "track", album } })))
+        .filter((album) => albumMatchesManualFilters(album, filters));
+    } else if (filters.source === "artist-albums" || filters.genre) {
+      const queryTerms = [
+        filters.genre && spotifySearchField("genre", filters.genre),
+        filters.artist && spotifySearchField("artist", filters.artist),
+      ].filter(Boolean);
+      if (!queryTerms.length) throw new Error("Per questa ricerca inserisci un artista o un genere.");
+      const parameters = new URLSearchParams({ q: queryTerms.join(" "), type: "artist", limit: "5" });
+      const response = await spotifyRequest(`search?${parameters}`, token);
+      if (!Array.isArray(response.artists?.items)) throw new Error("Risposta Spotify senza profili artista verificabili.");
+      const artists = response.artists.items.filter((artist) => /^[A-Za-z0-9]{22}$/.test(artist?.id || ""));
+      if (filters.source === "artist-albums") {
+        const exact = artists.filter((artist) => artist.name?.trim().toLocaleLowerCase()
+          === filters.artist.trim().toLocaleLowerCase());
+        if (!exact.length) throw new Error("Spotify non ha trovato un profilo artista esatto. Verifica il nome.");
+        albums = await albumsByArtists(exact, filters, token);
+      } else {
+        albums = await albumsByArtists(artists, filters, token);
+      }
+    } else {
+      const queryTerms = [
+        filters.album && spotifySearchField("album", filters.album),
+        filters.artist && spotifySearchField("artist", filters.artist),
+        filters.year && `year:${filters.year}`,
+      ].filter(Boolean);
+      const parameters = new URLSearchParams({ q: queryTerms.join(" "), type: "album", limit: "10" });
+      const response = await spotifyRequest(`search?${parameters}`, token);
+      if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza risultati verificabili.");
+      albums = playlistAlbumRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })));
+      albums = albums.filter((album) => albumMatchesManualFilters(album, filters));
+    }
+    renderManualAlbumResults(albums);
+    $("#manualAlbumStatus").textContent = albums.length
+      ? `${albums.length} album trovati. Scegli quali aggiungere alla raccolta.`
+      : "Nessun nuovo album verificabile trovato su Spotify.";
+  } catch (error) {
+    $("#manualAlbumStatus").textContent = `Ricerca Spotify non riuscita: ${error.message}`;
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+function updateManualAlbumSourceNotice() {
+  const source = $("#manualAlbumSource").value;
+  $("#manualAlbumIdsField").hidden = source !== "multiple-albums";
+  $("#manualAlbumSourceNotice").textContent = source === "multiple-albums"
+    ? "Sperimentale: Get Multiple Albums è deprecato e può smettere di funzionare. Inserisci al massimo 20 ID validi."
+    : source === "artist-albums"
+      ? "Get Artist’s Albums è attivo: mostra al massimo 10 album per profilo artista trovato."
+      : "Spotify filtra gli album per titolo, artista e anno. Il genere viene cercato sugli artisti e i relativi album.";
 }
 
 async function loadSuggestedAlbums(artistName, trigger = null, accessToken = null) {
@@ -610,89 +974,6 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
   }
 }
 
-function renderManualAlbumResults(albums) {
-  const container = $("#manualAlbumResults");
-  container.replaceChildren();
-  if (!albums.length) {
-    const empty = document.createElement("p");
-    empty.className = "suggestion-detail";
-    empty.textContent = "Nessun album completo e verificabile trovato su Spotify.";
-    container.append(empty);
-    return;
-  }
-  for (const album of albums) {
-    const card = document.createElement("article");
-    card.className = "suggestion-album";
-    const info = document.createElement("p");
-    const name = document.createElement("strong");
-    name.textContent = album.name;
-    const detail = document.createElement("span");
-    detail.className = "suggestion-detail";
-    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
-    info.append(name, detail);
-    const button = document.createElement("button");
-    button.className = "secondary";
-    button.type = "button";
-    const alreadyAdded = state.albums.some((existing) => existing.id === album.id);
-    button.textContent = alreadyAdded ? "Già in raccolta" : "Aggiungi";
-    button.disabled = alreadyAdded;
-    button.addEventListener("click", () => {
-      try {
-        if (addAlbumToCollection(album, { syncAutomatically: true })) {
-          button.textContent = "Aggiunto";
-          button.disabled = true;
-          button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
-          $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente; sincronizzazione GitHub avviata o in attesa di configurazione.`;
-        }
-      } catch (error) {
-        $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
-      }
-    });
-    card.append(info, button);
-    container.append(card);
-  }
-}
-
-async function searchSpotifyAlbums(input = $("#manualAlbumQuery").value, accessToken = null) {
-  const query = input.trim();
-  const button = $("#manualAlbumSearchButton");
-  button.disabled = true;
-  $("#manualAlbumStatus").textContent = "Ricerca su Spotify in corso…";
-  $("#manualAlbumResults").replaceChildren();
-  try {
-    if (!query) throw new Error("Inserisci il titolo, l’artista o un link Spotify.");
-    const token = accessToken || await spotifyAccessToken();
-    if (!token) {
-      const { clientId, redirectUri } = spotifySettings();
-      if (!clientId || !redirectUri) {
-        $("#manualAlbumStatus").textContent = "Configura il Client ID e il Redirect URI Spotify nelle impostazioni, poi riprova.";
-        return;
-      }
-      await startSpotifyAuthorization(query, "manual-search");
-      return;
-    }
-    const id = spotifyAlbumId(query);
-    let albums;
-    if (id) {
-      const album = await spotifyRequest(`albums/${encodeURIComponent(id)}`, token);
-      albums = playlistAlbumRecords([{ item: { type: "track", album } }]);
-    } else {
-      const parameters = new URLSearchParams({ q: query, type: "album", limit: "10" });
-      const response = await spotifyRequest(`search?${parameters}`, token);
-      if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza risultati verificabili.");
-      albums = playlistAlbumRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })));
-    }
-    renderManualAlbumResults(albums);
-    $("#manualAlbumStatus").textContent = albums.length
-      ? `${albums.length} album trovati. Scegli quali aggiungere alla raccolta.`
-      : "Nessun nuovo album verificabile trovato su Spotify.";
-  } catch (error) {
-    $("#manualAlbumStatus").textContent = `Ricerca Spotify non riuscita: ${error.message}`;
-  } finally {
-    if (button.isConnected) button.disabled = false;
-  }
-}
-
 $("#suggestionSearch").addEventListener("click", async () => {
   const seedName = $("#suggestionSeed").value;
   if (!seedName) return;
@@ -702,7 +983,7 @@ $("#suggestionSearch").addEventListener("click", async () => {
   $("#suggestionArtists").replaceChildren();
   $("#suggestionAlbums").replaceChildren();
   try {
-    const result = await findSuggestedArtists(seedName);
+    const result = await findSuggestedArtists(seedName, $("#suggestionSource").value);
     if (result) renderSuggestedArtists(result);
   } catch (error) {
     $("#suggestionStatus").textContent = `Ricerca suggerimenti non riuscita: ${error.message}`;
@@ -969,6 +1250,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
     playlist: "accord-spotify-pending-playlist",
     albums: "accord-spotify-pending-albums",
     "manual-search": "accord-spotify-pending-manual-search",
+    related: "accord-spotify-pending-related",
   };
   const pendingKey = pendingKeys[task];
   if (!pendingKey) throw new Error("Operazione Spotify non valida.");
@@ -978,15 +1260,16 @@ async function startSpotifyAuthorization(input, task = "playlist") {
   sessionStorage.setItem("accord-spotify-oauth-state", oauthState);
   sessionStorage.setItem("accord-spotify-oauth-redirect", redirectUri);
   const authorization = new URL(`${SPOTIFY_ACCOUNTS}/authorize`);
-  authorization.search = new URLSearchParams({
+  const authorizationParameters = {
     response_type: "code",
     client_id: clientId,
     redirect_uri: redirectUri,
-    scope: "playlist-read-private playlist-read-collaborative",
     state: oauthState,
     code_challenge_method: "S256",
     code_challenge: challenge,
-  });
+  };
+  if (task !== "related") authorizationParameters.scope = "playlist-read-private playlist-read-collaborative";
+  authorization.search = new URLSearchParams(authorizationParameters);
   location.assign(authorization);
 }
 
@@ -1002,9 +1285,11 @@ async function finishSpotifyAuthorization() {
   const pendingPlaylist = sessionStorage.getItem("accord-spotify-pending-playlist");
   const pendingAlbums = sessionStorage.getItem("accord-spotify-pending-albums");
   const pendingManualSearch = sessionStorage.getItem("accord-spotify-pending-manual-search");
+  const pendingRelated = sessionStorage.getItem("accord-spotify-pending-related");
   for (const key of ["accord-spotify-oauth-state", "accord-spotify-code-verifier",
     "accord-spotify-oauth-redirect", "accord-spotify-pending-playlist",
-    "accord-spotify-pending-albums", "accord-spotify-pending-manual-search"]) sessionStorage.removeItem(key);
+    "accord-spotify-pending-albums", "accord-spotify-pending-manual-search",
+    "accord-spotify-pending-related"]) sessionStorage.removeItem(key);
   if (error) {
     showMessage("Autorizzazione Spotify annullata", "Autorizzazione non completata; nessun dato è stato aggiunto.");
     return;
@@ -1026,10 +1311,26 @@ async function finishSpotifyAuthorization() {
     storeSpotifyTokens(tokens);
     if (pendingPlaylist) await importSpotifyPlaylist(pendingPlaylist, tokens.access_token);
     else if (pendingAlbums) await loadSuggestedAlbums(pendingAlbums, null, tokens.access_token);
+    else if (pendingRelated) {
+      const result = await findSuggestedArtists(pendingRelated, "spotify-related", tokens.access_token);
+      if (result) renderSuggestedArtists(result);
+    }
     else if (pendingManualSearch) {
-      $("#manualAlbumQuery").value = pendingManualSearch;
+      let filters;
+      try {
+        filters = JSON.parse(pendingManualSearch);
+      } catch {
+        filters = { ...manualAlbumSearchInput(), album: pendingManualSearch };
+      }
+      $("#manualAlbumSource").value = filters.source || "search";
+      $("#manualAlbumQuery").value = filters.album || "";
+      $("#manualAlbumArtist").value = filters.artist || "";
+      $("#manualAlbumGenre").value = filters.genre || "";
+      $("#manualAlbumYear").value = filters.year || "";
+      $("#manualAlbumIds").value = filters.ids || "";
+      updateManualAlbumSourceNotice();
       $("#manualAlbumDialog").showModal();
-      await searchSpotifyAlbums(pendingManualSearch, tokens.access_token);
+      await searchSpotifyAlbums(filters, tokens.access_token);
     }
     else setSyncState("Spotify collegato per questa sessione");
   } catch (tokenError) {
@@ -1045,17 +1346,24 @@ $("#playlistImportButton").addEventListener("click", () => {
 });
 
 $("#manualAlbumButton").addEventListener("click", () => {
+  $("#manualAlbumSource").value = "search";
   $("#manualAlbumQuery").value = "";
+  $("#manualAlbumArtist").value = "";
+  $("#manualAlbumGenre").value = "";
+  $("#manualAlbumYear").value = "";
+  $("#manualAlbumIds").value = "";
+  updateManualAlbumSourceNotice();
   $("#manualAlbumStatus").textContent = "";
   $("#manualAlbumResults").replaceChildren();
   $("#manualAlbumDialog").showModal();
   $("#manualAlbumQuery").focus();
 });
 
+$("#manualAlbumSource").addEventListener("change", updateManualAlbumSourceNotice);
 $("#manualAlbumSearchForm").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "search") return;
   event.preventDefault();
-  void searchSpotifyAlbums($("#manualAlbumQuery").value);
+  void searchSpotifyAlbums(manualAlbumSearchInput());
 });
 
 $("#playlistForm").addEventListener("submit", (event) => {
