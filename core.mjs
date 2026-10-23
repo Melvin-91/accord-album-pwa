@@ -126,6 +126,32 @@ export function playlistAlbumRecords(entries, playlistName = "") {
   return [...albums.values()];
 }
 
+export function listenBrainzRecommendations(rows, referenceMbid) {
+  if (!Array.isArray(rows) || typeof referenceMbid !== "string" || !referenceMbid) {
+    throw new Error("Risposta ListenBrainz non valida.");
+  }
+  const candidates = rows.filter((row) => row && typeof row === "object"
+    && row.reference_mbid === referenceMbid
+    && typeof row.artist_mbid === "string" && row.artist_mbid
+    && row.artist_mbid !== referenceMbid
+    && typeof row.name === "string" && row.name.trim()
+    && typeof row.score === "number" && Number.isFinite(row.score) && row.score > 0);
+  candidates.sort((a, b) => b.score - a.score);
+  const seen = new Set();
+  const unique = candidates.filter((row) => {
+    if (seen.has(row.artist_mbid)) return false;
+    seen.add(row.artist_mbid);
+    return true;
+  }).slice(0, 20);
+  const maximum = unique[0]?.score || 1;
+  return unique.map((row) => ({
+    name: row.name.trim(),
+    mbid: row.artist_mbid,
+    score: row.score,
+    match: row.score / maximum,
+  }));
+}
+
 export function addPlaylistAlbums(collection, additions) {
   const albums = new Map(collection.map((album) => [validateAlbum(album).id, album]));
   let added = 0;
@@ -192,14 +218,58 @@ export function filterAlbums(albums, {
     && (!tag || album.tags.some((value) => value.toLocaleLowerCase() === tag))
     && (!query || [album.name, album.artist, ...album.genres, ...album.collections, ...album.tags]
       .join(" ").toLocaleLowerCase().includes(query)));
-  const key = ["artist", "name", "year", "rating"].includes(order) ? order : "artist";
+  const key = ["artist", "name", "year", "rating", "genre", "collection", "manual"].includes(order)
+    ? order : "artist";
+  if (key === "manual") return result;
   return result.sort((a, b) => {
-    const left = key === "rating" ? (a.rating ?? -1) : key === "year" ? Number(a.year) || 0 : a[key].toLocaleLowerCase();
-    const right = key === "rating" ? (b.rating ?? -1) : key === "year" ? Number(b.year) || 0 : b[key].toLocaleLowerCase();
+    const left = key === "rating" ? (a.rating ?? -1)
+      : key === "year" ? Number(a.year) || 0
+        : key === "genre" ? (a.genres[0] || "").toLocaleLowerCase()
+          : key === "collection" ? (a.collections[0] || "").toLocaleLowerCase()
+            : a[key].toLocaleLowerCase();
+    const right = key === "rating" ? (b.rating ?? -1)
+      : key === "year" ? Number(b.year) || 0
+        : key === "genre" ? (b.genres[0] || "").toLocaleLowerCase()
+          : key === "collection" ? (b.collections[0] || "").toLocaleLowerCase()
+            : b[key].toLocaleLowerCase();
     if (left === right) return a.name.localeCompare(b.name);
-    if (key === "artist" || key === "name") return left < right ? -1 : 1;
+    if (["artist", "name", "genre", "collection"].includes(key)) return left < right ? -1 : 1;
     return left < right ? 1 : -1;
   });
+}
+
+export function sortAlbumsByManualOrder(albums, order) {
+  const position = new Map(order.map((id, index) => [id, index]));
+  return [...albums].sort((left, right) =>
+    (position.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+      - (position.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+      || left.id.localeCompare(right.id));
+}
+
+export function moveAlbumInManualOrder(order, visibleIds, albumId, targetIndex) {
+  const next = [...new Set(order)];
+  const visible = [...new Set(visibleIds)];
+  const known = new Set(next);
+  for (const id of visible) {
+    if (!known.has(id)) {
+      next.push(id);
+      known.add(id);
+    }
+  }
+  if (!Number.isInteger(targetIndex) || !visible.includes(albumId)) return next;
+
+  const visibleSet = new Set(visible);
+  const visibleOrder = next.filter((id) => visibleSet.has(id));
+  const sourceIndex = visibleOrder.indexOf(albumId);
+  if (sourceIndex < 0) return next;
+  const [moved] = visibleOrder.splice(sourceIndex, 1);
+  visibleOrder.splice(Math.max(0, Math.min(targetIndex, visibleOrder.length)), 0, moved);
+
+  let replacementIndex = 0;
+  for (let index = 0; index < next.length; index += 1) {
+    if (visibleSet.has(next[index])) next[index] = visibleOrder[replacementIndex++];
+  }
+  return next;
 }
 
 const COVER_MAGIC = new Uint8Array([65, 67, 67, 79, 82, 68, 45, 67, 79, 86, 69, 82, 83, 0, 1]);

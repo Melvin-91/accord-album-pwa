@@ -6,17 +6,17 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="./assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=3">
-    <title>Accord · Raccolta album</title>
+    <link rel="stylesheet" href="style.css?v=6">
+    <title>Accord · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/malt_metal.ico" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD</p><h1>Raccolta album</h1></div>
+        <div><p class="eyebrow">ACCORD</p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -26,8 +26,14 @@
     </header>
 
     <main>
+      <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
+        <button id="collectionTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="collectionPanel" tabindex="0">Raccolta album</button>
+        <button id="suggestionsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="suggestionsPanel" tabindex="-1">Suggerimenti</button>
+      </nav>
+
+      <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
       <section class="intro">
-        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>Una raccolta, desktop e PWA.</h2></div>
+        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua raccolta, su desktop e telefono.</h2></div>
         <p>Consulta copertine, stato, generi, voto, collezioni e tag. Le miniature vengono archiviate nel repository privato configurato.</p>
       </section>
 
@@ -60,15 +66,37 @@
         <label>Ordina per
           <select id="sortOrder">
             <option value="artist">Artista</option><option value="name">Album</option>
-            <option value="year">Anno</option><option value="rating">Voto</option>
+            <option value="year">Anno di uscita</option><option value="rating">Voto</option>
+            <option value="genre">Genere</option><option value="collection">Collezione</option>
+            <option value="manual">Ordine manuale</option>
           </select>
         </label>
       </section>
 
       <p id="collectionSummary" class="summary" aria-live="polite"></p>
+      <p id="manualOrderHint" class="summary manual-order-hint" role="status" hidden></p>
       <p id="coverSyncNotice" class="notice cover-sync-notice" role="status" hidden></p>
       <section id="albumList" class="album-list" aria-label="Album"></section>
       <p id="emptyState" class="empty" hidden>Nessun album corrisponde ai filtri.</p>
+      </section>
+
+      <section id="suggestionsPanel" class="tab-panel" role="tabpanel" aria-labelledby="suggestionsTab" tabindex="0" hidden>
+        <section class="suggestions" aria-labelledby="suggestionHeading">
+          <div class="suggestion-intro">
+            <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
+            <p>Seleziona un artista della raccolta per trovare artisti affini. La ricerca usa MusicBrainz e ListenBrainz, senza inviare la tua cronologia.</p>
+          </div>
+          <div class="suggestion-controls">
+            <label>Artista di partenza
+              <select id="suggestionSeed"><option value="">Nessun artista nella raccolta</option></select>
+            </label>
+            <button id="suggestionSearch" class="secondary" type="button">Cerca suggerimenti</button>
+          </div>
+          <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
+          <section id="suggestionArtists" class="suggestion-list" aria-label="Artisti suggeriti"></section>
+          <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
+        </section>
+      </section>
     </main>
 
     <dialog id="settingsDialog">
@@ -80,7 +108,7 @@
         <label>Fine-grained personal access token
           <input id="tokenInput" type="password" autocomplete="new-password" placeholder="ghp_…">
         </label>
-        <p class="notice">Crea un token limitato al solo repository privato <code>accord-music-data</code>, con permesso Contents in lettura/scrittura. Il token viene memorizzato in questo profilo browser; chiunque possa usare il profilo potrebbe accedervi. Non inserirlo in URL, file o repository. La PWA non lo invia a servizi diversi da api.github.com.</p>
+        <p class="notice">Crea un token limitato al solo repository privato <code>accord-music-data</code>, con permesso Contents in lettura/scrittura. Il token viene memorizzato in questo profilo browser; chiunque possa usare il profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token non viene inviato a servizi diversi da api.github.com.</p>
         <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza automaticamente all’avvio (può inviare le modifiche locali al repository)</label>
         <hr>
         <p class="eyebrow">IMPORTAZIONE PLAYLIST SPOTIFY</p>
@@ -90,9 +118,20 @@
         <label>Redirect URI registrato nell’app Spotify
           <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
         </label>
-        <p class="notice">Registra questo Redirect URI nelle impostazioni della tua app Spotify. La PWA usa OAuth Authorization Code con PKCE: non inserire un client secret. I token Spotify restano solo nella sessione del browser e non vengono sincronizzati.</p>
+        <p class="notice">Registra questo Redirect URI nelle impostazioni della tua app Spotify. La connessione usa OAuth Authorization Code con PKCE: non inserire un client secret. I token Spotify restano solo nella sessione del browser e non vengono sincronizzati.</p>
         <div class="dialog-actions settings-actions"><button id="clearCredentials" class="secondary" type="button">Dimentica GitHub</button><button id="disconnectSpotify" class="secondary" type="button">Scollega Spotify</button><button class="primary" value="save">Salva</button></div>
       </form>
+    </dialog>
+
+    <dialog id="musicbrainzArtistDialog">
+    <form id="musicbrainzArtistForm" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">IDENTIFICAZIONE ARTISTA</p><h2>Scegli il profilo corretto</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+      <p>MusicBrainz ha trovato più artisti con questo nome. Scegli il profilo giusto per evitare suggerimenti riferiti a un omonimo.</p>
+      <label>Profili corrispondenti
+        <select id="musicbrainzArtistChoice" required></select>
+      </label>
+      <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Continua</button></div>
+    </form>
     </dialog>
 
     <dialog id="playlistDialog">
@@ -132,7 +171,7 @@
     <template id="albumTemplate">
       <article class="album-card">
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a></div>
+        <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button><button class="album-drag-handle" type="button" title="Trascina per riordinare" aria-label="Trascina per riordinare">↕</button></div></div>
         <label class="status-field">Stato
           <select class="status-input">
             <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
@@ -148,6 +187,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=3"></script>
+    <script type="module" src="app.mjs?v=6"></script>
   </body>
 </html>

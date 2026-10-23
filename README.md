@@ -1,5 +1,7 @@
 # Accord · Raccolta album PWA
 
+La raccolta album e i suggerimenti sono organizzati in due schede separate.
+
 Client statico per la raccolta album Accord. Questo repository pubblico deve
 contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 `albums.json`, dati personali, token o segreti. Il repository privato
@@ -11,8 +13,15 @@ Le miniature JPEG sono conservate in `covers.bin` nel repository privato,
 verificate con SHA-256 e salvate in IndexedDB per l'uso offline. La
 sincronizzazione trasferisce solo i campi musicali previsti: non include
 database, feedback o note di lavoro, task, token o configurazioni personali.
+L'ordinamento automatico supporta artista, album, anno, voto, genere e
+collezione. Il riordino manuale è locale al dispositivo PWA, si può fare con
+le frecce o trascinando e non viene sincronizzato con GitHub.
 Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
+La sezione Suggerimenti usa MusicBrainz e ListenBrainz per trovare artisti
+affini a un artista della raccolta, senza inviare la cronologia personale.
+L'esplorazione degli album richiede l'autorizzazione Spotify; gli album
+vengono aggiunti localmente solo su scelta esplicita.
 
 ## Pubblicazione
 

@@ -5,7 +5,10 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   filterAlbums,
+  listenBrainzRecommendations,
+  moveAlbumInManualOrder,
   playlistAlbumRecords,
+  sortAlbumsByManualOrder,
   spotifyPlaylistId,
   threeWayMerge,
   validateAlbum,
@@ -67,6 +70,22 @@ test("searches genres and filters state while sorting ratings and names", () => 
   assert.deepEqual(filterAlbums(albums, { status: "heard", genre: "rock" }).map((item) => item.id), ["b"]);
   assert.deepEqual(filterAlbums(albums, { order: "name" }).map((item) => item.id), ["b", "a"]);
   assert.deepEqual(filterAlbums(albums, { order: "rating" }).map((item) => item.id), ["b", "a"]);
+  assert.deepEqual(filterAlbums(albums, { order: "genre" }).map((item) => item.id), ["a", "b"]);
+  assert.deepEqual(filterAlbums(albums, { order: "manual" }).map((item) => item.id), ["a", "b"]);
+});
+
+test("sorts by collection and keeps a local manual order while reordering filtered albums", () => {
+  const albums = [
+    album("a", { collections: ["Zeta"] }),
+    album("b", { collections: ["Alpha"] }),
+    album("c", { collections: ["Beta"] }),
+  ];
+  assert.deepEqual(filterAlbums(albums, { order: "collection" }).map((item) => item.id), ["b", "c", "a"]);
+  assert.deepEqual(sortAlbumsByManualOrder(albums, ["c", "a", "b"]).map((item) => item.id), ["c", "a", "b"]);
+  assert.deepEqual(
+    moveAlbumInManualOrder(["a", "hidden", "b", "c"], ["a", "b", "c"], "a", 2),
+    ["b", "hidden", "c", "a"],
+  );
 });
 
 test("rejects invalid or duplicate repository documents", () => {
@@ -139,4 +158,20 @@ test("extracts and deduplicates only valid full albums from playlist items", () 
   const added = addPlaylistAlbums([], albums);
   assert.equal(added.added, 1);
   assert.deepEqual(added.albums, albums);
+});
+
+test("normalizes ListenBrainz recommendations and rejects unrelated or invalid rows", () => {
+  const rows = [
+    { reference_mbid: "seed", artist_mbid: "b", name: "Artist B", score: 2 },
+    { reference_mbid: "seed", artist_mbid: "a", name: "Artist A", score: 4 },
+    { reference_mbid: "seed", artist_mbid: "a", name: "Duplicate", score: 3 },
+    { reference_mbid: "other", artist_mbid: "c", name: "Wrong seed", score: 10 },
+    { reference_mbid: "seed", artist_mbid: "seed", name: "Seed", score: 10 },
+    { reference_mbid: "seed", artist_mbid: "d", name: "Invalid score", score: Infinity },
+  ];
+  assert.deepEqual(listenBrainzRecommendations(rows, "seed"), [
+    { name: "Artist A", mbid: "a", score: 4, match: 1 },
+    { name: "Artist B", mbid: "b", score: 2, match: 0.5 },
+  ]);
+  assert.throws(() => listenBrainzRecommendations({}, "seed"), /ListenBrainz/);
 });
