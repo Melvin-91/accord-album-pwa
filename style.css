@@ -1,3 +1,6 @@
+.topbar:has(#syncButton:disabled)::after { content: ""; position: absolute; inset: auto 0 -1px; width: 35%; height: 3px; background: #dedede; animation: sync-progress 1.2s ease-in-out infinite; }
+@keyframes sync-progress { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@media (prefers-reduced-motion: reduce) { .topbar:has(#syncButton:disabled)::after { width: 100%; animation: none; } }
 :root {
   color-scheme: dark;
   font-family: "Segoe UI", system-ui, sans-serif;
