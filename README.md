@@ -18,10 +18,12 @@ collezione. Il riordino manuale è locale al dispositivo PWA, si può fare con
 le frecce o trascinando e non viene sincronizzato con GitHub.
 Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
-La sezione Suggerimenti usa MusicBrainz e ListenBrainz per trovare artisti
-affini a un artista della raccolta, senza inviare la cronologia personale.
-L'esplorazione degli album richiede l'autorizzazione Spotify; gli album
-vengono aggiunti localmente solo su scelta esplicita. Dalla scheda Raccolta si
+La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
+oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
+ascolti e MusicBrainz per il catalogo. Username e filtri restano nel profilo
+browser; la cronologia non viene salvata o sincronizzata. I risultati vengono
+abbinati a Spotify con una singola ricerca solo dopo la scelta dell'utente.
+Dalla scheda Raccolta si
 possono anche cercare album su Spotify per titolo, artista, ID o link e
 aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.
 
@@ -51,16 +53,31 @@ abilita esplicitamente il sync all'avvio.
 
 ## Aggiunta manuale di un album
 
-In **Raccolta album** scegli **Cerca su Spotify** e inserisci titolo, artista,
-ID o link Spotify. La funzione riutilizza il Client ID e l'autorizzazione
-Spotify configurati per le playlist. I risultati vengono verificati e
-deduplicati per ID; ogni album entra nella raccolta solo dopo aver premuto
-**Aggiungi**. Gli album già presenti non vengono modificati. Le nuove voci
-avviano subito la sincronizzazione con il repository privato se le credenziali
-GitHub sono configurate; altrimenti restano locali, viene chiesto di
-configurarle e la sincronizzazione parte dopo il salvataggio. I conflitti
-richiedono sempre una scelta esplicita. Accord desktop offre la stessa ricerca
-tramite l'icona a forma di lente nella riga della raccolta; se le credenziali
-mancano, le richiede e avvia la sincronizzazione dopo il salvataggio. Le
-copertine si aggiornano dopo che Accord desktop le carica nel repository
-privato e la PWA sincronizza.
+In **Raccolta album** scegli **Aggiungi album**. La ricerca predefinita usa
+Last.fm (titolo, artista o genere/tag); inserisci una chiave API Last.fm nelle
+impostazioni, conservata solo nel profilo browser e mai nella raccolta o su
+GitHub. MusicBrainz permette di filtrare anche per anno; Spotify resta
+disponibile con una singola richiesta standard per titolo, artista e anno.
+
+I risultati Last.fm e MusicBrainz non vengono aggiunti direttamente: scegli
+**Abbina a Spotify** per verificare il record con una sola ricerca Spotify,
+poi seleziona l'edizione corretta e premi **Aggiungi**. Questa corrispondenza
+mantiene gli ID Spotify richiesti dalla sincronizzazione. I risultati Spotify
+possono essere aggiunti direttamente; gli album già presenti non vengono
+modificati. Le nuove voci avviano la sincronizzazione se GitHub è configurato,
+altrimenti restano locali. I conflitti richiedono sempre una scelta esplicita.
+Accord desktop offre lo stesso flusso e usa la chiave Last.fm già configurata
+localmente; le chiavi non vengono trasferite tra dispositivi.
+
+## Suggerimenti da ascolti Last.fm
+
+Nella scheda **Suggerimenti**, inserisci il nome utente e scegli un intervallo
+da 1 a 3650 giorni. La PWA legge al massimo 1000 scrobble per richiesta
+(cinque pagine); se la cronologia è più ampia, il risultato indica che il
+campione è parziale. Last.fm fornisce artisti affini e MusicBrainz i relativi
+album, senza usare Spotify per la scoperta. Filtri opzionali includono/escludono
+artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
+Gli album già nella raccolta o già presenti nello storico scaricato vengono
+esclusi. Per aggiungere un risultato, Accord esegue una singola ricerca
+Spotify e richiede una scelta esplicita dell'edizione. Chiave Last.fm,
+username, filtri e ascolti non vengono trasferiti a GitHub.

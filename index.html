@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org https://ws.audioscrobbler.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="../assets/malt_metal.ico">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
     <title>Accord · La mia raccolta</title>
   </head>
   <body>
@@ -32,14 +32,14 @@
       </nav>
 
       <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
-      <section class="intro">
+      <section class="intro tab-intro">
         <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua raccolta, su desktop e telefono.</h2></div>
         <p>Consulta copertine, stato, generi, voto, collezioni e tag. Le miniature vengono archiviate nel repository privato configurato.</p>
       </section>
 
       <section class="playlist-import">
-        <div><p class="eyebrow">SPOTIFY</p><h2>Aggiungi album</h2><p>Cerca un album o importa quelli mancanti da una playlist. La ricerca singola avvia la sincronizzazione se GitHub è configurato; le importazioni da playlist restano locali.</p></div>
-        <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Cerca su Spotify</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>
+        <div><p class="eyebrow">ALBUM</p><h2>Aggiungi album</h2><p>Cerca da Last.fm, MusicBrainz o Spotify, oppure importa quelli mancanti da una playlist Spotify. Le aggiunte manuali sincronizzano se GitHub è configurato; le importazioni da playlist restano locali.</p></div>
+        <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Aggiungi album</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>
       </section>
 
       <section class="filters" aria-label="Ricerca e filtri album">
@@ -82,10 +82,36 @@
 
       <section id="suggestionsPanel" class="tab-panel" role="tabpanel" aria-labelledby="suggestionsTab" tabindex="0" hidden>
         <section class="suggestions" aria-labelledby="suggestionHeading">
-          <div class="suggestion-intro">
+          <div class="suggestion-intro tab-intro">
             <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
-            <p>Seleziona un artista della raccolta per trovare artisti affini. La ricerca usa MusicBrainz e ListenBrainz, senza inviare la tua cronologia.</p>
+            <p>Puoi esplorare un artista della raccolta con ListenBrainz oppure generare album affini agli ascolti Last.fm. La cronologia non viene sincronizzata con GitHub.</p>
           </div>
+          <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
+            <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
+            <p>Legge gli ultimi scrobble nell’intervallo scelto, trova artisti affini su Last.fm e cerca i loro album su MusicBrainz. Al massimo 1000 scrobble e 5 artisti di partenza; i dati restano in memoria nel browser.</p>
+            <div class="lastfm-suggestion-controls">
+              <label>Nome utente Last.fm
+                <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
+              </label>
+              <label>Intervallo in giorni
+                <input id="lastfmSuggestionDays" type="number" min="1" max="3650" value="30">
+              </label>
+              <label>Artisti da includere (facoltativo)
+                <input id="lastfmIncludeArtists" maxlength="500" placeholder="Artista A, Artista B">
+              </label>
+              <label>Artisti da escludere
+                <input id="lastfmExcludeArtists" maxlength="500" placeholder="Artista A, Artista B">
+              </label>
+              <label>Generi da includere
+                <input id="lastfmIncludeGenres" maxlength="300" placeholder="Rock, jazz">
+              </label>
+              <label>Generi da escludere
+                <input id="lastfmExcludeGenres" maxlength="300" placeholder="Generi separati da virgole">
+              </label>
+              <button id="lastfmSuggestionButton" class="secondary" type="button">Suggerisci album</button>
+            </div>
+            <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album.</p>
+          </section>
           <div class="suggestion-controls">
             <label>Artista di partenza
               <select id="suggestionSeed"><option value="">Nessun artista nella raccolta</option></select>
@@ -118,6 +144,13 @@
         <p class="notice">Crea un token limitato al solo repository privato <code>accord-music-data</code>, con permesso Contents in lettura/scrittura. Il token viene memorizzato in questo profilo browser; chiunque possa usare il profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token non viene inviato a servizi diversi da api.github.com.</p>
         <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza automaticamente all’avvio (può inviare le modifiche locali al repository)</label>
         <hr>
+        <p class="eyebrow">LAST.FM</p>
+        <label>Chiave API Last.fm
+          <input id="lastfmApiKeyInput" type="password" autocomplete="new-password" placeholder="Chiave API (32 caratteri)">
+        </label>
+        <div class="dialog-actions settings-actions"><button id="clearLastfmApiKey" class="secondary" type="button">Dimentica chiave</button><button id="saveLastfmApiKey" class="secondary" type="button">Salva chiave</button></div>
+        <p class="notice">La chiave è conservata solo in questo profilo browser, non nella raccolta né su GitHub, ed è inviata esclusivamente a Last.fm. Puoi crearne una su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
+        <hr>
         <p class="eyebrow">SPOTIFY</p>
         <label>Client ID dell’app Spotify
           <input id="spotifyClientIdInput" autocomplete="off" placeholder="Client ID (32 caratteri)">
@@ -144,16 +177,16 @@
     <dialog id="manualAlbumDialog">
       <form id="manualAlbumSearchForm" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">RICERCA AVANZATA</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-        <label>Metodo di ricerca
+        <label>Fonte album
           <select id="manualAlbumSource">
-            <option value="search">Ricerca album Spotify</option>
-            <option value="artist-albums">Album di un artista · Spotify</option>
-            <option value="multiple-albums">Più album per ID · sperimentale, endpoint deprecato</option>
+            <option value="lastfm">Last.fm · predefinito</option>
+            <option value="musicbrainz">MusicBrainz</option>
+            <option value="spotify">Spotify · ricerca standard</option>
           </select>
         </label>
         <div class="manual-search-fields">
           <label>Album
-            <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo, ID o link Spotify">
+            <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo album">
           </label>
           <label>Artista
             <input id="manualAlbumArtist" maxlength="200" autocomplete="off" placeholder="Nome artista">
@@ -164,13 +197,10 @@
           <label>Anno o intervallo
             <input id="manualAlbumYear" maxlength="9" autocomplete="off" placeholder="Es. 1990-1999">
           </label>
-          <label id="manualAlbumIdsField" hidden>ID o link album, separati da virgola
-            <textarea id="manualAlbumIds" maxlength="1000" rows="3" autocomplete="off" placeholder="ID o link open.spotify.com/album/…"></textarea>
-          </label>
         </div>
-        <p id="manualAlbumSourceNotice" class="notice">Spotify filtra gli album per titolo, artista e anno. Il genere viene cercato sugli artisti e i relativi album.</p>
+        <p id="manualAlbumSourceNotice" class="notice">Last.fm usa una sola richiesta per titolo, artista o genere; non fornisce un filtro anno.</p>
         <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
-        <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca Spotify"></section>
+        <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca album"></section>
         <div class="dialog-actions"><button class="secondary" value="cancel">Chiudi</button><button id="manualAlbumSearchButton" class="primary" value="search">Cerca</button></div>
       </form>
     </dialog>
@@ -228,6 +258,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=15"></script>
+    <script type="module" src="app.mjs?v=20"></script>
   </body>
 </html>

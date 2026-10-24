@@ -174,6 +174,62 @@ export function listenBrainzRecommendations(rows, referenceMbid) {
   }));
 }
 
+export function summarizeLastFmTracks(tracks) {
+  if (!Array.isArray(tracks)) throw new Error("Cronologia Last.fm non valida.");
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const artists = new Map();
+  const knownAlbums = new Set();
+  let trackCount = 0;
+  for (const track of tracks) {
+    const artistValue = track?.artist;
+    const artist = String(typeof artistValue === "string"
+      ? artistValue : artistValue?.name || artistValue?.["#text"] || "").trim();
+    const albumValue = track?.album;
+    const album = String(typeof albumValue === "string"
+      ? albumValue : albumValue?.name || albumValue?.["#text"] || "").trim();
+    const timestamp = track?.date?.uts;
+    if (!artist || timestamp === undefined || timestamp === null
+        || String(timestamp).trim() === "" || !Number.isFinite(Number(timestamp))) continue;
+    trackCount += 1;
+    const key = normalize(artist);
+    const previous = artists.get(key);
+    artists.set(key, { name: previous?.name || artist, plays: (previous?.plays || 0) + 1 });
+    if (album) knownAlbums.add(JSON.stringify([key, normalize(album)]));
+  }
+  return {
+    artists: [...artists.values()].sort((a, b) => b.plays - a.plays || a.name.localeCompare(b.name)),
+    knownAlbums,
+    trackCount,
+  };
+}
+
+export function filterListeningAlbumSuggestions(albums, {
+  knownAlbums = new Set(), collection = [], includedArtists = [], excludedArtists = [],
+  includedGenres = [], excludedGenres = [],
+} = {}) {
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const included = new Set(includedArtists.map(normalize).filter(Boolean));
+  const excluded = new Set(excludedArtists.map(normalize).filter(Boolean));
+  const genreIncludes = new Set(includedGenres.map(normalize).filter(Boolean));
+  const genreExcludes = new Set(excludedGenres.map(normalize).filter(Boolean));
+  const saved = new Set(collection.map((album) =>
+    JSON.stringify([normalize(album.artist), normalize(album.name)])));
+  const seen = new Set();
+  return albums.filter((album) => {
+    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const genres = (Array.isArray(album.genres) ? album.genres : []).map(normalize);
+    const identity = JSON.stringify([normalize(album.artist), normalize(album.name)]);
+    const albumId = album.id || identity;
+    if (!album.name || !album.artist || knownAlbums.has(identity) || saved.has(identity)
+        || seen.has(albumId) || artists.some((artist) => excluded.has(artist))
+        || included.size && !artists.some((artist) => included.has(artist))
+        || genreIncludes.size && !genres.some((genre) => genreIncludes.has(genre))
+        || genres.some((genre) => genreExcludes.has(genre))) return false;
+    seen.add(albumId);
+    return true;
+  });
+}
+
 export function addPlaylistAlbums(collection, additions) {
   const albums = new Map(collection.map((album) => [validateAlbum(album).id, album]));
   let added = 0;
