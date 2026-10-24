@@ -7,7 +7,9 @@
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org https://ws.audioscrobbler.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-    <link rel="icon" href="../assets/malt_metal.ico">
+    <link rel="icon" href="./assets/malt_metal.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
+    <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css?v=11">
     <title>Accord · La mia raccolta</title>
@@ -15,7 +17,7 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <img src="../assets/malt_metal.ico" width="36" height="36" alt="">
+        <img src="./assets/accord-192.png" width="36" height="36" alt="">
         <div><p class="eyebrow">ACCORD</p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
@@ -26,17 +28,17 @@
     </header>
 
     <main>
+      <section class="intro tab-intro">
+        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua musica, su desktop e telefono.</h2></div>
+        <p>Gestisci la raccolta di album e scopri nuovi suggerimenti. Le miniature vengono archiviate nel repository privato configurato.</p>
+      </section>
+
       <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
         <button id="collectionTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="collectionPanel" tabindex="0">Raccolta album</button>
         <button id="suggestionsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="suggestionsPanel" tabindex="-1">Suggerimenti</button>
       </nav>
 
       <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
-      <section class="intro tab-intro">
-        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua raccolta, su desktop e telefono.</h2></div>
-        <p>Consulta copertine, stato, generi, voto, collezioni e tag. Le miniature vengono archiviate nel repository privato configurato.</p>
-      </section>
-
       <section class="playlist-import">
         <div><p class="eyebrow">ALBUM</p><h2>Aggiungi album</h2><p>Cerca da Last.fm, MusicBrainz o Spotify, oppure importa quelli mancanti da una playlist Spotify. Le aggiunte manuali sincronizzano se GitHub è configurato; le importazioni da playlist restano locali.</p></div>
         <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Aggiungi album</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>

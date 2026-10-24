@@ -6,6 +6,8 @@ Client statico per la raccolta album Accord. Questo repository pubblico deve
 contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 `albums.json`, dati personali, token o segreti. Il repository privato
 `accord-music-data` resta separato.
+La pagina e l'installazione mobile usano l'icona del gatto in PNG da 192 e
+512 pixel, con percorsi relativi al sito GitHub Pages.
 
 La raccolta mostra copertina, stato, anno, generi, voto, collezioni e tag.
 I record v1 sono compatibili e vengono migrati al successivo aggiornamento.

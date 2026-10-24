@@ -1,4 +1,4 @@
-const CACHE = "accord-album-pwa-v35";
+const CACHE = "accord-album-pwa-v36";
 const FILES = [
   "./",
   "./index.html",
@@ -7,6 +7,8 @@ const FILES = [
   "./app.mjs?v=20",
   "./manifest.json",
   "./assets/malt_metal.ico",
+  "./assets/accord-192.png",
+  "./assets/accord-512.png",
 ];
 
 self.addEventListener("install", (event) => {
