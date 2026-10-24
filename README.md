@@ -83,10 +83,17 @@ album più ascoltati; MusicBrainz fornisce catalogo e generi. Vengono proposti
 al massimo tre album più ascoltati per artista. Filtri opzionali
 includono/escludono artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
 Gli album già nella raccolta o già presenti nello storico scaricato vengono
-esclusi. Per aggiungere un risultato, Accord esegue una singola ricerca
-Spotify; una sola corrispondenza viene aggiunta automaticamente, mentre più
-edizioni richiedono la scelta esplicita. Dopo aver abbinato album suggeriti,
-puoi creare una playlist privata Spotify dai loro brani scegliendone il nome.
+esclusi. Il catalogo MusicBrainz viene consultato in massimo tre pagine da
+100 risultati, a distanza di almeno 1,1 secondi; il conteggio e gli eventuali
+campioni parziali sono mostrati. I risultati sono riutilizzati per 15 minuti
+in una cache solo in memoria, limitata a otto query.
+
+L'abbinamento usa l'MBID Last.fm/MusicBrainz quando coincide, altrimenti
+artista e titolo esatti. Un MBID discordante, titoli omonimi con più gruppi
+o edizioni sono marcati come ambigui: anche una singola corrispondenza
+Spotify richiede conferma esplicita, mentre una corrispondenza non ambigua
+può essere aggiunta automaticamente. Dopo aver abbinato album suggeriti, puoi
+creare una playlist privata Spotify dai loro brani scegliendone il nome.
 La funzione richiede il permesso Spotify `playlist-modify-private`, crea la
 playlist solo dopo aver verificato i brani e aggiunge al massimo 1000 brani.
 Chiave Last.fm,

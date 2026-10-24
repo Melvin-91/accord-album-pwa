@@ -9,6 +9,7 @@ import {
   listenBrainzRecommendations,
   moveAlbumInManualOrder,
   playlistAlbumRecords,
+  readMusicBrainzCatalog,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
@@ -177,6 +178,72 @@ test("keeps only the three most listened suggested albums per artist", () => {
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
     "Album 2", "Album 3", "Album 4",
   ]);
+});
+
+test("paginates MusicBrainz in bounded pages, deduplicates, and reports incomplete samples", async () => {
+  const offsets = [];
+  const full = await readMusicBrainzCatalog(async (offset, limit) => {
+    offsets.push([offset, limit]);
+    const count = 205;
+    const start = offset;
+    const end = Math.min(offset + limit, count);
+    return { count, "release-groups": Array.from({ length: end - start }, (_, index) => ({
+      id: `group-${start + index}`,
+    })) };
+  });
+  assert.deepEqual(offsets, [[0, 100], [100, 100], [200, 100]]);
+  assert.equal(full.pages, 3);
+  assert.equal(full.fetched, 205);
+  assert.equal(full.total, 205);
+  assert.equal(full.truncated, false);
+  assert.equal(full.groups.length, 205);
+  const duplicate = await readMusicBrainzCatalog(async () => ({
+    count: 2,
+    "release-groups": [{ id: "duplicate" }, { id: "duplicate" }],
+  }), 2);
+  assert.equal(duplicate.fetched, 2);
+  assert.equal(duplicate.groups.length, 1);
+  assert.equal(duplicate.truncated, true);
+
+  const limited = await readMusicBrainzCatalog(async (offset, limit) => ({
+    count: 401,
+    "release-groups": Array.from({ length: limit }, (_, index) => ({ id: `limited-${offset + index}` })),
+  }));
+  assert.equal(limited.fetched, 300);
+  assert.equal(limited.truncated, true);
+  const unstable = await readMusicBrainzCatalog(async (offset, limit) => ({
+    count: offset ? 201 : 200,
+    "release-groups": Array.from({ length: limit }, (_, index) => ({ id: `unstable-${offset + index}` })),
+  }));
+  assert.equal(unstable.pages, 1);
+  assert.equal(unstable.truncated, true);
+  assert.equal(unstable.groups.length, 100);
+  assert.throws(() => readMusicBrainzCatalog(async () => ({}), 301), /Limite o richiesta/);
+});
+
+test("uses MusicBrainz IDs and flags duplicate title matches for explicit selection", () => {
+  const mbid = "83d91898-7763-47d7-b03b-b92132375c47";
+  const albums = [
+    { id: "exact", name: "Blue", artist: "Artist", artist_names: ["Artist"], mbid },
+    { id: "other", name: "Blue", artist: "Artist", artist_names: ["Artist"],
+      mbid: "83d91898-7763-47d7-b03b-b92132375c48" },
+  ];
+  const byId = topListenedAlbums(albums, [{ artist: "Artist", name: "Different title", mbid, playcount: 20 }]);
+  assert.deepEqual(byId.map((album) => album.id), ["exact"]);
+  assert.equal(byId[0].matchConfidence, "high");
+  assert.match(byId[0].matchReason, /identificativo MusicBrainz/);
+
+  const conflict = topListenedAlbums([
+    { id: "conflict", name: "Blue", artist: "Artist", artist_names: ["Artist"],
+      mbid: "83d91898-7763-47d7-b03b-b92132375c48" },
+  ], [{ artist: "Artist", name: "Blue", mbid, playcount: 10 }]);
+  assert.equal(conflict[0].matchConfidence, "ambiguous");
+  assert.match(conflict[0].matchReason, /identificativi MusicBrainz non concordano/);
+
+  const ambiguous = topListenedAlbums(albums.map((album) => ({ ...album, mbid: undefined })),
+    [{ artist: "Artist", name: "Blue", playcount: 10 }]);
+  assert.deepEqual(ambiguous.map((album) => album.matchConfidence), ["ambiguous", "ambiguous"]);
+  assert.ok(ambiguous.every((album) => /scegli la corrispondenza Spotify/.test(album.matchReason)));
 });
 
 test("uses one canonical Spotify redirect URI for browser and installed PWA paths", () => {

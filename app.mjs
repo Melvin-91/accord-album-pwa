@@ -8,6 +8,7 @@ import {
   listenBrainzRecommendations,
   playlistAlbumRecords,
   findSpotifyPlaylistMatches,
+  readMusicBrainzCatalog,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
@@ -17,7 +18,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=11";
+} from "./core.mjs?v=12";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -29,7 +30,9 @@ const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
 const suggestedSourceAlbums = new Map();
 const suggestedSpotifyAlbums = new Map();
+const listeningCatalogCache = new Map();
 let suggestedMatchAlbumId = null;
+let lastListeningCatalogRequestAt = 0;
 const LASTFM_KEY = "accord-lastfm-api-key";
 const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascoltato", liked: "Mi piace", hidden: "Non proporre" };
 const $ = (selector) => document.querySelector(selector);
@@ -981,23 +984,47 @@ async function similarLastFmArtists(name) {
 }
 
 async function searchListeningMusicBrainzAlbums(artists) {
-  const terms = artists.map((artist) => `artist:${JSON.stringify(artist.name)}`);
-  const parameters = new URLSearchParams({
-    query: `primarytype:album AND (${terms.join(" OR ")})`,
-    fmt: "json",
-    limit: "100",
-  });
-  const response = await fetch(`https://musicbrainz.org/ws/2/release-group?${parameters}`, {
-    headers: { Accept: "application/json" },
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-  });
-  if (!response.ok) throw new Error(`MusicBrainz ha risposto con HTTP ${response.status}.`);
-  const data = await response.json();
-  if (!Array.isArray(data["release-groups"])) throw new Error("Risposta MusicBrainz senza risultati album verificabili.");
+  const cacheKey = JSON.stringify(artists.map((artist) => artist.name.trim().toLocaleLowerCase()).sort());
+  const now = Date.now();
+  const cached = listeningCatalogCache.get(cacheKey);
+  let catalog;
+  if (cached && now - cached.savedAt < 900000) {
+    catalog = { ...cached.catalog, cached: true };
+  } else {
+    for (const [key, value] of listeningCatalogCache) {
+      if (now - value.savedAt >= 900000) listeningCatalogCache.delete(key);
+    }
+    const terms = artists.map((artist) => `artist:${JSON.stringify(artist.name)}`);
+    const query = `primarytype:album AND (${terms.join(" OR ")})`;
+    catalog = await readMusicBrainzCatalog(async (offset, limit) => {
+      const delay = 1100 - (Date.now() - lastListeningCatalogRequestAt);
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      lastListeningCatalogRequestAt = Date.now();
+      const parameters = new URLSearchParams({
+        query,
+        fmt: "json",
+        limit: String(limit),
+        offset: String(offset),
+      });
+      const response = await fetch(`https://musicbrainz.org/ws/2/release-group?${parameters}`, {
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      if (!response.ok) throw new Error(`MusicBrainz ha risposto con HTTP ${response.status}.`);
+      return response.json();
+    });
+    catalog.cached = false;
+    listeningCatalogCache.set(cacheKey, { savedAt: now, catalog });
+    if (listeningCatalogCache.size > 8) {
+      const oldest = [...listeningCatalogCache.entries()]
+        .reduce((previous, current) => current[1].savedAt < previous[1].savedAt ? current : previous);
+      listeningCatalogCache.delete(oldest[0]);
+    }
+  }
   const candidates = new Map(artists.map((artist) => [artist.name.toLocaleLowerCase(), artist]));
   const albums = [];
-  for (const group of data["release-groups"]) {
+  for (const group of catalog.groups) {
     if (group?.["primary-type"] !== "Album"
         || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(group.id || "")) continue;
     const credits = (group["artist-credit"] || []).flatMap((credit) => {
@@ -1016,6 +1043,7 @@ async function searchListeningMusicBrainzAlbums(artists) {
     albums.push({
       id: `mb:${group.id}`,
       sourceId: group.id,
+      mbid: group.id,
       name: String(group.title || "").trim(),
       artist: credits.map((credit) => credit.name + credit.joinphrase).join(""),
       artist_names: creditedNames,
@@ -1029,7 +1057,8 @@ async function searchListeningMusicBrainzAlbums(artists) {
       }).join("; "),
     });
   }
-  return { albums, truncated: Number(data.count || albums.length) > data["release-groups"].length };
+  return { albums, truncated: catalog.truncated, total: catalog.total, fetched: catalog.fetched,
+    pages: catalog.pages, cached: catalog.cached };
 }
 
 async function suggestListeningAlbums(button) {
@@ -1094,6 +1123,7 @@ async function suggestListeningAlbums(button) {
         if (name) rankings.push({
           artist: artist.name,
           name,
+          mbid: typeof entry?.mbid === "string" ? entry.mbid : "",
           playcount: Number.isFinite(playcount) && playcount > 0 ? playcount : entries.length - index,
         });
       });
@@ -1107,8 +1137,11 @@ async function suggestListeningAlbums(button) {
     const albums = topListenedAlbums(eligibleAlbums, rankings, 3);
     renderListeningAlbumSuggestions(albums);
     const coverage = history.partial ? " · campione parziale (massimo 1000 scrobble)" : "";
-    const truncated = catalog.truncated ? " · MusicBrainz ha limitato il catalogo ai primi 100 risultati" : "";
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti · ${seeds.length} artisti di partenza · ${albums.length} album candidati${coverage}${truncated}.`;
+    const catalogNote = catalog.truncated
+      ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
+      : ` · catalogo completo: ${catalog.fetched} risultati`;
+    const catalogCache = catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "";
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti · ${seeds.length} artisti di partenza · ${albums.length} album candidati${coverage} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
@@ -1136,7 +1169,7 @@ function renderListeningAlbumSuggestions(albums) {
     name.textContent = album.name;
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
-    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"} · ${album.genres.join(", ") || "Generi non disponibili"} · ${album.reason}`;
+    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"} · ${album.genres.join(", ") || "Generi non disponibili"} · ${album.reason} · ${album.matchReason}`;
     info.append(name, detail);
     const button = document.createElement("button");
     button.className = "secondary";
@@ -1342,7 +1375,7 @@ async function resolveManualAlbumToSpotify(album, accessToken = null) {
     const matches = await fetchSpotifyManualAlbums({
       provider: "spotify", album: album.name, artist: album.artist, genre: "", year: "",
     }, token);
-    if (matches.length === 1) {
+    if (matches.length === 1 && album.matchConfidence !== "ambiguous") {
       const match = matches[0];
       const alreadyPresent = state.albums.some((existing) => existing.id === match.id);
       if (!alreadyPresent) addAlbumToCollection(match, { syncAutomatically: true });
@@ -1360,7 +1393,9 @@ async function resolveManualAlbumToSpotify(album, accessToken = null) {
     suggestedMatchAlbumId = suggestedSourceAlbums.has(album.id) ? album.id : null;
     renderManualAlbumResults(matches);
     $("#manualAlbumStatus").textContent = matches.length
-      ? `${matches.length} corrispondenze Spotify. Scegli l’edizione corretta da aggiungere.`
+      ? album.matchConfidence === "ambiguous"
+        ? `Il catalogo non distingue con certezza l’edizione. Verifica anno e artista, poi conferma con “Aggiungi”.`
+        : `${matches.length} corrispondenze Spotify. Scegli l’edizione corretta da aggiungere.`
       : "Spotify non ha trovato un album verificabile corrispondente.";
     return null;
   } catch (error) {

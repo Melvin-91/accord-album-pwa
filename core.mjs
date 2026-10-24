@@ -288,41 +288,119 @@ export function filterListeningAlbumSuggestions(albums, {
   });
 }
 
+export async function readMusicBrainzCatalog(fetchPage, maximum = 300) {
+  if (typeof fetchPage !== "function" || !Number.isInteger(maximum) || maximum < 1 || maximum > 300) {
+    throw new Error("Limite o richiesta MusicBrainz non validi.");
+  }
+  const groups = [];
+  const seen = new Set();
+  let total = null;
+  let fetched = 0;
+  let pages = 0;
+  let incomplete = false;
+  while (fetched < maximum) {
+    const limit = Math.min(100, maximum - fetched);
+    const page = await fetchPage(fetched, limit);
+    const rows = page?.["release-groups"];
+    if (!Array.isArray(rows) || rows.length > limit) {
+      throw new Error("Risposta MusicBrainz senza risultati album verificabili.");
+    }
+    if (page.count !== undefined) {
+      const pageTotal = Number(page.count);
+      if (!Number.isSafeInteger(pageTotal) || pageTotal < 0 || fetched + rows.length > pageTotal) {
+        throw new Error("Conteggio risultati MusicBrainz non valido.");
+      }
+      if (total !== null && total !== pageTotal) {
+        incomplete = true;
+        break;
+      }
+      total = pageTotal;
+    } else {
+      incomplete = true;
+    }
+    pages += 1;
+    fetched += rows.length;
+    for (const group of rows) {
+      if (typeof group?.id !== "string" || !group.id || seen.has(group.id)) {
+        incomplete = true;
+        continue;
+      }
+      seen.add(group.id);
+      groups.push(group);
+    }
+    if (!rows.length || rows.length < limit || total !== null && fetched >= total) break;
+  }
+  const truncated = incomplete || total === null || total > fetched;
+  return { groups, total, fetched, pages, truncated };
+}
+
 export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
   if (!Array.isArray(albums) || !Array.isArray(rankings)
       || !Number.isInteger(maximumPerArtist) || maximumPerArtist < 1) {
     throw new Error("Classifica album non valida.");
   }
   const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const validMbid = (value) => /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(String(value || ""));
+  const entries = [];
   const ranking = new Map();
   for (const entry of rankings) {
     const artist = normalize(entry?.artist);
     const name = normalize(entry?.name);
     const playcount = Number(entry?.playcount);
     if (!artist || !name || !Number.isFinite(playcount) || playcount < 0) continue;
-    const key = JSON.stringify([artist, name]);
+    const mbid = validMbid(entry?.mbid) ? String(entry.mbid).toLocaleLowerCase() : "";
+    const key = JSON.stringify([artist, mbid || name]);
     const previous = ranking.get(key);
-    ranking.set(key, Math.max(previous ?? 0, playcount));
+    if (previous) previous.playcount = Math.max(previous.playcount, playcount);
+    else {
+      const value = { artist, name, mbid, playcount, key };
+      ranking.set(key, value);
+      entries.push(value);
+    }
+  }
+  const matches = albums.map((album, index) => {
+    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const albumMbid = validMbid(album.mbid || album.sourceId) ? String(album.mbid || album.sourceId).toLocaleLowerCase() : "";
+    const found = entries.flatMap((entry) => {
+      if (!artists.includes(entry.artist)) return [];
+      if (entry.mbid && albumMbid) {
+        if (entry.mbid === albumMbid) return [{ ...entry, evidence: "mbid" }];
+        return entry.name === normalize(album.name) ? [{ ...entry, evidence: "mbid-conflict" }] : [];
+      }
+      return entry.name === normalize(album.name) ? [{ ...entry, evidence: "title" }] : [];
+    });
+    const best = found.sort((left, right) => right.playcount - left.playcount
+      || Number(right.evidence === "mbid") - Number(left.evidence === "mbid")
+      || Number(right.evidence === "mbid-conflict") - Number(left.evidence === "mbid-conflict"))[0];
+    return best ? { album, index, artist: best.artist, score: best.playcount,
+      rankKey: best.key, evidence: best.evidence } : null;
+  }).filter(Boolean);
+  const rankCandidates = new Map();
+  for (const match of matches) {
+    if (match.evidence === "mbid") continue;
+    if (!rankCandidates.has(match.rankKey)) rankCandidates.set(match.rankKey, new Set());
+    rankCandidates.get(match.rankKey).add(match.album.id || `index:${match.index}`);
   }
   const counts = new Map();
-  return albums.map((album, index) => {
-    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
-    const rankedArtists = artists.filter((artist) =>
-      ranking.has(JSON.stringify([artist, normalize(album.name)])));
-    const score = Math.max(-1, ...rankedArtists.map((artist) =>
-      ranking.get(JSON.stringify([artist, normalize(album.name)]))));
-    return { album, index, artists: rankedArtists, score };
-  }).filter(({ score }) => score >= 0)
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .filter(({ artists }) => {
-      const artist = artists[0];
-      if (!artist) return false;
-      const count = counts.get(artist) || 0;
+  return matches.sort((left, right) => right.score - left.score || left.index - right.index)
+    .filter((match) => {
+      const count = counts.get(match.artist) || 0;
       if (count >= maximumPerArtist) return false;
-      counts.set(artist, count + 1);
+      counts.set(match.artist, count + 1);
       return true;
     })
-    .map(({ album }) => album);
+    .map((match) => {
+      const alternatives = rankCandidates.get(match.rankKey)?.size || 0;
+      const matchConfidence = match.evidence === "mbid-conflict" || alternatives > 1 ? "ambiguous" : "high";
+      const matchReason = matchConfidence === "ambiguous"
+        ? match.evidence === "mbid-conflict"
+          ? "Titolo e artista coincidono, ma gli identificativi MusicBrainz non concordano; scegli la corrispondenza Spotify."
+          : `Titolo e artista coincidono, ma il catalogo contiene ${alternatives} edizioni o gruppi; scegli la corrispondenza Spotify.`
+        : match.evidence === "mbid"
+          ? "Artista e identificativo MusicBrainz coincidono con Last.fm."
+          : `Artista e titolo coincidono; anno MusicBrainz: ${match.album.year || "non disponibile"}.`;
+      return { ...match.album, matchConfidence, matchReason };
+    });
 }
 
 export function addPlaylistAlbums(collection, additions) {
