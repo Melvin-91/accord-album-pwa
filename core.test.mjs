@@ -218,7 +218,7 @@ test("paginates MusicBrainz in bounded pages, deduplicates, and reports incomple
   assert.equal(unstable.pages, 1);
   assert.equal(unstable.truncated, true);
   assert.equal(unstable.groups.length, 100);
-  assert.throws(() => readMusicBrainzCatalog(async () => ({}), 301), /Limite o richiesta/);
+  await assert.rejects(readMusicBrainzCatalog(async () => ({}), 301), /Limite o richiesta/);
 });
 
 test("uses MusicBrainz IDs and flags duplicate title matches for explicit selection", () => {
