@@ -5,6 +5,7 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   filterAlbums,
+  findSpotifyPlaylistMatches,
   listenBrainzRecommendations,
   moveAlbumInManualOrder,
   playlistAlbumRecords,
@@ -12,6 +13,7 @@ import {
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
+  topListenedAlbums,
   threeWayMerge,
   validateAlbum,
   validateDocument,
@@ -129,6 +131,52 @@ test("accepts Spotify playlist names, IDs, links, and URIs without accepting oth
   assert.equal(spotifyPlaylistId(`https://open.spotify.com/intl-it/playlist/${id}?si=example`), id);
   assert.equal(spotifyPlaylistId("La mia playlist"), null);
   assert.throws(() => spotifyPlaylistId(`https://example.com/playlist/${id}`), /link Spotify valido/);
+});
+
+test("searches playlist pages only until the first page containing matching names", async () => {
+  const playlists = (start, matchingIndex = -1) => Array.from({ length: 50 }, (_, index) => ({
+    id: String(start + index).padStart(22, "0"),
+    name: start + index === matchingIndex ? "Discovery" : `Playlist ${start + index}`,
+  }));
+  const pages = new Map([
+    [0, {
+      offset: 0,
+      total: 150,
+      items: playlists(0),
+      next: "https://api.spotify.com/v1/me/playlists?offset=50&limit=50",
+    }],
+    [50, {
+      offset: 50,
+      total: 150,
+      items: playlists(50, 63),
+      next: "https://api.spotify.com/v1/me/playlists?offset=100&limit=50",
+    }],
+  ]);
+  const requestedOffsets = [];
+  const matches = await findSpotifyPlaylistMatches(" discovery ", async (offset) => {
+    requestedOffsets.push(offset);
+    const page = pages.get(offset);
+    assert.ok(page, `unexpected playlist page request at offset ${offset}`);
+    return page;
+  });
+  assert.deepEqual(requestedOffsets, [0, 50]);
+  assert.deepEqual(matches.map((playlist) => playlist.id), ["0000000000000000000063"]);
+});
+
+test("keeps only the three most listened suggested albums per artist", () => {
+  const albums = Array.from({ length: 5 }, (_, index) => ({
+    name: `Album ${index + 1}`,
+    artist: "Artist",
+    artist_names: ["Artist"],
+  }));
+  const rankings = albums.map((album, index) => ({
+    artist: album.artist,
+    name: album.name,
+    playcount: [3, 12, 8, 4, 1][index],
+  }));
+  assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
+    "Album 2", "Album 3", "Album 4",
+  ]);
 });
 
 test("uses one canonical Spotify redirect URI for browser and installed PWA paths", () => {

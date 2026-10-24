@@ -7,15 +7,17 @@ import {
   encodeCoverArchive,
   listenBrainzRecommendations,
   playlistAlbumRecords,
+  findSpotifyPlaylistMatches,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
+  topListenedAlbums,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=9";
+} from "./core.mjs?v=11";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -25,6 +27,9 @@ const API = "https://api.github.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
 const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
+const suggestedSourceAlbums = new Map();
+const suggestedSpotifyAlbums = new Map();
+let suggestedMatchAlbumId = null;
 const LASTFM_KEY = "accord-lastfm-api-key";
 const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascoltato", liked: "Mi piace", hidden: "Non proporre" };
 const $ = (selector) => document.querySelector(selector);
@@ -783,6 +788,11 @@ function renderManualAlbumResults(albums) {
           button.disabled = true;
           button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
           $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente; sincronizzazione GitHub avviata o in attesa di configurazione.`;
+          if (suggestedMatchAlbumId && suggestedSourceAlbums.has(suggestedMatchAlbumId)) {
+            suggestedSpotifyAlbums.set(album.id, album);
+            renderSuggestionPlaylistAction();
+            suggestedMatchAlbumId = null;
+          }
         }
       } catch (error) {
         $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
@@ -1027,6 +1037,9 @@ async function suggestListeningAlbums(button) {
   $("#suggestionStatus").textContent = "Leggo gli ascolti Last.fm e preparo le proposte…";
   $("#suggestionArtists").replaceChildren();
   $("#suggestionAlbums").replaceChildren();
+  suggestedSourceAlbums.clear();
+  suggestedSpotifyAlbums.clear();
+  suggestedMatchAlbumId = null;
   try {
     const username = $("#lastfmSuggestionUser").value.trim();
     const days = Number($("#lastfmSuggestionDays").value);
@@ -1065,12 +1078,33 @@ async function suggestListeningAlbums(button) {
       .sort((a, b) => b.support - a.support || b.match - a.match || a.name.localeCompare(b.name))
       .slice(0, 10);
     if (!candidates.length) throw new Error("Last.fm non ha trovato artisti compatibili con i filtri inclusi/esclusi.");
+    const rankings = [];
+    for (const artist of candidates) {
+      const data = await lastFmRequest({
+        method: "artist.gettopalbums",
+        artist: artist.name,
+        autocorrect: "0",
+        limit: "50",
+      });
+      let entries = data.topalbums?.album || [];
+      if (!Array.isArray(entries)) entries = [entries];
+      entries.forEach((entry, index) => {
+        const name = String(entry?.name || "").trim();
+        const playcount = Number(entry?.playcount);
+        if (name) rankings.push({
+          artist: artist.name,
+          name,
+          playcount: Number.isFinite(playcount) && playcount > 0 ? playcount : entries.length - index,
+        });
+      });
+    }
     const catalog = await searchListeningMusicBrainzAlbums(candidates);
-    const albums = filterListeningAlbumSuggestions(catalog.albums, {
+    const eligibleAlbums = filterListeningAlbumSuggestions(catalog.albums, {
       knownAlbums: history.knownAlbums,
       collection: state.albums,
       ...filters,
     });
+    const albums = topListenedAlbums(eligibleAlbums, rankings, 3);
     renderListeningAlbumSuggestions(albums);
     const coverage = history.partial ? " · campione parziale (massimo 1000 scrobble)" : "";
     const truncated = catalog.truncated ? " · MusicBrainz ha limitato il catalogo ai primi 100 risultati" : "";
@@ -1085,6 +1119,8 @@ async function suggestListeningAlbums(button) {
 function renderListeningAlbumSuggestions(albums) {
   const container = $("#suggestionAlbums");
   container.replaceChildren();
+  suggestedSourceAlbums.clear();
+  for (const album of albums) suggestedSourceAlbums.set(album.id, album);
   if (!albums.length) {
     const empty = document.createElement("p");
     empty.className = "suggestion-detail";
@@ -1106,8 +1142,10 @@ function renderListeningAlbumSuggestions(albums) {
     button.className = "secondary";
     button.type = "button";
     button.textContent = "Abbina a Spotify";
+    button.dataset.suggestionAlbumId = album.id;
     button.addEventListener("click", () => {
       button.disabled = true;
+      suggestedMatchAlbumId = album.id;
       $("#manualAlbumSource").value = "spotify";
       $("#manualAlbumQuery").value = album.name;
       $("#manualAlbumArtist").value = album.artist;
@@ -1117,13 +1155,94 @@ function renderListeningAlbumSuggestions(albums) {
       $("#manualAlbumStatus").textContent = "";
       $("#manualAlbumResults").replaceChildren();
       $("#manualAlbumDialog").showModal();
-      void resolveManualAlbumToSpotify(album).finally(() => {
-        if (button.isConnected) button.disabled = false;
+      void resolveManualAlbumToSpotify(album).then((result) => {
+        if (result && button.isConnected) {
+          button.textContent = result.alreadyPresent ? "Già in raccolta" : "Aggiunto";
+          button.disabled = true;
+        } else if (button.isConnected) button.disabled = false;
       });
     });
     card.append(info, button);
     container.append(card);
   }
+  renderSuggestionPlaylistAction();
+}
+
+function renderSuggestionPlaylistAction() {
+  $("#createSuggestedPlaylist")?.remove();
+  if (!suggestedSpotifyAlbums.size) return;
+  const button = document.createElement("button");
+  button.id = "createSuggestedPlaylist";
+  button.className = "primary";
+  button.type = "button";
+  button.textContent = `Crea playlist Spotify · ${suggestedSpotifyAlbums.size} album`;
+  button.addEventListener("click", () => {
+    $("#suggestionPlaylistName").value = "";
+    $("#suggestionPlaylistStatus").textContent =
+      `Saranno inclusi i brani degli ${suggestedSpotifyAlbums.size} album abbinati. La playlist sarà privata.`;
+    $("#suggestionPlaylistDialog").showModal();
+    $("#suggestionPlaylistName").focus();
+  });
+  $("#suggestionAlbums").append(button);
+}
+
+async function createSuggestedPlaylist(name, albumIds, accessToken) {
+  if (!name || name.length > 100 || !albumIds.length || albumIds.length > 30) {
+    throw new Error("Nome non valido o numero di album fuori limite (massimo 30).");
+  }
+  const tracks = [];
+  const seenTracks = new Set();
+  for (const albumId of albumIds) {
+    if (!/^[A-Za-z0-9]{22}$/.test(albumId)) throw new Error("Un album suggerito non ha un ID Spotify verificabile.");
+    const entries = await completeSpotifyPages(`albums/${albumId}/tracks?limit=50&offset=0`, accessToken);
+    for (const entry of entries) {
+      const uri = entry?.uri;
+      if (entry?.type !== "track" || typeof uri !== "string"
+          || !/^spotify:track:[A-Za-z0-9]{22}$/.test(uri) || seenTracks.has(uri)) continue;
+      seenTracks.add(uri);
+      tracks.push(uri);
+      if (tracks.length > 1000) throw new Error("La proposta supera il limite di 1000 brani; nessuna playlist è stata creata.");
+    }
+  }
+  if (!tracks.length) throw new Error("Gli album selezionati non contengono brani Spotify verificabili.");
+
+  const playlist = await spotifyWriteRequest("me/playlists", accessToken, {
+    name,
+    description: "Creata da Accord · album suggeriti",
+    public: false,
+  });
+  if (!/^[A-Za-z0-9]{22}$/.test(playlist?.id || "")) {
+    throw new Error("Spotify non ha restituito una playlist verificabile.");
+  }
+  try {
+    for (let offset = 0; offset < tracks.length; offset += 100) {
+      await spotifyWriteRequest(`playlists/${playlist.id}/items`, accessToken, {
+        uris: tracks.slice(offset, offset + 100),
+      });
+    }
+  } catch (error) {
+    const url = playlist.external_urls?.spotify;
+    throw new Error(`Playlist creata ma aggiunta dei brani incompleta: ${error.message}`
+      + (url ? ` Apri la playlist e verifica i brani: ${url}` : ` ID playlist: ${playlist.id}`));
+  }
+  return { playlist, tracks: tracks.length };
+}
+
+async function beginSuggestedPlaylistCreation(name, albumIds, accessToken = null) {
+  const token = accessToken || await spotifyAccessToken();
+  if (!sessionStorage.getItem("accord-spotify-playlist-write-authorized")) {
+    await startSpotifyAuthorization(JSON.stringify({ name, albumIds }), "playlist-create");
+    return;
+  }
+  if (!token) {
+    await startSpotifyAuthorization(JSON.stringify({ name, albumIds }), "playlist-create");
+    return;
+  }
+  const result = await createSuggestedPlaylist(name, albumIds, token);
+  $("#suggestionPlaylistDialog").close();
+  showMessage("Playlist Spotify creata",
+    `${result.playlist.name || name}: ${result.tracks} brani aggiunti. La playlist è privata.`
+    + (result.playlist.external_urls?.spotify ? ` ${result.playlist.external_urls.spotify}` : ""));
 }
 
 async function searchMusicBrainzAlbums(filters) {
@@ -1169,6 +1288,7 @@ async function searchManualAlbums(input = manualAlbumSearchInput(), accessToken 
     : { ...input };
   const button = $("#manualAlbumSearchButton");
   button.disabled = true;
+  suggestedMatchAlbumId = null;
   $("#manualAlbumStatus").textContent = `Ricerca su ${filters.provider || "Last.fm"} in corso…`;
   $("#manualAlbumResults").replaceChildren();
   try {
@@ -1222,10 +1342,27 @@ async function resolveManualAlbumToSpotify(album, accessToken = null) {
     const matches = await fetchSpotifyManualAlbums({
       provider: "spotify", album: album.name, artist: album.artist, genre: "", year: "",
     }, token);
+    if (matches.length === 1) {
+      const match = matches[0];
+      const alreadyPresent = state.albums.some((existing) => existing.id === match.id);
+      if (!alreadyPresent) addAlbumToCollection(match, { syncAutomatically: true });
+      $("#manualAlbumResults").replaceChildren();
+      $("#manualAlbumStatus").textContent = alreadyPresent
+        ? `${match.name} è già nella raccolta.`
+        : `${match.name} trovato senza ambiguità e aggiunto alla raccolta.`;
+      if (suggestedSourceAlbums.has(album.id)) {
+        suggestedSpotifyAlbums.set(match.id, match);
+        renderSuggestionPlaylistAction();
+      }
+      if ($("#manualAlbumDialog").open) $("#manualAlbumDialog").close();
+      return { alreadyPresent };
+    }
+    suggestedMatchAlbumId = suggestedSourceAlbums.has(album.id) ? album.id : null;
     renderManualAlbumResults(matches);
     $("#manualAlbumStatus").textContent = matches.length
       ? `${matches.length} corrispondenze Spotify. Scegli l’edizione corretta da aggiungere.`
       : "Spotify non ha trovato un album verificabile corrispondente.";
+    return null;
   } catch (error) {
     $("#manualAlbumStatus").textContent = `Abbinamento Spotify non riuscito: ${error.message}`;
   }
@@ -1261,9 +1398,14 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
     if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza album verificabili.");
     const exact = response.albums.items.filter((album) => Array.isArray(album?.artists)
       && album.artists.some((value) => value.name?.trim().toLocaleLowerCase() === artistName.trim().toLocaleLowerCase()));
-    const albums = playlistAlbumRecords(exact.map((album) => ({ item: { type: "track", album } })))
+    const rankedExact = [...exact].sort((left, right) =>
+      (Number(right.popularity) || 0) - (Number(left.popularity) || 0));
+    const albums = playlistAlbumRecords(rankedExact.map((album) => ({ item: { type: "track", album } })))
       .filter((album) => !state.albums.some((existing) => existing.id === album.id))
-      .slice(0, 10);
+      .slice(0, 3);
+    suggestedSourceAlbums.clear();
+    suggestedSpotifyAlbums.clear();
+    for (const album of albums) suggestedSpotifyAlbums.set(album.id, album);
     const container = $("#suggestionAlbums");
     const heading = document.createElement("h3");
     heading.textContent = `Album di ${artistName}`;
@@ -1303,6 +1445,7 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
       card.append(info, button);
       container.append(card);
     }
+    renderSuggestionPlaylistAction();
   } catch (error) {
     $("#suggestionStatus").textContent = `Esplorazione album non riuscita: ${error.message}`;
   } finally {
@@ -1360,7 +1503,7 @@ $("#sortOrder").addEventListener("change", () => {
 
 function clearSpotifySession() {
   for (const key of ["accord-spotify-access-token", "accord-spotify-refresh-token",
-    "accord-spotify-token-expires"]) sessionStorage.removeItem(key);
+    "accord-spotify-token-expires", "accord-spotify-playlist-write-authorized"]) sessionStorage.removeItem(key);
 }
 
 function storeSpotifyTokens(tokens) {
@@ -1437,6 +1580,37 @@ async function spotifyRequest(path, accessToken) {
   return response.json();
 }
 
+async function spotifyWriteRequest(path, accessToken, body) {
+  const url = new URL(path, `${SPOTIFY_API}/`);
+  if (url.origin !== "https://api.spotify.com" || !url.pathname.startsWith("/v1/")) {
+    throw new Error("Indirizzo API Spotify non valido.");
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(body),
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (response.status === 401) {
+    clearSpotifySession();
+    throw new Error("Sessione Spotify scaduta. Ricollega l’account e riprova.");
+  }
+  if (response.status === 403) {
+    throw new Error("Spotify ha negato la scrittura. Autorizza il permesso playlist-modify-private e riprova.");
+  }
+  if (response.status === 429) {
+    const delay = response.headers.get("Retry-After");
+    throw new Error(`Limite richieste Spotify raggiunto${delay ? `; riprova tra ${delay} secondi` : ""}.`);
+  }
+  if (!response.ok) throw new Error(`Scrittura Spotify non riuscita (HTTP ${response.status}).`);
+  return response.status === 204 ? {} : response.json();
+}
+
 async function completeSpotifyPages(path, accessToken) {
   let next = new URL(path, `${SPOTIFY_API}/`);
   const entries = [];
@@ -1503,15 +1677,24 @@ async function resolveSpotifyPlaylist(input, accessToken) {
     }
     return playlist;
   }
-  const playlists = await completeSpotifyPages("me/playlists?limit=50&offset=0", accessToken);
-  const matches = playlists.filter((playlist) => typeof playlist.name === "string"
-    && playlist.name.trim().toLocaleLowerCase() === input.trim().toLocaleLowerCase()
-    && typeof playlist.id === "string");
+  const matches = await findSpotifyPlaylistMatches(input, (offset) =>
+    spotifyRequest(`me/playlists?limit=50&offset=${offset}`, accessToken));
   if (!matches.length) throw new Error("Non è stata trovata una playlist con quel nome nel tuo account Spotify.");
-  if (matches.length === 1) return resolveSpotifyPlaylist(matches[0].id, accessToken);
-  const selected = await chooseSpotifyPlaylist(matches);
+  const selected = matches.length === 1 ? matches[0] : await chooseSpotifyPlaylist(matches);
   if (!selected) return null;
-  return resolveSpotifyPlaylist(selected.id, accessToken);
+  if (!selected.snapshot_id) {
+    const playlist = await spotifyRequest(
+      `playlists/${encodeURIComponent(selected.id)}?fields=id,name,snapshot_id`, accessToken,
+    );
+    if (playlist.id !== selected.id || typeof playlist.name !== "string" || !playlist.snapshot_id) {
+      throw new Error("Spotify non ha restituito una playlist verificabile.");
+    }
+    return playlist;
+  }
+  if (typeof selected.name !== "string" || !selected.name) {
+    throw new Error("Spotify non ha restituito una playlist verificabile.");
+  }
+  return selected;
 }
 
 async function runPlaylistImport(input, accessToken) {
@@ -1584,6 +1767,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
   const oauthState = randomValue(32);
   const pendingKeys = {
     playlist: "accord-spotify-pending-playlist",
+    "playlist-create": "accord-spotify-pending-playlist-create",
     albums: "accord-spotify-pending-albums",
     "manual-search": "accord-spotify-pending-manual-search",
     related: "accord-spotify-pending-related",
@@ -1605,6 +1789,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
     code_challenge: challenge,
   };
   if (task === "playlist") authorizationParameters.scope = "playlist-read-private playlist-read-collaborative";
+  if (task === "playlist-create") authorizationParameters.scope = "playlist-modify-private";
   authorization.search = new URLSearchParams(authorizationParameters);
   location.assign(authorization);
 }
@@ -1619,11 +1804,13 @@ async function finishSpotifyAuthorization() {
   const verifier = sessionStorage.getItem("accord-spotify-code-verifier");
   const redirectUri = sessionStorage.getItem("accord-spotify-oauth-redirect");
   const pendingPlaylist = sessionStorage.getItem("accord-spotify-pending-playlist");
+  const pendingPlaylistCreate = sessionStorage.getItem("accord-spotify-pending-playlist-create");
   const pendingAlbums = sessionStorage.getItem("accord-spotify-pending-albums");
   const pendingManualSearch = sessionStorage.getItem("accord-spotify-pending-manual-search");
   const pendingRelated = sessionStorage.getItem("accord-spotify-pending-related");
   for (const key of ["accord-spotify-oauth-state", "accord-spotify-code-verifier",
     "accord-spotify-oauth-redirect", "accord-spotify-pending-playlist",
+    "accord-spotify-pending-playlist-create",
     "accord-spotify-pending-albums", "accord-spotify-pending-manual-search",
     "accord-spotify-pending-related"]) sessionStorage.removeItem(key);
   if (error) {
@@ -1645,7 +1832,24 @@ async function finishSpotifyAuthorization() {
       code_verifier: verifier,
     });
     storeSpotifyTokens(tokens);
-    if (pendingPlaylist) await importSpotifyPlaylist(pendingPlaylist, tokens.access_token);
+    if (pendingPlaylistCreate) {
+      const grants = String(tokens.scope || "").split(/\s+/);
+      if (!grants.includes("playlist-modify-private")) {
+        throw new Error("Spotify non ha concesso il permesso playlist-modify-private; nessuna playlist è stata creata.");
+      }
+      sessionStorage.setItem("accord-spotify-playlist-write-authorized", "1");
+      let request;
+      try {
+        request = JSON.parse(pendingPlaylistCreate);
+      } catch {
+        throw new Error("Richiesta di creazione playlist non valida.");
+      }
+      const result = await createSuggestedPlaylist(request.name, request.albumIds, tokens.access_token);
+      showMessage("Playlist Spotify creata",
+        `${result.playlist.name || request.name}: ${result.tracks} brani aggiunti. La playlist è privata.`
+        + (result.playlist.external_urls?.spotify ? ` ${result.playlist.external_urls.spotify}` : ""));
+    }
+    else if (pendingPlaylist) await importSpotifyPlaylist(pendingPlaylist, tokens.access_token);
     else if (pendingAlbums) await loadSuggestedAlbums(pendingAlbums, null, tokens.access_token);
     else if (pendingRelated) {
       const result = await findSuggestedArtists(pendingRelated, "spotify-related", tokens.access_token);
@@ -1715,6 +1919,21 @@ $("#playlistForm").addEventListener("submit", (event) => {
 
 $("#playlistChoiceForm").addEventListener("submit", (event) => {
   if (event.submitter?.value === "choose" && !$("#playlistChoiceSelect").value) event.preventDefault();
+});
+
+$("#suggestionPlaylistForm").addEventListener("submit", (event) => {
+  if (event.submitter?.value !== "create") return;
+  event.preventDefault();
+  const name = $("#suggestionPlaylistName").value.trim();
+  const albumIds = [...suggestedSpotifyAlbums.keys()];
+  if (!name || !albumIds.length) {
+    $("#suggestionPlaylistStatus").textContent = "Inserisci un nome e abbina almeno un album Spotify.";
+    return;
+  }
+  $("#suggestionPlaylistStatus").textContent = "Preparo i brani degli album selezionati…";
+  void beginSuggestedPlaylistCreation(name, albumIds).catch((error) => {
+    $("#suggestionPlaylistStatus").textContent = `Creazione playlist non riuscita: ${error.message}`;
+  });
 });
 
 function authHeaders() {

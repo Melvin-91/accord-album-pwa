@@ -95,6 +95,60 @@ export function spotifyPlaylistId(input) {
   return id;
 }
 
+export async function findSpotifyPlaylistMatches(name, fetchPage) {
+  const wanted = String(name || "").trim().toLocaleLowerCase();
+  if (!wanted || typeof fetchPage !== "function") throw new Error("Nome playlist o richiesta non valida.");
+  let offset = 0;
+  let expectedTotal = null;
+  while (offset < 2000) {
+    const page = await fetchPage(offset);
+    if (!page || !Array.isArray(page.items) || page.items.length > 50
+        || (page.offset !== undefined && Number(page.offset) !== offset)) {
+      throw new Error("Risposta elenco playlist incompleta.");
+    }
+    if (page.total !== undefined && page.total !== null) {
+      const total = Number(page.total);
+      if (!Number.isSafeInteger(total) || total < 0 || offset + page.items.length > total
+          || (expectedTotal !== null && total !== expectedTotal)) {
+        throw new Error("Conteggio playlist non valido.");
+      }
+      expectedTotal = total;
+    }
+    const matches = page.items.filter((playlist) => typeof playlist?.name === "string"
+      && playlist.name.trim().toLocaleLowerCase() === wanted
+      && typeof playlist.id === "string" && /^[A-Za-z0-9]{22}$/.test(playlist.id));
+    if (matches.length) return matches;
+
+    const nextOffset = offset + page.items.length;
+    if (page.next === null || page.next === undefined) {
+      if (expectedTotal !== null && nextOffset !== expectedTotal) {
+        throw new Error("Lettura elenco playlist incompleta.");
+      }
+      return [];
+    }
+    if (typeof page.next !== "string" || !page.next || !page.items.length) {
+      throw new Error("Paginazione elenco playlist incompleta.");
+    }
+    let next;
+    try {
+      next = new URL(page.next);
+    } catch {
+      throw new Error("Indirizzo di paginazione playlist non valido.");
+    }
+    const nextPageOffset = Number(next.searchParams.get("offset"));
+    const nextLimit = next.searchParams.get("limit");
+    if (next.origin !== "https://api.spotify.com" || next.pathname !== "/v1/me/playlists"
+        || nextPageOffset !== nextOffset || (nextLimit && Number(nextLimit) !== 50)) {
+      throw new Error("Indirizzo di paginazione playlist non valido.");
+    }
+    if (nextOffset >= 2000) {
+      throw new Error("Oltre 2000 playlist: usa l’ID o il link Spotify per evitare altre richieste.");
+    }
+    offset = nextOffset;
+  }
+  throw new Error("Ricerca playlist interrotta prima di completare la pagina richiesta.");
+}
+
 export function spotifyAlbumId(input) {
   const value = String(input || "").trim();
   const uri = value.match(/^spotify:album:([A-Za-z0-9]{22})$/);
@@ -232,6 +286,43 @@ export function filterListeningAlbumSuggestions(albums, {
     seen.add(albumId);
     return true;
   });
+}
+
+export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
+  if (!Array.isArray(albums) || !Array.isArray(rankings)
+      || !Number.isInteger(maximumPerArtist) || maximumPerArtist < 1) {
+    throw new Error("Classifica album non valida.");
+  }
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const ranking = new Map();
+  for (const entry of rankings) {
+    const artist = normalize(entry?.artist);
+    const name = normalize(entry?.name);
+    const playcount = Number(entry?.playcount);
+    if (!artist || !name || !Number.isFinite(playcount) || playcount < 0) continue;
+    const key = JSON.stringify([artist, name]);
+    const previous = ranking.get(key);
+    ranking.set(key, Math.max(previous ?? 0, playcount));
+  }
+  const counts = new Map();
+  return albums.map((album, index) => {
+    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const rankedArtists = artists.filter((artist) =>
+      ranking.has(JSON.stringify([artist, normalize(album.name)])));
+    const score = Math.max(-1, ...rankedArtists.map((artist) =>
+      ranking.get(JSON.stringify([artist, normalize(album.name)]))));
+    return { album, index, artists: rankedArtists, score };
+  }).filter(({ score }) => score >= 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .filter(({ artists }) => {
+      const artist = artists[0];
+      if (!artist) return false;
+      const count = counts.get(artist) || 0;
+      if (count >= maximumPerArtist) return false;
+      counts.set(artist, count + 1);
+      return true;
+    })
+    .map(({ album }) => album);
 }
 
 export function addPlaylistAlbums(collection, additions) {

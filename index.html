@@ -90,7 +90,7 @@
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Legge gli ultimi scrobble nell’intervallo scelto, trova artisti affini su Last.fm e cerca i loro album su MusicBrainz. Al massimo 1000 scrobble e 5 artisti di partenza; i dati restano in memoria nel browser.</p>
+            <p>Legge gli ultimi scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Il catalogo e i generi arrivano da MusicBrainz. Al massimo 1000 scrobble e 5 artisti di partenza; i dati restano in memoria nel browser.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -112,7 +112,7 @@
               </label>
               <button id="lastfmSuggestionButton" class="secondary" type="button">Suggerisci album</button>
             </div>
-            <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album.</p>
+            <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album; se c’è una sola corrispondenza verificata, viene aggiunta automaticamente alla raccolta.</p>
           </section>
           <div class="suggestion-controls">
             <label>Artista di partenza
@@ -171,7 +171,7 @@
         <label>Nome, ID o link della playlist
           <input id="playlistInput" required maxlength="300" autocomplete="off" placeholder="Nome playlist o link open.spotify.com/playlist/…">
         </label>
-        <p class="notice">Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Verranno salvati solo i record album previsti da Accord, non brani o dati della playlist. L’importazione non avvia la sincronizzazione GitHub.</p>
+        <p class="notice">Per limitare le richieste Spotify, la ricerca per nome si ferma alla prima pagina con corrispondenze; ID e link saltano questa ricerca. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Verranno salvati solo i record album previsti da Accord, non brani o dati della playlist. L’importazione non avvia la sincronizzazione GitHub.</p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Continua</button></div>
       </form>
     </dialog>
@@ -214,6 +214,18 @@
           <select id="playlistChoiceSelect" required></select>
         </label>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Importa</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="suggestionPlaylistDialog">
+      <form id="suggestionPlaylistForm" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">CREAZIONE SPOTIFY</p><h2>Playlist dai suggerimenti</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+        <label>Nome playlist
+          <input id="suggestionPlaylistName" required maxlength="100" autocomplete="off" placeholder="Es. Da scoprire">
+        </label>
+        <p id="suggestionPlaylistStatus" class="notice" role="status" aria-live="polite"></p>
+        <p class="notice">Verranno aggiunti i brani degli album Spotify abbinati e la playlist sarà privata. La creazione richiede il permesso playlist-modify-private; Accord non pubblicherà la playlist.</p>
+        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="create">Crea playlist privata</button></div>
       </form>
     </dialog>
 
@@ -260,6 +272,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=21"></script>
+    <script type="module" src="app.mjs?v=24"></script>
   </body>
 </html>

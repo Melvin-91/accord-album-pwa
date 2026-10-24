@@ -62,9 +62,10 @@ impostazioni, conservata solo nel profilo browser e mai nella raccolta o su
 GitHub. MusicBrainz permette di filtrare anche per anno; Spotify resta
 disponibile con una singola richiesta standard per titolo, artista e anno.
 
-I risultati Last.fm e MusicBrainz non vengono aggiunti direttamente: scegli
-**Abbina a Spotify** per verificare il record con una sola ricerca Spotify,
-poi seleziona l'edizione corretta e premi **Aggiungi**. Questa corrispondenza
+I risultati Last.fm e MusicBrainz vengono abbinati a Spotify con una singola
+ricerca: se esiste una sola corrispondenza verificata, l'album viene aggiunto
+automaticamente alla raccolta; se i risultati sono ambigui, scegli l'edizione
+corretta e premi **Aggiungi**. Questa corrispondenza
 mantiene gli ID Spotify richiesti dalla sincronizzazione. I risultati Spotify
 possono essere aggiunti direttamente; gli album già presenti non vengono
 modificati. Le nuove voci avviano la sincronizzazione se GitHub è configurato,
@@ -77,10 +78,16 @@ localmente; le chiavi non vengono trasferite tra dispositivi.
 Nella scheda **Suggerimenti**, inserisci il nome utente e scegli un intervallo
 da 1 a 3650 giorni. La PWA legge al massimo 1000 scrobble per richiesta
 (cinque pagine); se la cronologia è più ampia, il risultato indica che il
-campione è parziale. Last.fm fornisce artisti affini e MusicBrainz i relativi
-album, senza usare Spotify per la scoperta. Filtri opzionali includono/escludono
-artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
+campione è parziale. Last.fm fornisce artisti affini e le classifiche dei loro
+album più ascoltati; MusicBrainz fornisce catalogo e generi. Vengono proposti
+al massimo tre album più ascoltati per artista. Filtri opzionali
+includono/escludono artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
 Gli album già nella raccolta o già presenti nello storico scaricato vengono
 esclusi. Per aggiungere un risultato, Accord esegue una singola ricerca
-Spotify e richiede una scelta esplicita dell'edizione. Chiave Last.fm,
+Spotify; una sola corrispondenza viene aggiunta automaticamente, mentre più
+edizioni richiedono la scelta esplicita. Dopo aver abbinato album suggeriti,
+puoi creare una playlist privata Spotify dai loro brani scegliendone il nome.
+La funzione richiede il permesso Spotify `playlist-modify-private`, crea la
+playlist solo dopo aver verificato i brani e aggiunge al massimo 1000 brani.
+Chiave Last.fm,
 username, filtri e ascolti non vengono trasferiti a GitHub.
