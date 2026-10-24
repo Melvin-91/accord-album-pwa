@@ -23,6 +23,11 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+      - name: Run PWA core tests
+        run: |
+          node --check app.mjs
+          node --check core.mjs
+          node --test core.test.mjs
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site

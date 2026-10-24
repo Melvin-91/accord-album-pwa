@@ -3,7 +3,7 @@
   "name": "Accord · La mia raccolta",
   "short_name": "Accord",
   "description": "Raccolta album personale Accord",
-  "start_url": "./index.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#090909",

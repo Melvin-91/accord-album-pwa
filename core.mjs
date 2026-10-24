@@ -2,6 +2,10 @@ export const ALBUM_STATES = new Set(["queued", "listening", "heard", "liked", "h
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
 export const ALBUM_FIELDS = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
 
+export function spotifyRedirectUriForPage(pageUrl) {
+  return new URL("./", pageUrl).href;
+}
+
 export function validateAlbum(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
       || ![ALBUM_FIELDS_V1, ALBUM_FIELDS].some((fields) =>

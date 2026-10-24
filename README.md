@@ -42,9 +42,10 @@ come sorgente. Il workflow pubblica i file statici a ogni push al branch
 2. Nelle impostazioni PWA inserisci il proprietario GitHub e un fine-grained
    token limitato al repository privato `accord-music-data`, con permesso
    Contents in lettura/scrittura.
-3. Configura il Client ID Spotify e registra l'URL HTTPS del sito come
-   Redirect URI esatto nell'app Spotify. L'autorizzazione usa PKCE; non
-   inserire un client secret.
+3. Configura il Client ID Spotify e registra esattamente
+   `https://melvin-91.github.io/accord-album-pwa/` come Redirect URI nell'app
+   Spotify. Usa l'URL con la barra finale: resta uguale nel browser e nella
+   PWA installata. L'autorizzazione usa PKCE; non inserire un client secret.
 4. Il codice del sito è pubblico, ma la raccolta resta nel repository privato.
    I token vengono inseriti dall'utente sul dispositivo; quelli Spotify
    restano nella sessione del browser e non vengono pubblicati.

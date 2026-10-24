@@ -160,7 +160,7 @@
         <label>Redirect URI registrato nell’app Spotify
           <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
         </label>
-        <p class="notice">Registra questo Redirect URI nelle impostazioni della tua app Spotify. La connessione usa OAuth Authorization Code con PKCE: non inserire un client secret. I token Spotify restano solo nella sessione del browser e non vengono sincronizzati.</p>
+        <p class="notice">Registra esattamente questo Redirect URI, con la barra finale, nelle impostazioni della tua app Spotify. È lo stesso nel browser e nella PWA installata. La connessione usa OAuth Authorization Code con PKCE: non inserire un client secret. I token Spotify restano solo nella sessione del browser e non vengono sincronizzati.</p>
         <div class="dialog-actions settings-actions"><button id="clearCredentials" class="secondary" type="button">Dimentica GitHub</button><button id="disconnectSpotify" class="secondary" type="button">Scollega Spotify</button><button class="primary" value="save">Salva</button></div>
       </form>
     </dialog>
@@ -260,6 +260,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=20"></script>
+    <script type="module" src="app.mjs?v=21"></script>
   </body>
 </html>

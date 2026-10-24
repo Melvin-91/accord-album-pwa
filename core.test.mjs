@@ -11,6 +11,7 @@ import {
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
+  spotifyRedirectUriForPage,
   threeWayMerge,
   validateAlbum,
   validateDocument,
@@ -128,6 +129,14 @@ test("accepts Spotify playlist names, IDs, links, and URIs without accepting oth
   assert.equal(spotifyPlaylistId(`https://open.spotify.com/intl-it/playlist/${id}?si=example`), id);
   assert.equal(spotifyPlaylistId("La mia playlist"), null);
   assert.throws(() => spotifyPlaylistId(`https://example.com/playlist/${id}`), /link Spotify valido/);
+});
+
+test("uses one canonical Spotify redirect URI for browser and installed PWA paths", () => {
+  const canonical = "https://melvin-91.github.io/accord-album-pwa/";
+  assert.equal(spotifyRedirectUriForPage(canonical), canonical);
+  assert.equal(spotifyRedirectUriForPage(`${canonical}index.html`), canonical);
+  assert.equal(spotifyRedirectUriForPage(`${canonical}index.html?source=installed`), canonical);
+  assert.equal(spotifyRedirectUriForPage("https://example.test/pwa/index.html"), "https://example.test/pwa/");
 });
 
 test("accepts Spotify album IDs, links, and URIs without accepting other hosts", () => {

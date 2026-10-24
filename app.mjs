@@ -10,11 +10,12 @@ import {
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
+  spotifyRedirectUriForPage,
   summarizeLastFmTracks,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=7";
+} from "./core.mjs?v=9";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -306,9 +307,12 @@ function credentials() {
 }
 
 function spotifySettings() {
+  const defaultRedirectUri = spotifyRedirectUriForPage(location.href);
+  const savedRedirectUri = localStorage.getItem("accord-spotify-redirect-uri") || "";
+  const legacyIndexUri = new URL("index.html", defaultRedirectUri).href;
   return {
     clientId: localStorage.getItem("accord-spotify-client-id") || "",
-    redirectUri: localStorage.getItem("accord-spotify-redirect-uri") || "",
+    redirectUri: savedRedirectUri === legacyIndexUri ? defaultRedirectUri : savedRedirectUri || defaultRedirectUri,
   };
 }
 
@@ -330,7 +334,7 @@ function openSettings() {
   $("#tokenInput").placeholder = current.token ? "Token salvato (vuoto per mantenerlo)" : "ghp_…";
   $("#autoSyncInput").checked = current.autoSync;
   $("#spotifyClientIdInput").value = spotify.clientId;
-  $("#spotifyRedirectUriInput").value = spotify.redirectUri || `${location.origin}${location.pathname}`;
+  $("#spotifyRedirectUriInput").value = spotify.redirectUri;
   $("#lastfmApiKeyInput").value = "";
   $("#lastfmApiKeyInput").placeholder = localStorage.getItem(LASTFM_KEY)
     ? "Chiave salvata (vuoto per mantenerla)" : "Chiave API (32 caratteri)";
@@ -374,14 +378,15 @@ $("#settingsForm").addEventListener("submit", (event) => {
     showMessage("Redirect URI non valido", "Inserisci il Redirect URI HTTPS registrato nell’app Spotify.");
     return;
   }
+  const expectedRedirectUri = spotifyRedirectUriForPage(location.href);
   const localHttp = location.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   if ((clientId && !/^[A-Za-z0-9]{32}$/.test(clientId))
       || redirectUri.origin !== location.origin
-      || redirectUri.pathname !== location.pathname
+      || redirectUri.href !== expectedRedirectUri
       || redirectUri.search || redirectUri.hash
       || (!localHttp && redirectUri.protocol !== "https:")
       || redirectUri.username || redirectUri.password) {
-    showMessage("Impostazioni Spotify non valide", "Usa un Client ID di 32 caratteri e un Redirect URI HTTPS registrato che punti a questa pagina.");
+    showMessage("Impostazioni Spotify non valide", `Usa il Redirect URI ${expectedRedirectUri} registrato nelle impostazioni della tua app Spotify.`);
     return;
   }
   localStorage.setItem("accord-album-owner", owner);
