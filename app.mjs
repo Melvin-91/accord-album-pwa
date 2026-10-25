@@ -6,6 +6,7 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   listenBrainzRecommendations,
+  musicBrainzCoverArtUrl,
   playlistAlbumRecords,
   findSpotifyPlaylistMatches,
   readMusicBrainzCatalog,
@@ -18,7 +19,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=13";
+} from "./core.mjs?v=14";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -762,6 +763,31 @@ function renderManualAlbumResults(albums) {
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    const coverFrame = document.createElement("div");
+    coverFrame.className = "suggestion-cover-frame";
+    const coverImage = document.createElement("img");
+    coverImage.className = "suggestion-cover";
+    coverImage.alt = `Copertina di ${album.name}`;
+    coverImage.loading = "lazy";
+    coverImage.decoding = "async";
+    coverImage.referrerPolicy = "no-referrer";
+    const coverPlaceholder = document.createElement("span");
+    coverPlaceholder.className = "suggestion-cover-placeholder";
+    coverPlaceholder.textContent = "Copertina non disponibile";
+    coverPlaceholder.setAttribute("aria-hidden", "true");
+    coverFrame.append(coverImage, coverPlaceholder);
+    const coverUrl = musicBrainzCoverArtUrl(album.mbid || album.sourceId);
+    if (coverUrl) {
+      coverImage.addEventListener("load", () => coverFrame.classList.add("has-cover"), { once: true });
+      coverImage.addEventListener("error", () => {
+        coverImage.hidden = true;
+        coverFrame.classList.add("cover-unavailable");
+      }, { once: true });
+      coverImage.src = coverUrl;
+    } else {
+      coverImage.hidden = true;
+      coverFrame.classList.add("cover-unavailable");
+    }
     const info = document.createElement("p");
     const name = document.createElement("strong");
     name.textContent = album.name;
@@ -801,7 +827,7 @@ function renderManualAlbumResults(albums) {
         $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
       }
     });
-    card.append(info, button);
+    card.append(coverFrame, info, button);
     container.append(card);
   }
 }

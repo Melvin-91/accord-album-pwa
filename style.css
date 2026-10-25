@@ -59,7 +59,15 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .suggestions .summary { margin: 12px 0 0; }
 .suggestion-list, .suggestion-albums { display: grid; gap: 8px; margin-top: 12px; }
 .suggestion-card, .suggestion-album { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 12px; border: 1px solid #353535; border-radius: 10px; }
+.suggestion-album { justify-content: flex-start; }
 .suggestion-card p, .suggestion-album p { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.suggestion-album p { flex: 1; }
+.suggestion-album button { margin-left: auto; }
+.suggestion-cover-frame { display: grid; flex: none; place-items: center; width: 68px; aspect-ratio: 1; overflow: hidden; border-radius: 8px; background: var(--raised); color: var(--muted); font-size: 10px; text-align: center; }
+.suggestion-cover { display: block; width: 100%; height: 100%; object-fit: cover; }
+.suggestion-cover-frame:not(.has-cover) .suggestion-cover { display: none; }
+.suggestion-cover-placeholder { padding: 4px; }
+.suggestion-cover-frame.has-cover .suggestion-cover-placeholder { display: none; }
 .suggestion-detail { color: var(--muted); font-size: 12px; }
 .suggestion-card button, .suggestion-album button { flex: none; }
 .suggestion-album button:disabled { cursor: default; opacity: .65; }

@@ -7,6 +7,7 @@ import {
   filterAlbums,
   findSpotifyPlaylistMatches,
   listenBrainzRecommendations,
+  musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
   playlistAlbumRecords,
   readMusicBrainzCatalog,
@@ -33,6 +34,16 @@ const album = (id, overrides = {}) => ({
   tags: [],
   cover_sha256: null,
   ...overrides,
+});
+
+test("builds a safe Cover Art Archive URL from a MusicBrainz release-group ID", () => {
+  const mbid = "ABCDEF12-3456-7890-abcd-ef1234567890";
+  assert.equal(
+    musicBrainzCoverArtUrl(mbid),
+    "https://coverartarchive.org/release-group/abcdef12-3456-7890-abcd-ef1234567890/front-250",
+  );
+  assert.equal(musicBrainzCoverArtUrl("https://example.com"), null);
+  assert.equal(musicBrainzCoverArtUrl(""), null);
 });
 
 test("validates only the supported Spotify album fields and rating range", () => {

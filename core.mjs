@@ -2,6 +2,12 @@ export const ALBUM_STATES = new Set(["queued", "listening", "heard", "liked", "h
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
 export const ALBUM_FIELDS = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
 
+export function musicBrainzCoverArtUrl(mbid) {
+  const id = String(mbid || "").trim();
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(id)) return null;
+  return `https://coverartarchive.org/release-group/${id.toLocaleLowerCase()}/front-250`;
+}
+
 export function spotifyRedirectUriForPage(pageUrl) {
   return new URL("./", pageUrl).href;
 }
