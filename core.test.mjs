@@ -16,6 +16,7 @@ import {
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
+  topTracksPerAlbum,
   topListenedAlbums,
   threeWayMerge,
   validateAlbum,
@@ -201,6 +202,24 @@ test("keeps only the three most listened suggested albums per artist", () => {
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
     "Album 2", "Album 3", "Album 4",
   ]);
+});
+
+test("selects up to three most popular tracks per album without duplicate tracks", () => {
+  const ids = Array.from({ length: 7 }, (_, index) => String(index + 1).repeat(22));
+  const albumGroups = [
+    { tracks: ids.slice(0, 4).map((id) => ({ type: "track", uri: `spotify:track:${id}` })) },
+    { tracks: ids.slice(3).map((id) => ({ type: "track", uri: `spotify:track:${id}` })) },
+  ];
+  const popularity = new Map(ids.map((id, index) => [id, [10, 100, 80, 90, 95, 85, 70][index]]));
+  assert.deepEqual(topTracksPerAlbum(albumGroups, popularity), [
+    `spotify:track:${ids[1]}`,
+    `spotify:track:${ids[3]}`,
+    `spotify:track:${ids[2]}`,
+    `spotify:track:${ids[4]}`,
+    `spotify:track:${ids[5]}`,
+    `spotify:track:${ids[6]}`,
+  ]);
+  assert.throws(() => topTracksPerAlbum(albumGroups, new Map([[ids[0], 101]])), /Popolarita'/);
 });
 
 test("caps aliases and collaborations by canonical credited artist", () => {

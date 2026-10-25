@@ -479,6 +479,38 @@ function mapAlbums(albums) {
   }));
 }
 
+export function topTracksPerAlbum(albumGroups, popularityById, tracksPerAlbum = 3) {
+  if (!Array.isArray(albumGroups) || !(popularityById instanceof Map)
+      || !Number.isInteger(tracksPerAlbum) || tracksPerAlbum < 1 || tracksPerAlbum > 10) {
+    throw new Error("Selezione dei brani suggeriti non valida.");
+  }
+  const selected = [];
+  const seen = new Set();
+  for (const group of albumGroups) {
+    if (!group || !Array.isArray(group.tracks)) throw new Error("Elenco brani album non valido.");
+    const ranked = group.tracks.flatMap((track, index) => {
+      const uri = track?.uri;
+      if (track?.type !== "track" || typeof uri !== "string"
+          || !/^spotify:track:[A-Za-z0-9]{22}$/.test(uri)) return [];
+      const id = uri.slice("spotify:track:".length);
+      const score = popularityById.get(id) ?? 0;
+      if (!Number.isInteger(score) || score < 0 || score > 100) {
+        throw new Error("Popolarita' brano Spotify non valida.");
+      }
+      return [{ uri, score, index }];
+    }).sort((left, right) => right.score - left.score || left.index - right.index);
+    let added = 0;
+    for (const track of ranked) {
+      if (seen.has(track.uri)) continue;
+      selected.push(track.uri);
+      seen.add(track.uri);
+      added += 1;
+      if (added === tracksPerAlbum) break;
+    }
+  }
+  return selected;
+}
+
 export function threeWayMerge(base, local, remote, choices = {}) {
   if (Object.values(choices).some((choice) => !["local", "remote"].includes(choice))) {
     throw new Error("Scelta di conflitto non valida.");

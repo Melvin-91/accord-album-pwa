@@ -102,7 +102,8 @@ come ambigui: anche una singola corrispondenza
 Spotify richiede conferma esplicita, mentre una corrispondenza non ambigua
 può essere aggiunta automaticamente. Dopo aver abbinato album suggeriti, puoi
 creare una playlist privata Spotify dai loro brani scegliendone il nome.
-La funzione richiede il permesso Spotify `playlist-modify-private`, crea la
-playlist solo dopo aver verificato i brani e aggiunge al massimo 1000 brani.
+La playlist include fino a tre brani più popolari di ciascun album abbinato,
+non album interi. La funzione richiede il permesso Spotify
+`playlist-modify-private` e crea la playlist solo dopo aver verificato i brani.
 Chiave Last.fm,
 username, filtri e ascolti non vengono trasferiti a GitHub.

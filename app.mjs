@@ -16,11 +16,12 @@ import {
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
+  topTracksPerAlbum,
   topListenedAlbums,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=15";
+} from "./core.mjs?v=16";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1475,11 +1476,11 @@ function renderSuggestionPlaylistAction() {
   button.id = "createSuggestedPlaylist";
   button.className = "primary";
   button.type = "button";
-  button.textContent = `Crea playlist Spotify · ${suggestedSpotifyAlbums.size} album`;
+  button.textContent = `Crea playlist · ${suggestedSpotifyAlbums.size}`;
   button.addEventListener("click", () => {
     $("#suggestionPlaylistName").value = "";
     $("#suggestionPlaylistStatus").textContent =
-      `Saranno inclusi i brani degli ${suggestedSpotifyAlbums.size} album abbinati. La playlist sarà privata.`;
+      `Saranno aggiunti fino a tre brani più popolari per ciascuno dei ${suggestedSpotifyAlbums.size} album abbinati. La playlist sarà privata.`;
     $("#suggestionPlaylistDialog").showModal();
     $("#suggestionPlaylistName").focus();
   });
@@ -1490,25 +1491,55 @@ async function createSuggestedPlaylist(name, albumIds, accessToken) {
   if (!name || name.length > 100 || !albumIds.length || albumIds.length > 30) {
     throw new Error("Nome non valido o numero di album fuori limite (massimo 30).");
   }
-  const tracks = [];
-  const seenTracks = new Set();
+  const albumGroups = [];
+  const trackIds = [];
+  const seenTrackIds = new Set();
+  let totalCandidates = 0;
   for (const albumId of albumIds) {
     if (!/^[A-Za-z0-9]{22}$/.test(albumId)) throw new Error("Un album suggerito non ha un ID Spotify verificabile.");
     const entries = await completeSpotifyPages(`albums/${albumId}/tracks?limit=50&offset=0`, accessToken);
+    totalCandidates += entries.length;
+    if (totalCandidates > 3000) throw new Error("Gli album contengono troppi brani da analizzare in una volta.");
+    albumGroups.push({ tracks: entries });
     for (const entry of entries) {
-      const uri = entry?.uri;
-      if (entry?.type !== "track" || typeof uri !== "string"
-          || !/^spotify:track:[A-Za-z0-9]{22}$/.test(uri) || seenTracks.has(uri)) continue;
-      seenTracks.add(uri);
-      tracks.push(uri);
-      if (tracks.length > 1000) throw new Error("La proposta supera il limite di 1000 brani; nessuna playlist è stata creata.");
+      const match = typeof entry?.uri === "string" && entry.type === "track"
+        ? entry.uri.match(/^spotify:track:([A-Za-z0-9]{22})$/) : null;
+      if (match && !seenTrackIds.has(match[1])) {
+        seenTrackIds.add(match[1]);
+        trackIds.push(match[1]);
+      }
     }
   }
+  if (!trackIds.length) throw new Error("Gli album selezionati non contengono brani Spotify verificabili.");
+
+  const popularityById = new Map();
+  for (let offset = 0; offset < trackIds.length; offset += 50) {
+    const batch = trackIds.slice(offset, offset + 50);
+    const query = new URLSearchParams({ ids: batch.join(",") });
+    const response = await spotifyRequest(`tracks?${query}`, accessToken);
+    if (!response || !Array.isArray(response.tracks) || response.tracks.length !== batch.length) {
+      throw new Error("Spotify non ha restituito la popolarità completa dei brani.");
+    }
+    response.tracks.forEach((track, index) => {
+      const expectedId = batch[index];
+      if (track === null) {
+        popularityById.set(expectedId, 0);
+        return;
+      }
+      if (track?.id !== expectedId) throw new Error("Risposta Spotify con brani non corrispondenti.");
+      const score = track.popularity;
+      if (!Number.isInteger(score) || score < 0 || score > 100) {
+        throw new Error("Popolarità brano Spotify non valida.");
+      }
+      popularityById.set(expectedId, score);
+    });
+  }
+  const tracks = topTracksPerAlbum(albumGroups, popularityById);
   if (!tracks.length) throw new Error("Gli album selezionati non contengono brani Spotify verificabili.");
 
   const playlist = await spotifyWriteRequest("me/playlists", accessToken, {
     name,
-    description: "Creata da Accord · album suggeriti",
+    description: "Creata da Accord · brani più popolari degli album suggeriti",
     public: false,
   });
   if (!/^[A-Za-z0-9]{22}$/.test(playlist?.id || "")) {
@@ -2246,7 +2277,7 @@ $("#suggestionPlaylistForm").addEventListener("submit", (event) => {
     $("#suggestionPlaylistStatus").textContent = "Inserisci un nome e abbina almeno un album Spotify.";
     return;
   }
-  $("#suggestionPlaylistStatus").textContent = "Preparo i brani degli album selezionati…";
+  $("#suggestionPlaylistStatus").textContent = "Seleziono i brani più popolari degli album selezionati…";
   void beginSuggestedPlaylistCreation(name, albumIds).catch((error) => {
     $("#suggestionPlaylistStatus").textContent = `Creazione playlist non riuscita: ${error.message}`;
   });
