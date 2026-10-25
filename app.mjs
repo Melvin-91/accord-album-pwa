@@ -1,5 +1,6 @@
 import {
   addPlaylistAlbums,
+  bestSpotifyAlbumSuggestionMatch,
   filterListeningAlbumSuggestions,
   filterAlbums,
   moveAlbumInManualOrder,
@@ -19,11 +20,13 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=14";
+} from "./core.mjs?v=15";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
 const COVER_STORE = "covers";
+const ACTIVE_VIEW_TAB_KEY = "accord-active-view-tab";
+const SUGGESTION_RETURN_KEY = "accord-spotify-suggestion-return";
 const REPOSITORY = "accord-music-data";
 const API = "https://api.github.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
@@ -31,9 +34,19 @@ const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
 const suggestedSourceAlbums = new Map();
 const suggestedSpotifyAlbums = new Map();
+const suggestedSpotifyCoverMatches = new Map();
+const suggestedCoverFrames = new Map();
+const suggestedSpotifyMatchCache = new Map();
+const spotifyAlbumMetadata = new Map();
+const suggestionCoverQueue = [];
+const suggestionCoverTasks = new WeakMap();
 const listeningCatalogCache = new Map();
 let suggestedMatchAlbumId = null;
 let lastListeningCatalogRequestAt = 0;
+let suggestionCoverObserver = null;
+let suggestionCoverTokenPromise = null;
+let suggestionCoverJobsActive = 0;
+let suggestionCoverFailureShown = false;
 const LASTFM_KEY = "accord-lastfm-api-key";
 const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascoltato", liked: "Mi piace", hidden: "Non proporre" };
 const $ = (selector) => document.querySelector(selector);
@@ -50,7 +63,11 @@ function activateViewTab(selectedTab) {
     tab.tabIndex = selected ? 0 : -1;
     document.getElementById(tab.getAttribute("aria-controls")).hidden = !selected;
   }
+  sessionStorage.setItem(ACTIVE_VIEW_TAB_KEY, selectedTab.id);
 }
+
+const restoredViewTab = viewTabs.find((tab) => tab.id === sessionStorage.getItem(ACTIVE_VIEW_TAB_KEY));
+if (restoredViewTab) activateViewTab(restoredViewTab);
 
 const tabList = document.querySelector(".view-tabs");
 tabList.addEventListener("click", (event) => {
@@ -750,6 +767,152 @@ function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
   return true;
 }
 
+function createAlbumCoverFrame(albumName) {
+  const frame = document.createElement("div");
+  frame.className = "suggestion-cover-frame";
+  const image = document.createElement("img");
+  image.className = "suggestion-cover";
+  image.alt = `Copertina di ${albumName}`;
+  image.loading = "lazy";
+  image.decoding = "async";
+  image.referrerPolicy = "no-referrer";
+  const placeholder = document.createElement("span");
+  placeholder.className = "suggestion-cover-placeholder";
+  placeholder.textContent = "Copertina non disponibile";
+  placeholder.setAttribute("aria-hidden", "true");
+  frame.append(image, placeholder);
+  const cover = { frame, image, placeholder, generation: 0 };
+  setAlbumCover(cover, null);
+  return cover;
+}
+
+function setAlbumCover(cover, url) {
+  const generation = ++cover.generation;
+  cover.frame.classList.remove("has-cover");
+  cover.frame.classList.toggle("cover-unavailable", !url);
+  cover.image.hidden = !url;
+  if (!url) return;
+  cover.image.addEventListener("load", () => {
+    if (generation === cover.generation) cover.frame.classList.add("has-cover");
+  }, { once: true });
+  cover.image.addEventListener("error", () => {
+    if (generation !== cover.generation) return;
+    cover.image.hidden = true;
+    cover.frame.classList.add("cover-unavailable");
+  }, { once: true });
+  cover.image.src = url;
+}
+
+function suggestedCoverFallback(album) {
+  return musicBrainzCoverArtUrl(album.mbid || album.sourceId);
+}
+
+function suggestedSpotifyMatches(album, token) {
+  if (!suggestedSpotifyMatchCache.has(album.id)) {
+    const request = fetchSpotifyManualAlbums({
+      provider: "spotify", album: album.name, artist: album.artist_names?.[0] || album.artist, genre: "", year: "",
+    }, token);
+    suggestedSpotifyMatchCache.set(album.id, request);
+    request.catch(() => {
+      if (suggestedSpotifyMatchCache.get(album.id) === request) {
+        suggestedSpotifyMatchCache.delete(album.id);
+      }
+    });
+  }
+  return suggestedSpotifyMatchCache.get(album.id);
+}
+
+function applyBestSpotifySuggestionCover(album, matches) {
+  const candidates = matches.map((match) => ({
+    ...match,
+    artist_names: spotifyAlbumMetadata.get(match.id)?.artistNames || [],
+  }));
+  const best = bestSpotifyAlbumSuggestionMatch(album, candidates);
+  const metadata = best && spotifyAlbumMetadata.get(best.id);
+  if (!metadata?.coverUrl) return false;
+  const selected = { albumId: best.id, coverUrl: metadata.coverUrl };
+  suggestedSpotifyCoverMatches.set(album.id, selected);
+  const cover = suggestedCoverFrames.get(album.id);
+  if (cover) {
+    cover.image.alt = `Copertina Spotify di ${best.name} · ${best.artist}`;
+    setAlbumCover(cover, selected.coverUrl);
+  }
+  return true;
+}
+
+function reportSuggestionCoverError(error) {
+  if (suggestionCoverFailureShown) return;
+  suggestionCoverFailureShown = true;
+  const status = $("#suggestionStatus");
+  const message = `Copertina Spotify non caricata: ${error.message}`;
+  status.textContent = status.textContent ? `${status.textContent} · ${message}` : message;
+}
+
+function getSuggestionCoverSpotifyToken() {
+  if (!suggestionCoverTokenPromise) {
+    suggestionCoverTokenPromise = spotifyAccessToken().finally(() => {
+      suggestionCoverTokenPromise = null;
+    });
+  }
+  return suggestionCoverTokenPromise;
+}
+
+async function loadSuggestedSpotifyCover(task) {
+  if (!task.card.isConnected) return;
+  try {
+    const token = await getSuggestionCoverSpotifyToken();
+    if (!task.card.isConnected) return;
+    if (!token) {
+      setAlbumCover(task.cover, task.fallbackUrl);
+      return;
+    }
+    const matches = await suggestedSpotifyMatches(task.album, token);
+    if (!task.card.isConnected) return;
+    if (!applyBestSpotifySuggestionCover(task.album, matches)) {
+      setAlbumCover(task.cover, task.fallbackUrl);
+    }
+  } catch (error) {
+    if (task.card.isConnected) setAlbumCover(task.cover, task.fallbackUrl);
+    reportSuggestionCoverError(error);
+  }
+}
+
+function enqueueSuggestionCover(task) {
+  suggestionCoverQueue.push(task);
+  processSuggestionCoverQueue();
+}
+
+function processSuggestionCoverQueue() {
+  while (suggestionCoverJobsActive < 2 && suggestionCoverQueue.length) {
+    const next = suggestionCoverQueue.shift();
+    if (!next.card.isConnected) continue;
+    suggestionCoverJobsActive += 1;
+    void loadSuggestedSpotifyCover(next).finally(() => {
+      suggestionCoverJobsActive -= 1;
+      processSuggestionCoverQueue();
+    });
+  }
+}
+
+function observeSuggestedCover(card, task) {
+  if (!("IntersectionObserver" in window)) {
+    enqueueSuggestionCover(task);
+    return;
+  }
+  if (!suggestionCoverObserver) {
+    suggestionCoverObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        suggestionCoverObserver.unobserve(entry.target);
+        const observedTask = suggestionCoverTasks.get(entry.target);
+        if (observedTask) enqueueSuggestionCover(observedTask);
+      }
+    }, { rootMargin: "180px 0px" });
+  }
+  suggestionCoverTasks.set(card, task);
+  suggestionCoverObserver.observe(card);
+}
+
 function renderManualAlbumResults(albums) {
   const container = $("#manualAlbumResults");
   container.replaceChildren();
@@ -763,31 +926,9 @@ function renderManualAlbumResults(albums) {
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
-    const coverFrame = document.createElement("div");
-    coverFrame.className = "suggestion-cover-frame";
-    const coverImage = document.createElement("img");
-    coverImage.className = "suggestion-cover";
-    coverImage.alt = `Copertina di ${album.name}`;
-    coverImage.loading = "lazy";
-    coverImage.decoding = "async";
-    coverImage.referrerPolicy = "no-referrer";
-    const coverPlaceholder = document.createElement("span");
-    coverPlaceholder.className = "suggestion-cover-placeholder";
-    coverPlaceholder.textContent = "Copertina non disponibile";
-    coverPlaceholder.setAttribute("aria-hidden", "true");
-    coverFrame.append(coverImage, coverPlaceholder);
-    const coverUrl = musicBrainzCoverArtUrl(album.mbid || album.sourceId);
-    if (coverUrl) {
-      coverImage.addEventListener("load", () => coverFrame.classList.add("has-cover"), { once: true });
-      coverImage.addEventListener("error", () => {
-        coverImage.hidden = true;
-        coverFrame.classList.add("cover-unavailable");
-      }, { once: true });
-      coverImage.src = coverUrl;
-    } else {
-      coverImage.hidden = true;
-      coverFrame.classList.add("cover-unavailable");
-    }
+    const cover = createAlbumCoverFrame(album.name);
+    setAlbumCover(cover, spotifyAlbumMetadata.get(album.id)?.coverUrl
+      || musicBrainzCoverArtUrl(album.mbid || album.sourceId));
     const info = document.createElement("p");
     const name = document.createElement("strong");
     name.textContent = album.name;
@@ -827,7 +968,7 @@ function renderManualAlbumResults(albums) {
         $("#manualAlbumStatus").textContent = `Album non aggiunto: ${error.message}`;
       }
     });
-    card.append(coverFrame, info, button);
+    card.append(cover.frame, info, button);
     container.append(card);
   }
 }
@@ -844,6 +985,30 @@ function manualAlbumSearchInput() {
 
 function spotifySearchField(field, value) {
   return `${field}:"${value.trim().replace(/["\\]/g, "\\$&")}"`;
+}
+
+function rememberSpotifyAlbumMetadata(albums) {
+  for (const album of albums) {
+    const id = album?.id;
+    if (typeof id !== "string" || !/^[A-Za-z0-9]{22}$/.test(id)) continue;
+    const coverUrl = (Array.isArray(album.images) ? album.images : [])
+      .map((image) => image?.url)
+      .find((value) => {
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:"
+            && (url.hostname.endsWith(".scdn.co") || url.hostname.endsWith(".spotifycdn.com"));
+        } catch {
+          return false;
+        }
+      }) || "";
+    const artistNames = (Array.isArray(album.artists) ? album.artists : [])
+      .map((artist) => String(artist?.name || "").trim()).filter(Boolean);
+    if (coverUrl || artistNames.length) spotifyAlbumMetadata.set(id, { coverUrl, artistNames });
+  }
+  while (spotifyAlbumMetadata.size > 500) {
+    spotifyAlbumMetadata.delete(spotifyAlbumMetadata.keys().next().value);
+  }
 }
 
 function albumMatchesManualFilters(album, filters) {
@@ -888,8 +1053,9 @@ async function fetchSpotifyManualAlbums(filters, accessToken) {
   const directId = filters.album && !filters.artist && !filters.year
     ? spotifyAlbumId(filters.album) : null;
   if (directId) {
-    const album = await spotifyRequest(`albums/${encodeURIComponent(directId)}`, accessToken);
-    return playlistAlbumRecords([{ item: { type: "track", album } }]);
+    const spotifyAlbum = await spotifyRequest(`albums/${encodeURIComponent(directId)}`, accessToken);
+    rememberSpotifyAlbumMetadata([spotifyAlbum]);
+    return playlistAlbumRecords([{ item: { type: "track", album: spotifyAlbum } }]);
   }
   const queryTerms = [
     filters.album && spotifySearchField("album", filters.album),
@@ -899,6 +1065,7 @@ async function fetchSpotifyManualAlbums(filters, accessToken) {
   const parameters = new URLSearchParams({ q: queryTerms.join(" "), type: "album", limit: "10" });
   const response = await spotifyRequest(`search?${parameters}`, accessToken);
   if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza risultati verificabili.");
+  rememberSpotifyAlbumMetadata(response.albums.items);
   return playlistAlbumRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })))
     .filter((album) => albumMatchesManualFilters(album, filters));
 }
@@ -1096,7 +1263,10 @@ async function suggestListeningAlbums(button) {
   $("#suggestionAlbums").replaceChildren();
   suggestedSourceAlbums.clear();
   suggestedSpotifyAlbums.clear();
+  suggestedSpotifyCoverMatches.clear();
+  suggestedSpotifyMatchCache.clear();
   suggestedMatchAlbumId = null;
+  suggestionCoverFailureShown = false;
   try {
     const username = $("#lastfmSuggestionUser").value.trim();
     const days = Number($("#lastfmSuggestionDays").value);
@@ -1177,9 +1347,63 @@ async function suggestListeningAlbums(button) {
   }
 }
 
+function persistListeningSuggestionsForSpotifyReturn() {
+  const albums = [...suggestedSourceAlbums.values()].map((album) => ({
+    id: album.id,
+    sourceId: album.sourceId,
+    mbid: album.mbid,
+    name: album.name,
+    artist: album.artist,
+    artist_names: album.artist_names,
+    year: album.year,
+    genres: album.genres,
+    reason: album.reason,
+    matchReason: album.matchReason,
+    matchConfidence: album.matchConfidence,
+  }));
+  sessionStorage.setItem(SUGGESTION_RETURN_KEY, JSON.stringify(albums));
+}
+
+function restoreListeningSuggestionsForSpotifyReturn() {
+  const serialized = sessionStorage.getItem(SUGGESTION_RETURN_KEY);
+  if (!serialized) return;
+  sessionStorage.removeItem(SUGGESTION_RETURN_KEY);
+  let albums;
+  try {
+    albums = JSON.parse(serialized);
+  } catch (error) {
+    $("#suggestionStatus").textContent = `Suggerimenti non ripristinati: ${error.message}`;
+    return;
+  }
+  const validId = (value) => typeof value === "string"
+    && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
+  const valid = Array.isArray(albums) && albums.length > 0 && albums.length <= 300
+    && albums.every((album) => album && typeof album === "object"
+      && validId(album.mbid) && album.id === `mb:${album.mbid}` && album.sourceId === album.mbid
+      && typeof album.name === "string" && album.name.length <= 300
+      && typeof album.artist === "string" && album.artist.length <= 500
+      && typeof album.year === "string" && /^\d{0,4}$/.test(album.year)
+      && Array.isArray(album.artist_names) && album.artist_names.length <= 20
+      && album.artist_names.every((artist) => typeof artist === "string" && artist.length <= 200)
+      && Array.isArray(album.genres) && album.genres.length <= 100
+      && album.genres.every((genre) => typeof genre === "string" && genre.length <= 100)
+      && typeof album.reason === "string" && album.reason.length <= 1000
+      && typeof album.matchReason === "string" && album.matchReason.length <= 1000
+      && ["high", "ambiguous"].includes(album.matchConfidence));
+  if (!valid) {
+    $("#suggestionStatus").textContent = "Suggerimenti non ripristinati: dati temporanei non validi.";
+    return;
+  }
+  renderListeningAlbumSuggestions(albums);
+  activateViewTab($("#suggestionsTab"));
+  $("#suggestionStatus").textContent = "Suggerimenti ripristinati; continuo l’abbinamento Spotify.";
+}
+
 function renderListeningAlbumSuggestions(albums) {
   const container = $("#suggestionAlbums");
   container.replaceChildren();
+  suggestionCoverObserver?.disconnect();
+  suggestedCoverFrames.clear();
   suggestedSourceAlbums.clear();
   for (const album of albums) suggestedSourceAlbums.set(album.id, album);
   if (!albums.length) {
@@ -1192,6 +1416,13 @@ function renderListeningAlbumSuggestions(albums) {
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    const cover = createAlbumCoverFrame(album.name);
+    const rememberedMatch = suggestedSpotifyCoverMatches.get(album.id);
+    if (rememberedMatch) {
+      cover.image.alt = `Copertina Spotify abbinata a ${album.name}`;
+      setAlbumCover(cover, rememberedMatch.coverUrl);
+    }
+    suggestedCoverFrames.set(album.id, cover);
     const info = document.createElement("p");
     const name = document.createElement("strong");
     name.textContent = album.name;
@@ -1223,8 +1454,16 @@ function renderListeningAlbumSuggestions(albums) {
         } else if (button.isConnected) button.disabled = false;
       });
     });
-    card.append(info, button);
+    card.append(cover.frame, info, button);
     container.append(card);
+    if (!rememberedMatch) {
+      observeSuggestedCover(card, {
+        album,
+        card,
+        cover,
+        fallbackUrl: suggestedCoverFallback(album),
+      });
+    }
   }
   renderSuggestionPlaylistAction();
 }
@@ -1400,9 +1639,13 @@ async function resolveManualAlbumToSpotify(album, accessToken = null) {
       return;
     }
     $("#manualAlbumStatus").textContent = "Verifico una corrispondenza con una singola ricerca Spotify…";
-    const matches = await fetchSpotifyManualAlbums({
-      provider: "spotify", album: album.name, artist: album.artist, genre: "", year: "",
-    }, token);
+    const fromSuggestions = suggestedSourceAlbums.has(album.id);
+    const matches = fromSuggestions
+      ? await suggestedSpotifyMatches(album, token)
+      : await fetchSpotifyManualAlbums({
+        provider: "spotify", album: album.name, artist: album.artist, genre: "", year: "",
+      }, token);
+    if (fromSuggestions) applyBestSpotifySuggestionCover(album, matches);
     if (matches.length === 1 && album.matchConfidence !== "ambiguous") {
       const match = matches[0];
       const alreadyPresent = state.albums.some((existing) => existing.id === match.id);
@@ -1837,6 +2080,16 @@ async function startSpotifyAuthorization(input, task = "playlist") {
   };
   const pendingKey = pendingKeys[task];
   if (!pendingKey) throw new Error("Operazione Spotify non valida.");
+  sessionStorage.removeItem(SUGGESTION_RETURN_KEY);
+  if (task === "manual-search") {
+    const request = JSON.parse(input);
+    const activeTab = viewTabs.find((tab) => tab.getAttribute("aria-selected") === "true");
+    if (request.action === "match" && activeTab?.id === "suggestionsTab"
+        && suggestedSourceAlbums.has(request.album?.id)) {
+      persistListeningSuggestionsForSpotifyReturn();
+      activateViewTab(activeTab);
+    }
+  }
   for (const key of Object.values(pendingKeys)) sessionStorage.removeItem(key);
   sessionStorage.setItem(pendingKey, input);
   sessionStorage.setItem("accord-spotify-code-verifier", verifier);
@@ -2253,6 +2506,7 @@ $("#lastfmSuggestionButton").addEventListener("click", (event) => {
 });
 
 render();
+restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {
   setSyncState("Autorizzazione Spotify non riuscita");
   showMessage("Errore autorizzazione Spotify", error.message);

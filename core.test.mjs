@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addPlaylistAlbums,
+  bestSpotifyAlbumSuggestionMatch,
   decodeCoverArchive,
   encodeCoverArchive,
   filterAlbums,
@@ -44,6 +45,17 @@ test("builds a safe Cover Art Archive URL from a MusicBrainz release-group ID", 
   );
   assert.equal(musicBrainzCoverArtUrl("https://example.com"), null);
   assert.equal(musicBrainzCoverArtUrl(""), null);
+});
+
+test("selects the closest Spotify album by title, artist, and release year", () => {
+  const source = { name: "OK Computer", artist: "Radiohead", artist_names: ["Radiohead"], year: "1997" };
+  const candidates = [
+    { id: "wrong-artist", name: "OK Computer", artist: "Other Band", year: "1997" },
+    { id: "wrong-year", name: "OK Computer", artist: "Radiohead", year: "2007" },
+    { id: "best", name: "OK Computer (Remastered)", artist: "Radiohead", year: "1997" },
+  ];
+  assert.equal(bestSpotifyAlbumSuggestionMatch(source, candidates)?.id, "best");
+  assert.equal(bestSpotifyAlbumSuggestionMatch(source, [{ name: "Different Album", artist: "Radiohead" }]), null);
 });
 
 test("validates only the supported Spotify album fields and rating range", () => {

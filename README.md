@@ -92,8 +92,10 @@ Il limite massimo di tre album viene applicato a ogni artista accreditato,
 unificando le varianti tramite MBID MusicBrainz e usando il nome come ripiego;
 fra i candidati restano i più ascoltati. L'abbinamento usa l'MBID
 Last.fm/MusicBrainz quando coincide, altrimenti artista e titolo esatti.
-Le copertine dei suggerimenti vengono caricate su richiesta da Cover Art
-Archive quando le schede entrano nell'area visibile; non vengono salvate nella
+Le schede caricano su richiesta la copertina Spotify della corrispondenza più
+coerente per titolo, artista e anno quando entrano nell'area visibile. Se
+Spotify non è connesso o non emerge una corrispondenza affidabile, viene usata
+Cover Art Archive come ripiego. Le copertine non vengono salvate nella
 raccolta né sincronizzate.
 Un MBID discordante, titoli omonimi con più gruppi o edizioni sono marcati
 come ambigui: anche una singola corrispondenza

@@ -8,6 +8,51 @@ export function musicBrainzCoverArtUrl(mbid) {
   return `https://coverartarchive.org/release-group/${id.toLocaleLowerCase()}/front-250`;
 }
 
+export function bestSpotifyAlbumSuggestionMatch(source, candidates) {
+  if (!source || typeof source !== "object" || !Array.isArray(candidates)) {
+    throw new Error("Corrispondenze Spotify non valide.");
+  }
+  const normalize = (value) => String(value || "").normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const similarity = (left, right) => {
+    const a = normalize(left).split(/\s+/).filter(Boolean);
+    const b = normalize(right).split(/\s+/).filter(Boolean);
+    if (!a.length || !b.length) return 0;
+    const leftSet = new Set(a);
+    const rightSet = new Set(b);
+    const intersection = [...leftSet].filter((token) => rightSet.has(token)).length;
+    const overlap = intersection / new Set([...leftSet, ...rightSet]).size;
+    const contained = [...leftSet].every((token) => rightSet.has(token))
+      || [...rightSet].every((token) => leftSet.has(token));
+    return contained ? Math.max(overlap, 0.88) : overlap;
+  };
+  const sourceArtists = (Array.isArray(source.artist_names) ? source.artist_names : [source.artist])
+    .map((artist) => String(artist || "").trim()).filter(Boolean);
+  const sourceYear = Number(source.year);
+  return candidates.map((candidate, index) => {
+    const titleScore = similarity(source.name, candidate?.name);
+    const candidateArtists = Array.isArray(candidate?.artist_names)
+      ? candidate.artist_names : [candidate?.artist];
+    const artistScore = Math.max(0, ...sourceArtists.flatMap((sourceArtist) =>
+      candidateArtists.map((candidateArtist) => similarity(sourceArtist, candidateArtist))));
+    const candidateYear = Number(candidate?.year);
+    const yearScore = !sourceYear || !candidateYear ? 0.5
+      : sourceYear === candidateYear ? 1
+        : Math.abs(sourceYear - candidateYear) <= 1 ? 0.75
+          : Math.abs(sourceYear - candidateYear) <= 3 ? 0.4 : 0;
+    return { candidate, index, titleScore, artistScore, score: titleScore * 0.62 + artistScore * 0.25 + yearScore * 0.13 };
+  })
+    .filter((match) => match.titleScore >= 0.6 && match.artistScore >= 0.65)
+    .sort((left, right) => right.score - left.score
+      || right.titleScore - left.titleScore
+      || right.artistScore - left.artistScore
+      || left.index - right.index)[0]?.candidate || null;
+}
+
 export function spotifyRedirectUriForPage(pageUrl) {
   return new URL("./", pageUrl).href;
 }
