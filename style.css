@@ -51,6 +51,8 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .lastfm-suggestions > p:not(.notice) { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .lastfm-suggestion-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
 .lastfm-suggestion-controls button { grid-column: 1 / -1; justify-self: start; }
+.lastfm-suggestion-date-range { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.lastfm-suggestion-date-range[hidden] { display: none; }
 .suggestion-controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
 .suggestion-controls label { flex: 1; }
 .suggestion-controls button { flex: none; }
@@ -147,6 +149,7 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   .playlist-import-actions button { flex: 1 1 140px; padding-inline: 10px; }
   .lastfm-suggestion-controls { grid-template-columns: 1fr; }
   .lastfm-suggestion-controls button { width: 100%; }
+  .lastfm-suggestion-date-range { grid-template-columns: 1fr; }
   .suggestion-controls { align-items: stretch; flex-direction: column; }
   .suggestion-controls button { width: 100%; }
   .manual-search-fields { grid-template-columns: 1fr; gap: 10px; }

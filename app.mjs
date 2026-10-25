@@ -7,6 +7,7 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   listenBrainzRecommendations,
+  lastFmSuggestionRange,
   musicBrainzCoverArtUrl,
   playlistAlbumRecords,
   findSpotifyPlaylistMatches,
@@ -21,7 +22,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=16";
+} from "./core.mjs?v=17";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1140,11 +1141,12 @@ function suggestionFilterValues(selector) {
   return $(selector).value.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
 }
 
-async function recentLastFmScrobbles(username, days) {
+async function recentLastFmScrobbles(username, range) {
   const now = Math.floor(Date.now() / 1000);
-  const from = now - days * 86400;
-  const parameters = { method: "user.getrecenttracks", user: username, from: String(from),
-    to: String(now), limit: "200", page: "1" };
+  const from = range.from;
+  const to = Math.min(range.to, now);
+  const parameters = { method: "user.getrecenttracks", user: username, to: String(to), limit: "200", page: "1" };
+  if (from !== null) parameters.from = String(from);
   const first = await lastFmRequest(parameters);
   const attrs = first.recenttracks?.["@attr"] || {};
   const totalPages = Number(attrs.totalPages);
@@ -1159,7 +1161,7 @@ async function recentLastFmScrobbles(username, days) {
     if (!Array.isArray(rows)) rows = [rows];
     tracks.push(...rows.filter((track) => {
       const stamp = Number(track?.date?.uts);
-      return Number.isFinite(stamp) && stamp >= from && stamp <= now;
+      return Number.isFinite(stamp) && stamp >= (from ?? 0) && stamp <= to;
     }));
   }
   return { ...summarizeLastFmTracks(tracks), partial: totalPages > pageLimit };
@@ -1270,12 +1272,13 @@ async function suggestListeningAlbums(button) {
   suggestionCoverFailureShown = false;
   try {
     const username = $("#lastfmSuggestionUser").value.trim();
-    const days = Number($("#lastfmSuggestionDays").value);
+    const period = $("#lastfmSuggestionDays").value;
     if (!/^[A-Za-z0-9_.\- ]{1,64}$/.test(username)) throw new Error("Inserisci un nome utente Last.fm valido.");
-    if (!Number.isInteger(days) || days < 1 || days > 3650) throw new Error("L’intervallo deve essere da 1 a 3650 giorni.");
+    const range = lastFmSuggestionRange(
+      period, $("#lastfmSuggestionStart").value, $("#lastfmSuggestionEnd").value);
     localStorage.setItem("accord-lastfm-suggestion-user", username);
-    localStorage.setItem("accord-lastfm-suggestion-days", String(days));
-    const history = await recentLastFmScrobbles(username, days);
+    localStorage.setItem("accord-lastfm-suggestion-days", period);
+    const history = await recentLastFmScrobbles(username, range);
     const filters = {
       includedArtists: suggestionFilterValues("#lastfmIncludeArtists"),
       excludedArtists: suggestionFilterValues("#lastfmExcludeArtists"),
@@ -2521,17 +2524,48 @@ $("#conflictForm").addEventListener("submit", (event) => {
 
 const lastFmSuggestionPreferences = {
   "#lastfmSuggestionUser": "accord-lastfm-suggestion-user",
-  "#lastfmSuggestionDays": "accord-lastfm-suggestion-days",
+  "#lastfmSuggestionStart": "accord-lastfm-suggestion-start",
+  "#lastfmSuggestionEnd": "accord-lastfm-suggestion-end",
   "#lastfmIncludeArtists": "accord-lastfm-suggestion-include-artists",
   "#lastfmExcludeArtists": "accord-lastfm-suggestion-exclude-artists",
   "#lastfmIncludeGenres": "accord-lastfm-suggestion-include-genres",
   "#lastfmExcludeGenres": "accord-lastfm-suggestion-exclude-genres",
 };
+const savedSuggestionPeriod = localStorage.getItem("accord-lastfm-suggestion-days") || "30";
+const suggestionPeriods = new Set(["7", "30", "90", "365", "all", "custom"]);
+const legacyDays = Number(savedSuggestionPeriod);
+const initialSuggestionPeriod = suggestionPeriods.has(savedSuggestionPeriod) ? savedSuggestionPeriod
+  : Number.isInteger(legacyDays) && legacyDays >= 1 && legacyDays <= 3650 ? "custom" : "30";
+const dateValue = (date) => [
+  date.getFullYear(),
+  String(date.getMonth() + 1).padStart(2, "0"),
+  String(date.getDate()).padStart(2, "0"),
+].join("-");
+const today = new Date();
+const todayValue = dateValue(today);
+const defaultStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+defaultStart.setDate(defaultStart.getDate() - (
+  initialSuggestionPeriod === "custom" && Number.isInteger(legacyDays) ? legacyDays : 30));
+$("#lastfmSuggestionDays").value = initialSuggestionPeriod;
+$("#lastfmSuggestionStart").max = todayValue;
+$("#lastfmSuggestionEnd").max = todayValue;
+if (initialSuggestionPeriod !== savedSuggestionPeriod) {
+  localStorage.setItem("accord-lastfm-suggestion-days", initialSuggestionPeriod);
+}
 for (const [selector, key] of Object.entries(lastFmSuggestionPreferences)) {
   const input = $(selector);
-  input.value = localStorage.getItem(key) || (selector === "#lastfmSuggestionDays" ? "30" : "");
+  input.value = localStorage.getItem(key)
+    || (selector === "#lastfmSuggestionStart" ? dateValue(defaultStart)
+      : selector === "#lastfmSuggestionEnd" ? todayValue : "");
   input.addEventListener("change", () => localStorage.setItem(key, input.value.trim()));
 }
+const suggestionPeriodControl = $("#lastfmSuggestionDays");
+const suggestionDateRange = $("#lastfmSuggestionCustomRange");
+suggestionDateRange.hidden = suggestionPeriodControl.value !== "custom";
+suggestionPeriodControl.addEventListener("change", () => {
+  localStorage.setItem("accord-lastfm-suggestion-days", suggestionPeriodControl.value);
+  suggestionDateRange.hidden = suggestionPeriodControl.value !== "custom";
+});
 $("#lastfmSuggestionButton").addEventListener("click", (event) => {
   void suggestListeningAlbums(event.currentTarget);
 });

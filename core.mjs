@@ -312,6 +312,38 @@ export function summarizeLastFmTracks(tracks) {
   };
 }
 
+export function lastFmSuggestionRange(period, startValue = "", endValue = "", now = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new Error("Data Last.fm non valida.");
+  }
+  const to = Math.floor(now.getTime() / 1000);
+  if (period === "all") return { from: null, to };
+  if (["7", "30", "90", "365"].includes(period)) {
+    return { from: to - Number(period) * 86400, to };
+  }
+  if (period !== "custom") throw new Error("Seleziona un intervallo Last.fm valido.");
+  const parseDate = (value) => {
+    const match = typeof value === "string" && value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return date.getFullYear() === Number(match[1]) && date.getMonth() === Number(match[2]) - 1
+      && date.getDate() === Number(match[3]) ? date : null;
+  };
+  const start = parseDate(startValue);
+  const end = parseDate(endValue);
+  if (!start || !end) throw new Error("Scegli le date iniziale e finale dell’intervallo.");
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (start > end || end > today) {
+    throw new Error("L’intervallo personalizzato non può terminare nel futuro o precedere la data iniziale.");
+  }
+  const nextDay = new Date(end);
+  nextDay.setDate(nextDay.getDate() + 1);
+  const from = Math.floor(start.getTime() / 1000);
+  const rangeEnd = Math.min(to, Math.floor(nextDay.getTime() / 1000) - 1);
+  if (rangeEnd < from) throw new Error("L’intervallo Last.fm selezionato non contiene date valide.");
+  return { from, to: rangeEnd };
+}
+
 export function filterListeningAlbumSuggestions(albums, {
   knownAlbums = new Set(), collection = [], includedArtists = [], excludedArtists = [],
   includedGenres = [], excludedGenres = [],
@@ -325,11 +357,14 @@ export function filterListeningAlbumSuggestions(albums, {
     JSON.stringify([normalize(album.artist), normalize(album.name)])));
   const seen = new Set();
   return albums.filter((album) => {
-    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const artists = [...new Set([album.artist, ...(Array.isArray(album.artist_names) ? album.artist_names : [])]
+      .map(normalize).filter(Boolean))];
     const genres = (Array.isArray(album.genres) ? album.genres : []).map(normalize);
     const identity = JSON.stringify([normalize(album.artist), normalize(album.name)]);
+    const alreadyHeard = knownAlbums.has(identity) || artists.some((artist) =>
+      knownAlbums.has(JSON.stringify([artist, normalize(album.name)])));
     const albumId = album.id || identity;
-    if (!album.name || !album.artist || knownAlbums.has(identity) || saved.has(identity)
+    if (!album.name || !album.artist || alreadyHeard || saved.has(identity)
         || seen.has(albumId) || artists.some((artist) => excluded.has(artist))
         || included.size && !artists.some((artist) => included.has(artist))
         || genreIncludes.size && !genres.some((genre) => genreIncludes.has(genre))

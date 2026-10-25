@@ -75,15 +75,17 @@ localmente; le chiavi non vengono trasferite tra dispositivi.
 
 ## Suggerimenti da ascolti Last.fm
 
-Nella scheda **Suggerimenti**, inserisci il nome utente e scegli un intervallo
-da 1 a 3650 giorni. La PWA legge al massimo 1000 scrobble per richiesta
-(cinque pagine); se la cronologia è più ampia, il risultato indica che il
-campione è parziale. Last.fm fornisce artisti affini e le classifiche dei loro
+Nella scheda **Suggerimenti**, inserisci il nome utente e scegli dal menu gli
+ultimi 7, 30, 90 o 365 giorni, tutto lo storico oppure un intervallo di date
+personalizzato. La PWA legge al massimo 1000 scrobble per richiesta (cinque
+pagine); se la cronologia è più ampia, il risultato indica che il campione è
+parziale. Last.fm fornisce artisti affini e le classifiche dei loro
 album più ascoltati; MusicBrainz fornisce catalogo e generi. Vengono proposti
 al massimo tre album più ascoltati per artista. Filtri opzionali
 includono/escludono artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
-Gli album già nella raccolta o già presenti nello storico scaricato vengono
-esclusi. Il catalogo MusicBrainz viene consultato in massimo tre pagine da
+Gli album già nella raccolta o già ascoltati nella cronologia consultata
+(titolo e artista accreditato) vengono esclusi; se il campione Last.fm è
+parziale, possono restare fuori ascolti più vecchi. Il catalogo MusicBrainz viene consultato in massimo tre pagine da
 100 risultati, a distanza di almeno 1,1 secondi; il conteggio e gli eventuali
 campioni parziali sono mostrati. I risultati sono riutilizzati per 15 minuti
 in una cache solo in memoria, limitata a otto query.

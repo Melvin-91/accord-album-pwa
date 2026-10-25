@@ -6,7 +6,9 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   filterAlbums,
+  filterListeningAlbumSuggestions,
   findSpotifyPlaylistMatches,
+  lastFmSuggestionRange,
   listenBrainzRecommendations,
   musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
@@ -16,6 +18,7 @@ import {
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
+  summarizeLastFmTracks,
   topTracksPerAlbum,
   topListenedAlbums,
   threeWayMerge,
@@ -220,6 +223,39 @@ test("selects up to three most popular tracks per album without duplicate tracks
     `spotify:track:${ids[6]}`,
   ]);
   assert.throws(() => topTracksPerAlbum(albumGroups, new Map([[ids[0], 101]])), /Popolarita'/);
+});
+
+test("excludes suggested albums already scrobbled by any credited artist", () => {
+  const history = summarizeLastFmTracks([{
+    artist: { name: "Guest Artist" },
+    album: { name: "Already Heard" },
+    date: { uts: "1700000000" },
+  }]);
+  const albums = [
+    { id: "heard", name: "Already Heard", artist: "Lead Artist feat. Guest Artist",
+      artist_names: ["Lead Artist", "Guest Artist"], genres: [] },
+    { id: "fresh", name: "Fresh Record", artist: "Lead Artist",
+      artist_names: ["Lead Artist"], genres: [] },
+  ];
+  assert.deepEqual(filterListeningAlbumSuggestions(albums, { knownAlbums: history.knownAlbums }), [albums[1]]);
+});
+
+test("builds bounded rolling and custom Last.fm date ranges", () => {
+  const now = new Date(2026, 0, 15, 12, 0, 0);
+  const nowSeconds = Math.floor(now.getTime() / 1000);
+  assert.deepEqual(lastFmSuggestionRange("all", "", "", now), { from: null, to: nowSeconds });
+  assert.deepEqual(lastFmSuggestionRange("30", "", "", now), {
+    from: nowSeconds - 30 * 86400,
+    to: nowSeconds,
+  });
+  const start = new Date(2026, 0, 1);
+  const nextDay = new Date(2026, 0, 3);
+  assert.deepEqual(lastFmSuggestionRange("custom", "2026-01-01", "2026-01-02", now), {
+    from: Math.floor(start.getTime() / 1000),
+    to: Math.floor(nextDay.getTime() / 1000) - 1,
+  });
+  assert.throws(() => lastFmSuggestionRange("custom", "2026-01-03", "2026-01-02", now), /futuro|data iniziale/);
+  assert.throws(() => lastFmSuggestionRange("14", "", "", now), /intervallo/);
 });
 
 test("caps aliases and collaborations by canonical credited artist", () => {
