@@ -2,8 +2,10 @@ import {
   addPlaylistAlbums,
   bestSpotifyAlbumSuggestionMatch,
   filterListeningAlbumSuggestions,
+  filterUnheardArtists,
   filterAlbums,
   moveAlbumInManualOrder,
+  normalizeHeardArtistNames,
   decodeCoverArchive,
   encodeCoverArchive,
   listenBrainzRecommendations,
@@ -12,8 +14,10 @@ import {
   playlistAlbumRecords,
   findSpotifyPlaylistMatches,
   readMusicBrainzCatalog,
+  readLastFmAllTimeArtists,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
+  spotifyHistoryArtistNames,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
@@ -22,7 +26,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=17";
+} from "./core.mjs?v=18";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -34,6 +38,7 @@ const API = "https://api.github.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
 const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
+const SPOTIFY_HEARD_ARTISTS_KEY = "accord-spotify-heard-artists-v1";
 const suggestedSourceAlbums = new Map();
 const suggestedSpotifyAlbums = new Map();
 const suggestedSpotifyCoverMatches = new Map();
@@ -43,6 +48,7 @@ const spotifyAlbumMetadata = new Map();
 const suggestionCoverQueue = [];
 const suggestionCoverTasks = new WeakMap();
 const listeningCatalogCache = new Map();
+const allTimeArtistCache = new Map();
 let suggestedMatchAlbumId = null;
 let lastListeningCatalogRequestAt = 0;
 let suggestionCoverObserver = null;
@@ -687,7 +693,8 @@ async function findSuggestedArtists(seedName, source = "listenbrainz", accessTok
       await startSpotifyAuthorization(seedName, "related");
       return null;
     }
-    return findSpotifyRelatedArtists(seedName, token);
+    const result = await findSpotifyRelatedArtists(seedName, token);
+    return result ? excludeAllTimeHeardArtists(result) : null;
   }
   const seed = await identifyMusicBrainzArtist(seedName);
   if (!seed) {
@@ -703,7 +710,7 @@ async function findSuggestedArtists(seedName, source = "listenbrainz", accessTok
   if (!response.ok) throw new Error(`Ricerca ListenBrainz non riuscita (HTTP ${response.status}).`);
   const artists = listenBrainzRecommendations(await response.json(), seed.id);
   if (!artists.length) throw new Error("ListenBrainz non ha trovato artisti affini per questo profilo.");
-  return { seed: seed.name, artists, source: "ListenBrainz" };
+  return excludeAllTimeHeardArtists({ seed: seed.name, artists, source: "ListenBrainz" });
 }
 
 function renderSuggestedArtists(result) {
@@ -732,7 +739,13 @@ function renderSuggestedArtists(result) {
     container.append(card);
   }
   const label = result.artists.length === 1 ? "artista consigliato" : "artisti consigliati";
-  $("#suggestionStatus").textContent = `${result.artists.length} ${label} per ${result.seed}.`;
+  const excluded = result.excludedHeardCount
+    ? ` · ${result.excludedHeardCount} già ascoltati esclusi`
+    : "";
+  const coverage = ` · controllo all-time: Last.fm ${result.lastfmHistoryLoaded
+    ? `${result.lastfmHeardArtistCount} artisti`
+    : "non configurato"}, Spotify locale ${result.spotifyHeardArtistCount} artisti`;
+  $("#suggestionStatus").textContent = `${result.artists.length} ${label} per ${result.seed}${excluded}${coverage}.`;
 }
 
 function requestAutomaticSync() {
@@ -1247,6 +1260,59 @@ async function recentLastFmScrobbles(username, range) {
   return { ...summarizeLastFmTracks(tracks), partial: totalPages > pageLimit };
 }
 
+async function lastFmAllTimeArtistNames(username) {
+  const cacheKey = username.toLocaleLowerCase();
+  const cached = allTimeArtistCache.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt < 900000) return cached.names;
+  const normalized = await readLastFmAllTimeArtists((page, limit) => lastFmRequest({
+    method: "user.gettopartists",
+    user: username,
+    period: "overall",
+    limit: String(limit),
+    page: String(page),
+  }));
+  allTimeArtistCache.set(cacheKey, { names: normalized, savedAt: Date.now() });
+  return normalized;
+}
+
+function importedSpotifyHeardArtistNames() {
+  const serialized = localStorage.getItem(SPOTIFY_HEARD_ARTISTS_KEY);
+  if (!serialized) return [];
+  return normalizeHeardArtistNames(JSON.parse(serialized));
+}
+
+async function allTimeHeardArtistNames(username) {
+  const spotify = importedSpotifyHeardArtistNames();
+  const lastfm = username ? await lastFmAllTimeArtistNames(username) : [];
+  return {
+    names: normalizeHeardArtistNames([...lastfm, ...spotify]),
+    lastfmCount: lastfm.length,
+    spotifyCount: spotify.length,
+    lastfmLoaded: Boolean(username),
+  };
+}
+
+async function excludeAllTimeHeardArtists(result) {
+  const username = $("#lastfmSuggestionUser").value.trim();
+  if (username && !/^[A-Za-z0-9_.\- ]{1,64}$/.test(username)) {
+    throw new Error("Inserisci un nome utente Last.fm valido prima di cercare suggerimenti.");
+  }
+  const heard = await allTimeHeardArtistNames(username);
+  if (!heard.lastfmLoaded && !heard.spotifyCount) {
+    throw new Error("Per escludere gli ascolti complessivi, inserisci un utente Last.fm o importa lo storico Spotify.");
+  }
+  const artists = filterUnheardArtists(result.artists, heard.names);
+  if (!artists.length) throw new Error("Tutti gli artisti consigliati risultano già ascoltati nella cronologia disponibile.");
+  return {
+    ...result,
+    artists,
+    excludedHeardCount: result.artists.length - artists.length,
+    lastfmHeardArtistCount: heard.lastfmCount,
+    spotifyHeardArtistCount: heard.spotifyCount,
+    lastfmHistoryLoaded: heard.lastfmLoaded,
+  };
+}
+
 async function similarLastFmArtists(name) {
   const data = await lastFmRequest({ method: "artist.getsimilar", artist: name, limit: "10", autocorrect: "0" });
   let rows = data.similarartists?.artist || [];
@@ -1359,6 +1425,7 @@ async function suggestListeningAlbums(button) {
     localStorage.setItem("accord-lastfm-suggestion-user", username);
     localStorage.setItem("accord-lastfm-suggestion-days", period);
     const history = await recentLastFmScrobbles(username, range);
+    const allTimeHeard = await allTimeHeardArtistNames(username);
     const filters = {
       includedArtists: suggestionFilterValues("#lastfmIncludeArtists"),
       excludedArtists: suggestionFilterValues("#lastfmExcludeArtists"),
@@ -1384,7 +1451,7 @@ async function suggestListeningAlbums(button) {
       }
     }
     const included = new Set(filters.includedArtists.map((value) => value.toLocaleLowerCase()));
-    const candidates = [...similar.values()]
+    const candidates = filterUnheardArtists([...similar.values()], allTimeHeard.names)
       .filter((artist) => !included.size || included.has(artist.name.toLocaleLowerCase()))
       .sort((a, b) => b.support - a.support || b.match - a.match || a.name.localeCompare(b.name))
       .slice(0, 10);
@@ -1414,6 +1481,7 @@ async function suggestListeningAlbums(button) {
     const eligibleAlbums = filterListeningAlbumSuggestions(catalog.albums, {
       knownAlbums: history.knownAlbums,
       collection: state.albums,
+      heardArtists: allTimeHeard.names,
       ...filters,
     });
     const albums = topListenedAlbums(eligibleAlbums, rankings, 3);
@@ -1423,7 +1491,10 @@ async function suggestListeningAlbums(button) {
       ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
       : ` · catalogo completo: ${catalog.fetched} risultati`;
     const catalogCache = catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "";
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti · ${seeds.length} artisti di partenza · ${albums.length} album candidati${coverage} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
+    const spotifyNote = allTimeHeard.spotifyCount
+      ? ` · ${allTimeHeard.spotifyCount} artisti Spotify locali esclusi`
+      : " · importa lo storico Spotify per estendere l'esclusione";
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${seeds.length} artisti di partenza · ${albums.length} album candidati${coverage} · esclusione all-time Last.fm: ${allTimeHeard.lastfmCount} artisti${spotifyNote} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
@@ -2655,6 +2726,53 @@ $("#lastfmSuggestionButton").addEventListener("click", (event) => {
   void suggestListeningAlbums(event.currentTarget);
 });
 
+function refreshSpotifyHistoryStatus() {
+  try {
+    const count = importedSpotifyHeardArtistNames().length;
+    $("#spotifyHistoryStatus").textContent = count
+      ? `${count} nomi artista Spotify salvati solo in questo browser.`
+      : "Nessun artista Spotify importato.";
+  } catch (error) {
+    $("#spotifyHistoryStatus").textContent = `Archivio artisti Spotify locale non leggibile: ${error.message}`;
+  }
+}
+
+$("#spotifyHistoryImportButton").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const input = $("#spotifyHistoryFiles");
+  button.disabled = true;
+  try {
+    const files = [...input.files];
+    if (!files.length) throw new Error("Seleziona i file JSON Extended Streaming History.");
+    if (files.length > 10) throw new Error("Seleziona al massimo 10 file alla volta; puoi importare più gruppi.");
+    let imported = [];
+    for (const file of files) {
+      if (file.size > 50_000_000) throw new Error(`${file.name}: il limite è 50 MB per file.`);
+      imported = [...imported, ...spotifyHistoryArtistNames(JSON.parse(await file.text()))];
+    }
+    if (!imported.length) throw new Error("Nei file selezionati non sono stati trovati artisti ascoltati.");
+    const artists = normalizeHeardArtistNames([...importedSpotifyHeardArtistNames(), ...imported]);
+    localStorage.setItem(SPOTIFY_HEARD_ARTISTS_KEY, JSON.stringify(artists));
+    $("#spotifyHistoryStatus").textContent =
+      `${artists.length} nomi artista Spotify salvati localmente. File e ascolti completi non vengono caricati né sincronizzati.`;
+  } catch (error) {
+    $("#spotifyHistoryStatus").textContent = `Importazione Spotify non riuscita: ${error.message}`;
+  } finally {
+    input.value = "";
+    button.disabled = false;
+  }
+});
+
+$("#spotifyHistoryClearButton").addEventListener("click", () => {
+  try {
+    localStorage.removeItem(SPOTIFY_HEARD_ARTISTS_KEY);
+    $("#spotifyHistoryStatus").textContent = "Nomi artista Spotify rimossi da questo browser.";
+  } catch (error) {
+    $("#spotifyHistoryStatus").textContent = `Rimozione non riuscita: ${error.message}`;
+  }
+});
+
+refreshSpotifyHistoryStatus();
 render();
 restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {

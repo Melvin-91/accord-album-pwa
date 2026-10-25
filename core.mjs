@@ -285,7 +285,7 @@ export function listenBrainzRecommendations(rows, referenceMbid) {
 
 export function summarizeLastFmTracks(tracks) {
   if (!Array.isArray(tracks)) throw new Error("Cronologia Last.fm non valida.");
-  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   const artists = new Map();
   const knownAlbums = new Set();
   let trackCount = 0;
@@ -344,13 +344,76 @@ export function lastFmSuggestionRange(period, startValue = "", endValue = "", no
   return { from, to: rangeEnd };
 }
 
+export function normalizeHeardArtistNames(names = []) {
+  if (!Array.isArray(names)) throw new Error("Elenco artisti ascoltati non valido.");
+  const unique = new Map();
+  for (const value of names) {
+    if (typeof value !== "string") continue;
+    const name = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+    const key = name.toLowerCase();
+    if (key && !unique.has(key)) unique.set(key, name);
+  }
+  return [...unique.values()].sort((left, right) => left.localeCompare(right));
+}
+
+export function spotifyHistoryArtistNames(history) {
+  const rows = Array.isArray(history) ? history
+    : Array.isArray(history?.items) ? history.items : null;
+  if (!rows) throw new Error("Il file non contiene un elenco Spotify Extended Streaming History valido.");
+  const names = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const duration = row.ms_played ?? row.msPlayed;
+    if (duration !== undefined && (!Number.isFinite(Number(duration)) || Number(duration) <= 0)) continue;
+    const artist = row.master_metadata_album_artist_name || row.artistName || row.artist_name;
+    if (typeof artist === "string") names.push(artist);
+    for (const credited of row.track?.artists || []) {
+      if (typeof credited?.name === "string") names.push(credited.name);
+    }
+  }
+  return normalizeHeardArtistNames(names);
+}
+
+export async function readLastFmAllTimeArtists(fetchPage) {
+  if (typeof fetchPage !== "function") throw new Error("Richiesta Last.fm non valida.");
+  const first = await fetchPage(1, 1000);
+  const pages = Number(first?.topartists?.["@attr"]?.totalPages);
+  if (!Number.isSafeInteger(pages) || pages < 0) {
+    throw new Error("Last.fm non ha restituito le pagine degli artisti ascoltati complessivi.");
+  }
+  const names = [];
+  for (let page = 1; page <= Math.max(pages, 1); page += 1) {
+    const data = page === 1 ? first : await fetchPage(page, 1000);
+    const currentPages = Number(data?.topartists?.["@attr"]?.totalPages);
+    if (!Number.isSafeInteger(currentPages) || currentPages !== pages) {
+      throw new Error("La cronologia Last.fm è cambiata durante la lettura. Riprova.");
+    }
+    let artists = data.topartists?.artist || [];
+    if (!Array.isArray(artists)) artists = [artists];
+    for (const artist of artists) {
+      if (typeof artist?.name === "string" && artist.name.trim()) names.push(artist.name);
+    }
+  }
+  return normalizeHeardArtistNames(names);
+}
+
+export function filterUnheardArtists(artists, heardArtists = []) {
+  if (!Array.isArray(artists)) throw new Error("Elenco artisti consigliati non valido.");
+  const heard = new Set(normalizeHeardArtistNames(heardArtists).map((name) => name.toLowerCase()));
+  return artists.filter((artist) => {
+    const name = normalizeHeardArtistNames([artist?.name])[0];
+    return !name || !heard.has(name.toLowerCase());
+  });
+}
+
 export function filterListeningAlbumSuggestions(albums, {
   knownAlbums = new Set(), collection = [], includedArtists = [], excludedArtists = [],
-  includedGenres = [], excludedGenres = [],
+  includedGenres = [], excludedGenres = [], heardArtists = [],
 } = {}) {
   const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
   const included = new Set(includedArtists.map(normalize).filter(Boolean));
   const excluded = new Set(excludedArtists.map(normalize).filter(Boolean));
+  const heard = new Set(normalizeHeardArtistNames(heardArtists).map((name) => name.toLowerCase()));
   const genreIncludes = new Set(includedGenres.map(normalize).filter(Boolean));
   const genreExcludes = new Set(excludedGenres.map(normalize).filter(Boolean));
   const saved = new Set(collection.map((album) =>
@@ -363,8 +426,9 @@ export function filterListeningAlbumSuggestions(albums, {
     const identity = JSON.stringify([normalize(album.artist), normalize(album.name)]);
     const alreadyHeard = knownAlbums.has(identity) || artists.some((artist) =>
       knownAlbums.has(JSON.stringify([artist, normalize(album.name)])));
+    const artistAlreadyHeard = artists.some((artist) => heard.has(artist));
     const albumId = album.id || identity;
-    if (!album.name || !album.artist || alreadyHeard || saved.has(identity)
+    if (!album.name || !album.artist || alreadyHeard || artistAlreadyHeard || saved.has(identity)
         || seen.has(albumId) || artists.some((artist) => excluded.has(artist))
         || included.size && !artists.some((artist) => included.has(artist))
         || genreIncludes.size && !genres.some((genre) => genreIncludes.has(genre))

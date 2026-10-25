@@ -11,7 +11,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=13">
+    <link rel="stylesheet" href="style.css?v=14">
     <title>Accord · La mia raccolta</title>
   </head>
   <body>
@@ -90,7 +90,7 @@
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Legge gli scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Gli album già ascoltati nella cronologia consultata vengono esclusi. Il catalogo e i generi arrivano da MusicBrainz. Al massimo 1000 scrobble e 5 artisti di partenza; i dati restano in memoria nel browser.</p>
+            <p>Legge gli scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Esclude gli artisti presenti nell’intero archivio Last.fm e, se importato, nei file Spotify Extended Streaming History. Il catalogo e i generi arrivano da MusicBrainz. Il campione di partenza è limitato a 1000 scrobble e 5 artisti; i dati restano nel browser.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -126,6 +126,17 @@
                 <input id="lastfmExcludeGenres" maxlength="300" placeholder="Generi separati da virgole">
               </label>
               <button id="lastfmSuggestionButton" class="secondary" type="button">Suggerisci album</button>
+            </div>
+            <div class="spotify-history-import">
+              <label>File Spotify Extended Streaming History (JSON)
+                <input id="spotifyHistoryFiles" type="file" accept=".json,application/json" multiple>
+              </label>
+              <div class="spotify-history-actions">
+                <button id="spotifyHistoryImportButton" class="secondary" type="button">Importa artisti ascoltati</button>
+                <button id="spotifyHistoryClearButton" class="secondary" type="button">Rimuovi dati Spotify</button>
+              </div>
+              <p id="spotifyHistoryStatus" class="summary" role="status" aria-live="polite"></p>
+              <p class="notice">Seleziona tutti i file dell’esportazione, anche in più gruppi se necessario. I JSON vengono letti solo in memoria: nel browser restano soltanto i nomi degli artisti; né file né ascolti sono caricati su GitHub.</p>
             </div>
             <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album; se c’è una sola corrispondenza verificata, viene aggiunta automaticamente alla raccolta.</p>
           </section>
@@ -287,6 +298,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=32"></script>
+    <script type="module" src="app.mjs?v=33"></script>
   </body>
 </html>

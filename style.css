@@ -53,6 +53,9 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .lastfm-suggestion-controls button { grid-column: 1 / -1; justify-self: start; }
 .lastfm-suggestion-date-range { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .lastfm-suggestion-date-range[hidden] { display: none; }
+.spotify-history-import { display: grid; gap: 10px; padding: 12px; border: 1px solid #353535; border-radius: 10px; }
+.spotify-history-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.spotify-history-import .summary { margin: 0; }
 .suggestion-controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
 .suggestion-controls label { flex: 1; }
 .suggestion-controls button { flex: none; }

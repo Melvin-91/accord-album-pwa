@@ -6,16 +6,20 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   filterAlbums,
+  filterUnheardArtists,
   filterListeningAlbumSuggestions,
   findSpotifyPlaylistMatches,
   lastFmSuggestionRange,
   listenBrainzRecommendations,
   musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
+  normalizeHeardArtistNames,
   playlistAlbumRecords,
+  readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
+  spotifyHistoryArtistNames,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
@@ -238,6 +242,51 @@ test("excludes suggested albums already scrobbled by any credited artist", () =>
       artist_names: ["Lead Artist"], genres: [] },
   ];
   assert.deepEqual(filterListeningAlbumSuggestions(albums, { knownAlbums: history.knownAlbums }), [albums[1]]);
+});
+
+test("normalizes local Spotify history to artist names only", () => {
+  const rows = [
+    { master_metadata_album_artist_name: "  Cafe\u0301 Band ", ms_played: 1 },
+    { artistName: "Café Band", msPlayed: 100 },
+    { track: { artists: [{ name: "New Artist" }] }, ms_played: 1000 },
+    { artistName: "Not Played", ms_played: 0 },
+    { artistName: " " },
+  ];
+  assert.deepEqual(spotifyHistoryArtistNames(rows), ["Café Band", "New Artist"]);
+  assert.deepEqual(normalizeHeardArtistNames(["Known", " known ", null]), ["Known"]);
+  assert.throws(() => spotifyHistoryArtistNames({ invalid: true }), /Extended Streaming History/);
+});
+
+test("excludes all-time heard artists from artist and album suggestions", () => {
+  const heard = ["  Old Artist "];
+  const suggested = [
+    { name: "Old Artist", mbid: "heard" },
+    { name: "New Artist", mbid: "new" },
+  ];
+  assert.deepEqual(filterUnheardArtists(suggested, heard), [suggested[1]]);
+  const albums = [
+    { id: "heard-artist", name: "New Album", artist: "Old Artist", artist_names: ["Old Artist"] },
+    { id: "fresh", name: "Fresh Album", artist: "New Artist", artist_names: ["New Artist"] },
+  ];
+  assert.deepEqual(filterListeningAlbumSuggestions(albums, { heardArtists: heard }), [albums[1]]);
+});
+
+test("reads every paginated page of Last.fm overall artists", async () => {
+  const pages = [];
+  const artists = await readLastFmAllTimeArtists(async (page, limit) => {
+    pages.push([page, limit]);
+    return {
+      topartists: {
+        "@attr": { totalPages: "2" },
+        artist: [{ name: page === 1 ? "Artist One" : "Artist Two" }],
+      },
+    };
+  });
+  assert.deepEqual(pages, [[1, 1000], [2, 1000]]);
+  assert.deepEqual(artists, ["Artist One", "Artist Two"]);
+  await assert.rejects(readLastFmAllTimeArtists(async () => ({
+    topartists: { "@attr": { totalPages: "1" }, artist: [] },
+  })), /Last.fm è cambiata/);
 });
 
 test("builds bounded rolling and custom Last.fm date ranges", () => {
