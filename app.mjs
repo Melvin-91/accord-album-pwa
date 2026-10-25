@@ -1515,7 +1515,9 @@ function renderListeningAlbumSuggestions(albums) {
     name.textContent = album.name;
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
-    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"} · ${album.genres.join(", ") || "Generi non disponibili"} · ${album.reason} · ${album.matchReason}`;
+    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
+    card.title = [album.name, album.artist, album.year, album.reason, album.matchReason]
+      .filter(Boolean).join("\n");
     info.append(name, detail);
     const button = document.createElement("button");
     button.className = "secondary";
