@@ -74,6 +74,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .suggestion-cover-placeholder { padding: 4px; }
 .suggestion-cover-frame.has-cover .suggestion-cover-placeholder { display: none; }
 .suggestion-detail { color: var(--muted); font-size: 12px; }
+.suggestion-album .suggestion-genres { display: block; margin-top: 4px; }
 .suggestion-card button, .suggestion-album button { flex: none; }
 .suggestion-album button:disabled { cursor: default; opacity: .65; }
 .filters { display: grid; grid-template-columns: minmax(200px, 2fr) repeat(5, minmax(120px, 1fr)); gap: 12px; padding: 16px; background: var(--surface); border: 1px solid #262626; border-radius: 16px; }

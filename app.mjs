@@ -12,6 +12,7 @@ import {
   lastFmSuggestionRange,
   musicBrainzCoverArtUrl,
   playlistAlbumRecords,
+  primaryAlbumGenres,
   findSpotifyPlaylistMatches,
   readMusicBrainzCatalog,
   readLastFmAllTimeArtists,
@@ -26,7 +27,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=18";
+} from "./core.mjs?v=19";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -801,7 +802,7 @@ function createAlbumCoverFrame(albumName) {
   return cover;
 }
 
-function setAlbumCover(cover, url) {
+function setAlbumCover(cover, url, onError = null) {
   const generation = ++cover.generation;
   if (cover.objectUrl && cover.objectUrl !== url) URL.revokeObjectURL(cover.objectUrl);
   cover.objectUrl = typeof url === "string" && url.startsWith("blob:") ? url : null;
@@ -820,6 +821,7 @@ function setAlbumCover(cover, url) {
       URL.revokeObjectURL(cover.objectUrl);
       cover.objectUrl = null;
     }
+    onError?.();
   }, { once: true });
   cover.image.src = url;
 }
@@ -856,7 +858,8 @@ function applyBestSpotifySuggestionCover(album, matches) {
   const cover = suggestedCoverFrames.get(album.id);
   if (cover) {
     cover.image.alt = `Copertina Spotify di ${best.name} · ${best.artist}`;
-    setAlbumCover(cover, selected.coverUrl);
+    setAlbumCover(cover, selected.coverUrl, () => reportSuggestionCoverError(
+      new Error("Nessuna copertina pubblica disponibile su Cover Art Archive o Spotify.")));
   }
   return true;
 }
@@ -867,80 +870,6 @@ function reportSuggestionCoverError(error) {
   const status = $("#suggestionStatus");
   const message = `Copertina non caricata: ${error.message}`;
   status.textContent = status.textContent ? `${status.textContent} · ${message}` : message;
-}
-
-async function downloadSuggestionCover(url) {
-  const response = await fetch(url, {
-    headers: { Accept: "image/*" },
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-    redirect: "follow",
-  });
-  if (!response.ok) throw new Error(`Cover Art Archive ha risposto con HTTP ${response.status}.`);
-  const finalUrl = new URL(response.url);
-  const host = finalUrl.hostname.toLocaleLowerCase();
-  if (finalUrl.protocol !== "https:" || !(host === "coverartarchive.org"
-      || host === "archive.org" || host.endsWith(".archive.org"))) {
-    throw new Error("Cover Art Archive ha restituito un indirizzo immagine non consentito.");
-  }
-  const contentType = (response.headers.get("content-type") || "").split(";")[0].trim().toLocaleLowerCase();
-  if (!contentType.startsWith("image/")) throw new Error("Cover Art Archive non ha restituito un’immagine.");
-  if (!response.body) throw new Error("Cover Art Archive non ha restituito dati immagine.");
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > 2_000_000) {
-        await reader.cancel();
-        throw new Error("La copertina supera il limite di 2 MB.");
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (!size) throw new Error("La copertina ricevuta è vuota.");
-  const image = new Blob(chunks, { type: contentType });
-  const objectUrl = URL.createObjectURL(image);
-  const preview = new Image();
-  preview.src = objectUrl;
-  try {
-    await preview.decode();
-  } catch {
-    URL.revokeObjectURL(objectUrl);
-    throw new Error("La copertina ricevuta non è un’immagine valida.");
-  }
-  if (!preview.naturalWidth || !preview.naturalHeight) {
-    URL.revokeObjectURL(objectUrl);
-    throw new Error("La copertina ricevuta non è un’immagine valida.");
-  }
-  return objectUrl;
-}
-
-async function setSuggestedCoverFallback(task) {
-  if (!task.card.isConnected) return false;
-  if (!task.fallbackUrl) {
-    setAlbumCover(task.cover, null);
-    return false;
-  }
-  try {
-    const objectUrl = await downloadSuggestionCover(task.fallbackUrl);
-    if (!task.card.isConnected) {
-      URL.revokeObjectURL(objectUrl);
-      return false;
-    }
-    setAlbumCover(task.cover, objectUrl);
-    return true;
-  } catch (error) {
-    if (!task.card.isConnected) return false;
-    setAlbumCover(task.cover, null);
-    reportSuggestionCoverError(error);
-    return false;
-  }
 }
 
 function getSuggestionCoverSpotifyToken() {
@@ -954,21 +883,24 @@ function getSuggestionCoverSpotifyToken() {
 
 async function loadSuggestedSpotifyCover(task) {
   if (!task.card.isConnected) return;
+  if (!task.spotifyFallback && task.fallbackUrl) {
+    setAlbumCover(task.cover, task.fallbackUrl, () => {
+      enqueueSuggestionCover({ ...task, spotifyFallback: true });
+    });
+    return;
+  }
   try {
     const token = await getSuggestionCoverSpotifyToken();
     if (!task.card.isConnected) return;
-    if (!token) {
-      await setSuggestedCoverFallback(task);
-      return;
-    }
+    if (!token) throw new Error("Cover Art Archive e Spotify non hanno fornito una copertina verificabile.");
     const matches = await suggestedSpotifyMatches(task.album, token);
     if (!task.card.isConnected) return;
     if (!applyBestSpotifySuggestionCover(task.album, matches)) {
-      await setSuggestedCoverFallback(task);
+      reportSuggestionCoverError(new Error(
+        "Nessuna copertina pubblica disponibile su Cover Art Archive o Spotify."));
     }
   } catch (error) {
-    const fallbackLoaded = await setSuggestedCoverFallback(task);
-    if (!fallbackLoaded && task.card.isConnected) reportSuggestionCoverError(error);
+    if (task.card.isConnected) reportSuggestionCoverError(error);
   }
 }
 
@@ -1587,9 +1519,14 @@ function renderListeningAlbumSuggestions(albums) {
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
     detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
-    card.title = [album.name, album.artist, album.year, album.reason, album.matchReason]
+    const genreDetail = document.createElement("span");
+    genreDetail.className = "suggestion-detail suggestion-genres";
+    const genres = primaryAlbumGenres(album.genres);
+    genreDetail.textContent = `Generi: ${genres.join(", ") || "non disponibili"}`;
+    card.title = [album.name, album.artist, album.year, genreDetail.textContent,
+      album.reason, album.matchReason]
       .filter(Boolean).join("\n");
-    info.append(name, detail);
+    info.append(name, detail, genreDetail);
     const button = document.createElement("button");
     button.className = "secondary";
     button.type = "button";
@@ -1922,7 +1859,11 @@ async function loadSuggestedAlbums(artistName, trigger = null, accessToken = nul
       const detail = document.createElement("span");
       detail.className = "suggestion-detail";
       detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
-      info.append(name, detail);
+      const genreDetail = document.createElement("span");
+      genreDetail.className = "suggestion-detail suggestion-genres";
+      const genres = primaryAlbumGenres(album.genres);
+      genreDetail.textContent = `Generi: ${genres.join(", ") || "non disponibili"}`;
+      info.append(name, detail, genreDetail);
       const button = document.createElement("button");
       button.className = "secondary";
       button.type = "button";

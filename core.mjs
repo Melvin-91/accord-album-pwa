@@ -8,6 +8,19 @@ export function musicBrainzCoverArtUrl(mbid) {
   return `https://coverartarchive.org/release-group/${id.toLocaleLowerCase()}/front-250`;
 }
 
+export function primaryAlbumGenres(genres) {
+  if (!Array.isArray(genres)) return [];
+  const unique = new Map();
+  for (const value of genres) {
+    if (typeof value !== "string") continue;
+    const label = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+    const key = label.toLowerCase();
+    if (label && !unique.has(key)) unique.set(key, label);
+    if (unique.size === 3) break;
+  }
+  return [...unique.values()];
+}
+
 export function bestSpotifyAlbumSuggestionMatch(source, candidates) {
   if (!source || typeof source !== "object" || !Array.isArray(candidates)) {
     throw new Error("Corrispondenze Spotify non valide.");

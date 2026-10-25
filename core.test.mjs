@@ -15,6 +15,7 @@ import {
   moveAlbumInManualOrder,
   normalizeHeardArtistNames,
   playlistAlbumRecords,
+  primaryAlbumGenres,
   readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
   sortAlbumsByManualOrder,
@@ -53,6 +54,15 @@ test("builds a safe Cover Art Archive URL from a MusicBrainz release-group ID", 
   );
   assert.equal(musicBrainzCoverArtUrl("https://example.com"), null);
   assert.equal(musicBrainzCoverArtUrl(""), null);
+});
+
+test("selects up to three distinct album genres in catalog order", () => {
+  assert.deepEqual(
+    primaryAlbumGenres([" Rock ", "rock", "Jazz", "", "Metal", "Pop"]),
+    ["Rock", "Jazz", "Metal"],
+  );
+  assert.deepEqual(primaryAlbumGenres([]), []);
+  assert.deepEqual(primaryAlbumGenres(null), []);
 });
 
 test("selects the closest Spotify album by title, artist, and release year", () => {
