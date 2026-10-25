@@ -284,8 +284,8 @@ test("reads every paginated page of Last.fm overall artists", async () => {
   });
   assert.deepEqual(pages, [[1, 1000], [2, 1000]]);
   assert.deepEqual(artists, ["Artist One", "Artist Two"]);
-  await assert.rejects(readLastFmAllTimeArtists(async () => ({
-    topartists: { "@attr": { totalPages: "1" }, artist: [] },
+  await assert.rejects(readLastFmAllTimeArtists(async (page) => ({
+    topartists: { "@attr": { totalPages: page === 1 ? "2" : "1" }, artist: [] },
   })), /Last.fm è cambiata/);
 });
 
