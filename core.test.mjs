@@ -180,6 +180,26 @@ test("keeps only the three most listened suggested albums per artist", () => {
   ]);
 });
 
+test("caps aliases and collaborations by canonical credited artist", () => {
+  const artistMbid = "83d91898-7763-47d7-b03b-b92132375c47";
+  const rows = [
+    ["a1", "Artist", "Album 1", 30],
+    ["a2", "Artist", "Album 2", 20],
+    ["a3", "Artist", "Album 3", 10],
+    ["b1", "Artist, The", "Album 4", 25],
+    ["b2", "Artist, The", "Album 5", 15],
+    ["b3", "Artist, The", "Album 6", 5],
+  ];
+  const albums = rows.map(([id, artist, name]) => ({
+    id, name, artist, artist_names: [artist, "Guest"], artist_mbids: [artistMbid, "83d91898-7763-47d7-b03b-b92132375c48"],
+  }));
+  const rankings = rows.map(([, artist, name, playcount]) => ({ artist, name, playcount }));
+
+  assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
+    "Album 1", "Album 4", "Album 2",
+  ]);
+});
+
 test("paginates MusicBrainz in bounded pages, deduplicates, and reports incomplete samples", async () => {
   const offsets = [];
   const full = await readMusicBrainzCatalog(async (offset, limit) => {

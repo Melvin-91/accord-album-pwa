@@ -18,7 +18,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=12";
+} from "./core.mjs?v=13";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1030,7 +1030,8 @@ async function searchListeningMusicBrainzAlbums(artists) {
     const credits = (group["artist-credit"] || []).flatMap((credit) => {
       if (typeof credit === "string") return [];
       const name = String(credit?.name || credit?.artist?.name || "").trim();
-      return name ? [{ name, joinphrase: credit?.joinphrase || "" }] : [];
+      const mbid = String(credit?.artist?.id || "");
+      return name ? [{ name, mbid, joinphrase: credit?.joinphrase || "" }] : [];
     });
     const creditedNames = credits.map((credit) => credit.name);
     const matchedArtists = creditedNames.filter((name) => candidates.has(name.toLocaleLowerCase()));
@@ -1047,6 +1048,7 @@ async function searchListeningMusicBrainzAlbums(artists) {
       name: String(group.title || "").trim(),
       artist: credits.map((credit) => credit.name + credit.joinphrase).join(""),
       artist_names: creditedNames,
+      artist_mbids: credits.map((credit) => credit.mbid),
       year: /^\d{4}/.test(group["first-release-date"] || "") ? group["first-release-date"].slice(0, 4) : "",
       genres,
       source: "MusicBrainz",

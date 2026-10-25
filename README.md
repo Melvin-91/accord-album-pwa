@@ -88,9 +88,12 @@ esclusi. Il catalogo MusicBrainz viene consultato in massimo tre pagine da
 campioni parziali sono mostrati. I risultati sono riutilizzati per 15 minuti
 in una cache solo in memoria, limitata a otto query.
 
-L'abbinamento usa l'MBID Last.fm/MusicBrainz quando coincide, altrimenti
-artista e titolo esatti. Un MBID discordante, titoli omonimi con più gruppi
-o edizioni sono marcati come ambigui: anche una singola corrispondenza
+Il limite massimo di tre album viene applicato a ogni artista accreditato,
+unificando le varianti tramite MBID MusicBrainz e usando il nome come ripiego;
+fra i candidati restano i più ascoltati. L'abbinamento usa l'MBID
+Last.fm/MusicBrainz quando coincide, altrimenti artista e titolo esatti.
+Un MBID discordante, titoli omonimi con più gruppi o edizioni sono marcati
+come ambigui: anche una singola corrispondenza
 Spotify richiede conferma esplicita, mentre una corrispondenza non ambigua
 può essere aggiunta automaticamente. Dopo aver abbinato album suggeriti, puoi
 creare una playlist privata Spotify dai loro brani scegliendone il nome.

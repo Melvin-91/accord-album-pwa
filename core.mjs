@@ -360,6 +360,12 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
   }
   const matches = albums.map((album, index) => {
     const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const artistMbids = Array.isArray(album.artist_mbids) ? album.artist_mbids : [];
+    const limitKeys = new Set(artists.flatMap((artist, artistIndex) => {
+      if (!artist) return [];
+      const mbid = artistMbids[artistIndex];
+      return [validMbid(mbid) ? `mbid:${String(mbid).toLocaleLowerCase()}` : `name:${artist}`];
+    }));
     const albumMbid = validMbid(album.mbid || album.sourceId) ? String(album.mbid || album.sourceId).toLocaleLowerCase() : "";
     const found = entries.flatMap((entry) => {
       if (!artists.includes(entry.artist)) return [];
@@ -373,7 +379,8 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
       || Number(right.evidence === "mbid") - Number(left.evidence === "mbid")
       || Number(right.evidence === "mbid-conflict") - Number(left.evidence === "mbid-conflict"))[0];
     return best ? { album, index, artist: best.artist, score: best.playcount,
-      rankKey: best.key, evidence: best.evidence } : null;
+      rankKey: best.key, evidence: best.evidence,
+      limitKeys: limitKeys.size ? [...limitKeys] : [`name:${best.artist}`] } : null;
   }).filter(Boolean);
   const rankCandidates = new Map();
   for (const match of matches) {
@@ -384,9 +391,8 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
   const counts = new Map();
   return matches.sort((left, right) => right.score - left.score || left.index - right.index)
     .filter((match) => {
-      const count = counts.get(match.artist) || 0;
-      if (count >= maximumPerArtist) return false;
-      counts.set(match.artist, count + 1);
+      if (match.limitKeys.some((key) => (counts.get(key) || 0) >= maximumPerArtist)) return false;
+      for (const key of match.limitKeys) counts.set(key, (counts.get(key) || 0) + 1);
       return true;
     })
     .map((match) => {
