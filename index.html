@@ -90,7 +90,7 @@
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Legge gli scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Esclude gli artisti presenti nell’intero archivio Last.fm e, se importato, nei file Spotify Extended Streaming History. Il catalogo e i generi arrivano da MusicBrainz. Il campione di partenza è limitato a 1000 scrobble e 5 artisti; i dati restano nel browser.</p>
+            <p>Legge gli scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Puoi scegliere separatamente il periodo di ascolto da escludere. Il catalogo e i generi arrivano da MusicBrainz. Il campione Last.fm è limitato a 1000 scrobble e 5 artisti; i dati importati restano nel browser.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -103,6 +103,15 @@
                   <option value="365">Ultimi 365 giorni</option>
                   <option value="all">Tutto lo storico (campione max 1000)</option>
                   <option value="custom">Intervallo personalizzato</option>
+                </select>
+              </label>
+              <label>Escludi artisti ascoltati
+                <select id="lastfmSuggestionExclusion">
+                  <option value="none">Nessuna esclusione</option>
+                  <option value="30">Ultimi 30 giorni</option>
+                  <option value="90">Ultimi 3 mesi (90 giorni)</option>
+                  <option value="365">Ultimi 365 giorni</option>
+                  <option value="all">Tutto lo storico</option>
                 </select>
               </label>
               <div id="lastfmSuggestionCustomRange" class="lastfm-suggestion-date-range" hidden>
@@ -136,7 +145,7 @@
                 <button id="spotifyHistoryClearButton" class="secondary" type="button">Rimuovi dati Spotify</button>
               </div>
               <p id="spotifyHistoryStatus" class="summary" role="status" aria-live="polite"></p>
-              <p class="notice">Seleziona tutti i file dell’esportazione, anche in più gruppi se necessario. I JSON vengono letti solo in memoria: nel browser restano soltanto i nomi degli artisti; né file né ascolti sono caricati su GitHub.</p>
+              <p class="notice">Seleziona tutti i file dell’esportazione, anche in più gruppi se necessario. I JSON vengono letti solo in memoria: nel browser restano i nomi degli artisti e il loro ultimo ascolto datato; né file né cronologia completa sono caricati o sincronizzati su GitHub.</p>
             </div>
             <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album; se c’è una sola corrispondenza verificata, viene aggiunta automaticamente alla raccolta.</p>
           </section>

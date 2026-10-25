@@ -20,6 +20,8 @@ import {
   readMusicBrainzCatalog,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
+  spotifyHistoryArtistLastPlayed,
+  spotifyHistoryArtistsInRange,
   spotifyHistoryArtistNames,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
@@ -265,6 +267,24 @@ test("normalizes local Spotify history to artist names only", () => {
   assert.deepEqual(spotifyHistoryArtistNames(rows), ["Café Band", "New Artist"]);
   assert.deepEqual(normalizeHeardArtistNames(["Known", " known ", null]), ["Known"]);
   assert.throws(() => spotifyHistoryArtistNames({ invalid: true }), /Extended Streaming History/);
+});
+
+test("keeps latest dated Spotify listen per artist and filters it by window", () => {
+  const history = [
+    { ts: "2026-01-01T10:00:00Z", ms_played: 1000, artistName: "Old Artist" },
+    { ts: "2026-02-01T10:00:00Z", ms_played: 1000, artistName: "Old Artist" },
+    { endTime: "2026-01-20T10:00:00Z", ms_played: 1000,
+      track: { artists: [{ name: "Recent Artist" }] } },
+    { artistName: "Undated Artist", ms_played: 1000 },
+    { artistName: "Skipped Artist", ts: "2026-02-10T10:00:00Z", ms_played: 0 },
+  ];
+  const dated = spotifyHistoryArtistLastPlayed(history);
+  assert.deepEqual(dated, [
+    { name: "Old Artist", playedAt: "2026-02-01T10:00:00.000Z" },
+    { name: "Recent Artist", playedAt: "2026-01-20T10:00:00.000Z" },
+  ]);
+  assert.deepEqual(spotifyHistoryArtistsInRange(dated, 1769904000, 1770501600), ["Old Artist"]);
+  assert.throws(() => spotifyHistoryArtistsInRange(dated, 10, 1), /Intervallo/);
 });
 
 test("excludes all-time heard artists from artist and album suggestions", () => {

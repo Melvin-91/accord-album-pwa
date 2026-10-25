@@ -410,6 +410,46 @@ export async function readLastFmAllTimeArtists(fetchPage) {
   return normalizeHeardArtistNames(names);
 }
 
+export function spotifyHistoryArtistLastPlayed(history) {
+  const rows = Array.isArray(history) ? history
+    : Array.isArray(history?.items) ? history.items : null;
+  if (!rows) throw new Error("Il file non contiene un elenco Spotify Extended Streaming History valido.");
+  const latest = new Map();
+  for (const row of rows) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const duration = row.ms_played ?? row.msPlayed;
+    if (duration !== undefined && (!Number.isFinite(Number(duration)) || Number(duration) <= 0)) continue;
+    const playedAt = row.played_at || row.ts || row.endTime;
+    const timestamp = typeof playedAt === "string" ? Date.parse(playedAt) : NaN;
+    if (!Number.isFinite(timestamp)) continue;
+    const names = [row.master_metadata_album_artist_name, row.artistName, row.artist_name,
+      ...(Array.isArray(row.track?.artists) ? row.track.artists.map((artist) => artist?.name) : [])];
+    for (const name of normalizeHeardArtistNames(names)) {
+      const key = name.toLocaleLowerCase();
+      const previous = latest.get(key);
+      if (!previous || timestamp > previous.timestamp) {
+        latest.set(key, { name, playedAt: new Date(timestamp).toISOString(), timestamp });
+      }
+    }
+  }
+  return [...latest.values()]
+    .map(({ name, playedAt }) => ({ name, playedAt }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function spotifyHistoryArtistsInRange(history, from, to) {
+  if (!Array.isArray(history) || !Number.isFinite(from) || !Number.isFinite(to) || from > to) {
+    throw new Error("Intervallo dello storico Spotify non valido.");
+  }
+  const names = [];
+  for (const record of history) {
+    if (!record || typeof record.name !== "string" || typeof record.playedAt !== "string") continue;
+    const timestamp = Date.parse(record.playedAt) / 1000;
+    if (Number.isFinite(timestamp) && timestamp >= from && timestamp <= to) names.push(record.name);
+  }
+  return normalizeHeardArtistNames(names);
+}
+
 export function filterUnheardArtists(artists, heardArtists = []) {
   if (!Array.isArray(artists)) throw new Error("Elenco artisti consigliati non valido.");
   const heard = new Set(normalizeHeardArtistNames(heardArtists).map((name) => name.toLowerCase()));
