@@ -14,6 +14,7 @@ import {
   playlistAlbumRecords,
   primaryAlbumGenres,
   findSpotifyPlaylistMatches,
+  listeningAlbumSuggestions,
   readMusicBrainzCatalog,
   readLastFmAllTimeArtists,
   sortAlbumsByManualOrder,
@@ -25,11 +26,10 @@ import {
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
   topTracksPerAlbum,
-  topListenedAlbums,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=21";
+} from "./core.mjs?v=22";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1454,8 +1454,11 @@ async function suggestListeningAlbums(button) {
       heardArtists: exclusion.names,
       ...filters,
     });
-    const albums = topListenedAlbums(eligibleAlbums, rankings, 3);
+    const albums = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 3);
     renderListeningAlbumSuggestions(albums);
+    const relatedNote = albums.some((album) => album.matchConfidence === "related")
+      ? " · nessuna corrispondenza Last.fm: mostrate solo alternative correlate del catalogo MusicBrainz"
+      : "";
     const coverage = history.partial ? " · campione parziale (massimo 1.000 ascolti)" : "";
     const catalogNote = catalog.truncated
       ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
@@ -1470,7 +1473,7 @@ async function suggestListeningAlbums(button) {
         : ` · Spotify con data: ${exclusion.spotifyCount} artisti` +
           (exclusion.legacyCount ? `; ${exclusion.legacyCount} senza data, esclusi solo con tutto lo storico` : "") +
           (exclusion.spotifyCount || exclusion.legacyCount ? " (copertura in base ai file importati)" : "");
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${seeds.length} artisti di partenza · ${albums.length} album candidati${coverage} · ${exclusionCoverage}${spotifyNote} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${seeds.length} artisti di partenza · ${albums.length} album candidati${relatedNote}${coverage} · ${exclusionCoverage}${spotifyNote} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
@@ -1520,7 +1523,7 @@ function restoreListeningSuggestionsForSpotifyReturn() {
       && album.genres.every((genre) => typeof genre === "string" && genre.length <= 100)
       && typeof album.reason === "string" && album.reason.length <= 1000
       && typeof album.matchReason === "string" && album.matchReason.length <= 1000
-      && ["high", "ambiguous"].includes(album.matchConfidence));
+      && ["high", "ambiguous", "related"].includes(album.matchConfidence));
   if (!valid) {
     $("#suggestionStatus").textContent = "Suggerimenti non ripristinati: dati temporanei non validi.";
     return;
@@ -1563,6 +1566,11 @@ function renderListeningAlbumSuggestions(albums) {
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
     detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
+    const matchDetail = document.createElement("span");
+    matchDetail.className = "suggestion-detail suggestion-genres";
+    matchDetail.textContent = album.matchConfidence === "related"
+      ? "Alternativa correlata · non corrispondenza diretta Last.fm"
+      : "";
     const genreDetail = document.createElement("span");
     genreDetail.className = "suggestion-detail suggestion-genres";
     const genres = primaryAlbumGenres(album.genres);
@@ -1570,7 +1578,9 @@ function renderListeningAlbumSuggestions(albums) {
     card.title = [album.name, album.artist, album.year, genreDetail.textContent,
       album.reason, album.matchReason]
       .filter(Boolean).join("\n");
-    info.append(name, detail, genreDetail);
+    info.append(name, detail);
+    if (matchDetail.textContent) info.append(matchDetail);
+    info.append(genreDetail);
     const button = document.createElement("button");
     button.className = "secondary";
     button.type = "button";

@@ -22,9 +22,12 @@ Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
 oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
-ascolti e MusicBrainz per il catalogo. Username e filtri restano nel profilo
-browser; la cronologia non viene salvata o sincronizzata. I risultati vengono
-abbinati a Spotify con una singola ricerca solo dopo la scelta dell'utente.
+ascolti e MusicBrainz per il catalogo. Se nessun album corrisponde alle
+classifiche Last.fm, la PWA mostra fino a tre alternative correlate per artista
+simile, etichettate come tali e non come corrispondenze dirette. Username e
+filtri restano nel profilo browser; la cronologia non viene salvata o
+sincronizzata. I risultati vengono abbinati a Spotify con una singola ricerca
+solo dopo la scelta dell'utente.
 Dalla scheda Raccolta si
 possono anche cercare album su Spotify per titolo, artista, ID o link e
 aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.

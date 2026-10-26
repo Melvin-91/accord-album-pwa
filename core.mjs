@@ -614,6 +614,52 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
     });
 }
 
+function relatedCatalogAlternatives(albums, artists, maximumPerArtist) {
+  if (!Array.isArray(albums) || !Array.isArray(artists)
+      || !Number.isInteger(maximumPerArtist) || maximumPerArtist < 1) {
+    throw new Error("Alternative album correlate non valide.");
+  }
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const artistPriority = new Map();
+  artists.forEach((artist, index) => {
+    const displayName = String(artist?.name || "").trim();
+    const name = normalize(displayName);
+    if (name && !artistPriority.has(name)) {
+      artistPriority.set(name, { name, displayName, index });
+    }
+  });
+  const candidates = albums.flatMap((album, index) => {
+    const credited = [...new Set([album.artist, ...(Array.isArray(album.artist_names) ? album.artist_names : [])]
+      .map(normalize).filter(Boolean))];
+    const matchedArtists = credited.map((name) => artistPriority.get(name)).filter(Boolean)
+      .sort((left, right) => left.index - right.index);
+    return matchedArtists.length ? [{ album, index, matchedArtists }] : [];
+  }).sort((left, right) => left.matchedArtists[0].index - right.matchedArtists[0].index
+    || left.index - right.index);
+  const counts = new Map();
+  const seen = new Set();
+  const alternatives = [];
+  for (const { album, matchedArtists } of candidates) {
+    const names = [...new Set(matchedArtists.map((artist) => artist.name))];
+    if (names.some((name) => (counts.get(name) || 0) >= maximumPerArtist)) continue;
+    const id = album.id || JSON.stringify([normalize(album.artist), normalize(album.name)]);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    for (const name of names) counts.set(name, (counts.get(name) || 0) + 1);
+    alternatives.push({
+      ...album,
+      matchConfidence: "related",
+      matchReason: `Nessun album della classifica Last.fm corrisponde. Alternativa dal catalogo MusicBrainz per l'artista simile ${matchedArtists[0].displayName}; non e' una corrispondenza Last.fm.`,
+    });
+  }
+  return alternatives;
+}
+
+export function listeningAlbumSuggestions(albums, rankings, artists, maximumPerArtist = 3) {
+  const matches = topListenedAlbums(albums, rankings, maximumPerArtist);
+  return matches.length ? matches : relatedCatalogAlternatives(albums, artists, maximumPerArtist);
+}
+
 export function addPlaylistAlbums(collection, additions) {
   const albums = new Map(collection.map((album) => [validateAlbum(album).id, album]));
   let added = 0;

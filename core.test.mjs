@@ -10,6 +10,7 @@ import {
   filterListeningAlbumSuggestions,
   findSpotifyPlaylistMatches,
   lastFmSuggestionRange,
+  listeningAlbumSuggestions,
   listenBrainzRecommendations,
   musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
@@ -221,6 +222,32 @@ test("keeps only the three most listened suggested albums per artist", () => {
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
     "Album 2", "Album 3", "Album 4",
   ]);
+});
+
+test("falls back to up to three related catalog alternatives only when no direct album matches", () => {
+  const albums = [
+    { id: "other-1", name: "Other 1", artist: "Other", artist_names: ["Other"] },
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `artist-${index + 1}`,
+      name: `Artist ${index + 1}`,
+      artist: "Artist",
+      artist_names: ["Artist"],
+    })),
+  ];
+  const artists = [
+    { name: "Artist" },
+    { name: "Other" },
+  ];
+  const alternatives = listeningAlbumSuggestions(albums, [], artists);
+  assert.deepEqual(alternatives.map((album) => album.id), ["artist-1", "artist-2", "artist-3", "other-1"]);
+  assert.ok(alternatives.every((album) => album.matchConfidence === "related"));
+  assert.ok(alternatives.every((album) => /non e' una corrispondenza Last\.fm/.test(album.matchReason)));
+  const direct = listeningAlbumSuggestions(albums, [
+    { artist: "Artist", name: "Artist 2", playcount: 20 },
+  ], artists);
+  assert.deepEqual(direct.map((album) => album.id), ["artist-2"]);
+  assert.equal(direct[0].matchConfidence, "high");
+  assert.throws(() => listeningAlbumSuggestions(albums, [], artists, 0), /Classifica album non valida/);
 });
 
 test("selects up to three most popular tracks per album without duplicate tracks", () => {
