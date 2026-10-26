@@ -64,6 +64,11 @@ const suggestedSpotifyMatchCache = new Map();
 const spotifyAlbumMetadata = new Map();
 const suggestionCoverQueue = [];
 const suggestionCoverTasks = new WeakMap();
+const collectionCoverQueue = [];
+const collectionCoverTasks = new WeakMap();
+const collectionCoverImageUrls = new Map();
+const collectionCoverRemoteIds = new Set();
+const collectionCoverFailures = new Map();
 const listeningCatalogCache = new Map();
 const allTimeArtistCache = new Map();
 let suggestedMatchAlbumId = null;
@@ -75,6 +80,9 @@ let suggestionCoverObserver = null;
 let suggestionCoverTokenPromise = null;
 let suggestionCoverJobsActive = 0;
 let suggestionCoverFailureShown = false;
+let collectionCoverObserver = null;
+let collectionCoverTokenPromise = null;
+let collectionCoverJobsActive = 0;
 const LASTFM_KEY = "accord-lastfm-api-key";
 const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascoltato", liked: "Mi piace", hidden: "Non proporre" };
 const $ = (selector) => document.querySelector(selector);
@@ -576,10 +584,7 @@ function render() {
   $("#emptyState").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
     : "Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist Spotify.";
-  const albumsWithoutCover = state.albums.filter((album) => !album.cover_sha256).length;
-  setCoverNotice(albumsWithoutCover
-    ? `${albumsWithoutCover} album non hanno ancora una miniatura nel repository. Avvia “Sincronizza ora” in Accord desktop dopo l’aggiornamento, poi premi “Sincronizza” sul telefono.`
-    : "");
+  updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
     const card = template.content.firstElementChild.cloneNode(true);
     card.dataset.albumId = album.id;
@@ -589,9 +594,10 @@ function render() {
       `${album.artist} · ${album.year || "Anno sconosciuto"} · ${labels[album.status]}`;
     const coverImage = card.querySelector(".album-cover");
     coverImage.alt = `Copertina di ${album.name}`;
+    coverImage.referrerPolicy = "no-referrer";
     card.querySelector(".cover-placeholder").textContent = album.cover_sha256
       ? "Premi Sincronizza per scaricare"
-      : "Da sincronizzare dal PC";
+      : "Cerco una copertina online…";
     card.querySelector(".status-input").value = album.status;
     card.querySelector(".status-input").setAttribute("aria-label", `Stato per ${album.name}`);
     card.querySelector(".status-input").addEventListener("change", (event) =>
@@ -647,46 +653,277 @@ function render() {
 async function renderCovers(albums, generation) {
   try {
     let unavailable = 0;
+    const cards = new Map([...$("#albumList").children].map((card) => [card.dataset.albumId, card]));
     for (const [index, album] of albums.entries()) {
+      const card = cards.get(album.id);
+      if (!card) continue;
       if (!album.cover_sha256) {
         unavailable += 1;
+        enqueueCollectionCover({ album, card, generation });
         continue;
       }
-      const data = await getCachedCover(album.id);
+      let data;
+      try {
+        data = await getCachedCover(album.id);
+      } catch (error) {
+        collectionCoverFailures.set(album.id, `Archivio offline: ${error.message}`);
+        unavailable += 1;
+        enqueueCollectionCover({ album, card, generation });
+        continue;
+      }
       if (!data) {
         unavailable += 1;
+        enqueueCollectionCover({ album, card, generation });
         continue;
       }
       const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
       const hash = [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
       if (hash !== album.cover_sha256) {
+        collectionCoverFailures.set(album.id, "La miniatura locale non corrisponde all'impronta sincronizzata.");
         unavailable += 1;
+        enqueueCollectionCover({ album, card, generation });
         continue;
       }
       if (generation !== coverRenderGeneration) return;
-      const card = [...$("#albumList").children].find((element) => element.dataset.albumId === album.id);
-      if (!card) continue;
+      collectionCoverFailures.delete(album.id);
+      collectionCoverRemoteIds.delete(album.id);
       const url = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
       coverObjectUrls.push(url);
       const image = card.querySelector(".album-cover");
       image.loading = index < 8 ? "eager" : "lazy";
       image.addEventListener("load", () => {
-        if (generation === coverRenderGeneration) card.classList.add("has-cover");
+        if (generation === coverRenderGeneration) {
+          card.classList.add("has-cover");
+          updateCollectionCoverNotice();
+        }
       }, { once: true });
       image.addEventListener("error", () => {
         if (generation !== coverRenderGeneration) return;
-        card.querySelector(".cover-placeholder").textContent = "Miniatura non leggibile";
+        card.querySelector(".cover-placeholder").textContent = "Cerco una copertina online…";
         card.classList.add("cover-error");
+        collectionCoverFailures.set(album.id, "La miniatura sincronizzata non è leggibile come immagine.");
+        enqueueCollectionCover({ album, card, generation });
       }, { once: true });
       image.src = url;
     }
     if (generation !== coverRenderGeneration) return;
-    if (unavailable && !state.albums.some((album) => !album.cover_sha256)) {
-      setCoverNotice(`${unavailable} copertine non sono disponibili su questo dispositivo. Premi “Sincronizza” per scaricarle.`);
-    }
+    if (unavailable) updateCollectionCoverNotice();
   } catch (error) {
     setSyncState("Copertine offline non disponibili");
     showMessage("Errore archivio copertine", error.message);
+  }
+}
+
+function collectionCoverTaskIsCurrent(task) {
+  return task.generation === coverRenderGeneration && task.card.isConnected;
+}
+
+function showCollectionCoverImage(task, url) {
+  if (!collectionCoverTaskIsCurrent(task)) return Promise.resolve(false);
+  const image = task.card.querySelector(".album-cover");
+  image.loading = "eager";
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (loaded) => {
+      if (settled) return;
+      settled = true;
+      if (collectionCoverTaskIsCurrent(task)) {
+        if (loaded) {
+          task.card.classList.add("has-cover");
+          task.card.classList.remove("cover-error");
+        } else {
+          task.card.classList.remove("has-cover");
+        }
+      }
+      resolve(loaded);
+    };
+    image.addEventListener("load", () => finish(true), { once: true });
+    image.addEventListener("error", () => finish(false), { once: true });
+    image.src = url;
+    if (image.complete) queueMicrotask(() => finish(image.naturalWidth > 0));
+  });
+}
+
+function trustedSpotifyCoverUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLocaleLowerCase();
+    const allowed = host.endsWith(".scdn.co") || host === "scdn.co"
+      || host.endsWith(".spotifycdn.com") || host === "spotifycdn.com";
+    return url.protocol === "https:" && allowed && !url.username && !url.password ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function collectionSpotifyToken() {
+  if (!collectionCoverTokenPromise) {
+    collectionCoverTokenPromise = spotifyAccessToken().finally(() => {
+      collectionCoverTokenPromise = null;
+    });
+  }
+  return collectionCoverTokenPromise;
+}
+
+async function musicBrainzCollectionCoverUrl(album) {
+  const escape = (value) => String(value).replace(/([\\"])/g, "\\$1");
+  const parameters = new URLSearchParams({
+    query: `primarytype:album AND artist:"${escape(album.artist)}" AND releasegroup:"${escape(album.name)}"`,
+    fmt: "json",
+    limit: "5",
+  });
+  const data = await retryMusicBrainzRequest(async () => {
+    const delay = 1100 - (Date.now() - lastListeningCatalogRequestAt);
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    lastListeningCatalogRequestAt = Date.now();
+    const response = await fetch(`https://musicbrainz.org/ws/2/release-group?${parameters}`, {
+      headers: { Accept: "application/json" },
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+    if (!response.ok) {
+      const error = new Error(`MusicBrainz ha risposto con HTTP ${response.status}.`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
+  }, (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const groups = data["release-groups"];
+  if (!Array.isArray(groups)) throw new Error("Risposta MusicBrainz senza gruppi di pubblicazione verificabili.");
+  const normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  let matches = groups.filter((group) => {
+    if (group?.["primary-type"] !== "Album"
+        || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(group.id || "")
+        || normalize(group.title) !== normalize(album.name)) return false;
+    const artist = (Array.isArray(group["artist-credit"]) ? group["artist-credit"] : [])
+      .flatMap((credit) => typeof credit === "string" ? [credit]
+        : [credit?.name || credit?.artist?.name || ""])
+      .filter(Boolean).join(", ");
+    return normalize(artist) === normalize(album.artist);
+  });
+  if (matches.length > 1 && album.year) {
+    matches = matches.filter((group) => String(group["first-release-date"] || "").slice(0, 4) === album.year);
+  }
+  if (matches.length !== 1) return null;
+  return `https://coverartarchive.org/release-group/${matches[0].id.toLocaleLowerCase()}/front-500`;
+}
+
+async function loadCollectionCover(task) {
+  if (!collectionCoverTaskIsCurrent(task)) return;
+  const { album } = task;
+  const errors = [];
+  const tryImage = async (url, source) => {
+    if (!url || !collectionCoverTaskIsCurrent(task)) return false;
+    if (!await showCollectionCoverImage(task, url)) {
+      errors.push(`${source}: immagine non caricabile`);
+      return false;
+    }
+    collectionCoverImageUrls.set(album.id, url);
+    collectionCoverRemoteIds.add(album.id);
+    collectionCoverFailures.delete(album.id);
+    updateCollectionCoverNotice();
+    return true;
+  };
+
+  const cachedUrl = collectionCoverImageUrls.get(album.id);
+  if (cachedUrl) {
+    if (await tryImage(cachedUrl, "Copertina memorizzata")) return;
+    collectionCoverImageUrls.delete(album.id);
+  }
+
+  let token = null;
+  try {
+    token = await collectionSpotifyToken();
+  } catch (error) {
+    errors.push(`Sessione Spotify: ${error.message}`);
+  }
+  if (token && collectionCoverTaskIsCurrent(task)) {
+    try {
+      const details = await spotifyRequest(`albums/${encodeURIComponent(album.id)}`, token);
+      const images = Array.isArray(details.images) ? details.images
+        .filter((image) => trustedSpotifyCoverUrl(image?.url))
+        .sort((left, right) => Math.abs((left.width || 300) - 300) - Math.abs((right.width || 300) - 300))
+        : [];
+      let loaded = false;
+      for (const image of images) {
+        if (await tryImage(trustedSpotifyCoverUrl(image.url), "Spotify")) {
+          loaded = true;
+          break;
+        }
+      }
+      if (loaded) return;
+      if (!images.length) errors.push("Spotify: nessuna immagine verificabile.");
+    } catch (error) {
+      errors.push(`Spotify: ${error.message}`);
+    }
+  }
+
+  if (!collectionCoverTaskIsCurrent(task)) return;
+  try {
+    const oembedUrl = new URL("https://open.spotify.com/oembed");
+    oembedUrl.searchParams.set("url", album.url);
+    const response = await fetch(oembedUrl, { credentials: "omit", referrerPolicy: "no-referrer" });
+    if (!response.ok) throw new Error(`Spotify oEmbed ha risposto con HTTP ${response.status}.`);
+    const metadata = await response.json();
+    const coverUrl = trustedSpotifyCoverUrl(metadata.thumbnail_url);
+    if (coverUrl && await tryImage(coverUrl, "Spotify oEmbed")) return;
+    errors.push("Spotify oEmbed: nessuna immagine verificabile.");
+  } catch (error) {
+    errors.push(`Spotify oEmbed: ${error.message}`);
+  }
+
+  if (!collectionCoverTaskIsCurrent(task)) return;
+  try {
+    const coverUrl = await musicBrainzCollectionCoverUrl(album);
+    if (coverUrl && await tryImage(coverUrl, "Cover Art Archive")) return;
+    errors.push("Cover Art Archive: nessun gruppo MusicBrainz univoco.");
+  } catch (error) {
+    errors.push(`Cover Art Archive: ${error.message}`);
+  }
+
+  if (!collectionCoverTaskIsCurrent(task)) return;
+  collectionCoverImageUrls.delete(album.id);
+  collectionCoverRemoteIds.delete(album.id);
+  collectionCoverFailures.set(album.id, errors.join("; ") || "Nessuna fonte ha restituito una copertina.");
+  task.card.querySelector(".cover-placeholder").textContent = "Copertina non disponibile online";
+  task.card.classList.add("cover-error");
+  updateCollectionCoverNotice();
+}
+
+function enqueueCollectionCover(task) {
+  if (!collectionCoverTaskIsCurrent(task)) return;
+  if (!("IntersectionObserver" in window)) {
+    collectionCoverQueue.push(task);
+    processCollectionCoverQueue();
+    return;
+  }
+  if (!collectionCoverObserver) {
+    collectionCoverObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        collectionCoverObserver.unobserve(entry.target);
+        const observedTask = collectionCoverTasks.get(entry.target);
+        if (observedTask) {
+          collectionCoverQueue.push(observedTask);
+          processCollectionCoverQueue();
+        }
+      }
+    }, { rootMargin: "180px 0px" });
+  }
+  collectionCoverTasks.set(task.card, task);
+  collectionCoverObserver.observe(task.card);
+}
+
+function processCollectionCoverQueue() {
+  while (collectionCoverJobsActive < 2 && collectionCoverQueue.length) {
+    const task = collectionCoverQueue.shift();
+    if (!collectionCoverTaskIsCurrent(task)) continue;
+    collectionCoverJobsActive += 1;
+    void loadCollectionCover(task).finally(() => {
+      collectionCoverJobsActive -= 1;
+      processCollectionCoverQueue();
+    });
   }
 }
 
@@ -2371,6 +2608,25 @@ function setCoverNotice(message) {
   const notice = $("#coverSyncNotice");
   notice.hidden = !message;
   notice.textContent = message;
+}
+
+function updateCollectionCoverNotice() {
+  const albums = new Map(state.albums.map((album) => [album.id, album]));
+  const missingArchive = state.albums.filter((album) => !album.cover_sha256).length;
+  const streamed = [...collectionCoverRemoteIds]
+    .filter((id) => albums.has(id) && albums.get(id).cover_sha256).length;
+  const failures = [...collectionCoverFailures.entries()].filter(([id]) => albums.has(id));
+  const messages = [];
+  if (missingArchive) {
+    messages.push(`${missingArchive} album non hanno una miniatura sincronizzata. La PWA cerca le copertine online; sincronizza Accord desktop per archiviarle offline.`);
+  }
+  if (streamed) {
+    messages.push(`${streamed} copertine sono mostrate online ma non nella cache offline. Premi “Sincronizza” per scaricare le miniature.`);
+  }
+  if (failures.length) {
+    messages.push(`${failures.length} copertine non caricate: ${failures[0][1]}`);
+  }
+  setCoverNotice(messages.join(" "));
 }
 
 function updateAlbum(id, changes) {

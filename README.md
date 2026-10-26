@@ -1,6 +1,8 @@
 # Accord · Raccolta album PWA
 
 La raccolta album e i suggerimenti sono organizzati in due schede separate.
+La versione attiva dell'app è visibile nell'intestazione della PWA e nella
+barra del titolo dell'app desktop; la build iniziale è `1.0.0`.
 
 Client statico per la raccolta album Accord. Questo repository pubblico deve
 contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
@@ -18,14 +20,17 @@ non lo inserisci.
 I documenti v1 e v2 restano compatibili: il primo genere della lista diventa
 principale quando il record non ne specifica uno. La versione corrente
 sincronizza il genere principale insieme agli altri campi della raccolta.
-Le miniature JPEG sono conservate in `covers.bin` nel repository privato,
-verificate con SHA-256 e salvate in IndexedDB per l'uso offline. La
+Le miniature JPEG sincronizzate sono conservate in `covers.bin` nel repository
+privato, verificate con SHA-256 e salvate in IndexedDB per l'uso offline. Se
+una miniatura manca, la PWA prova a recuperarla da Spotify e poi dal Cover Art
+Archive; queste copertine online non vengono aggiunte al repository e per
+averle offline serve sincronizzare Accord desktop. La
 sincronizzazione trasferisce solo i campi musicali previsti: non include
 database, feedback o note di lavoro, task, token o configurazioni personali.
 L'ordinamento automatico supporta artista, album, anno, voto, genere e
 collezione. Il riordino manuale è locale al dispositivo PWA, si può fare con
 le frecce o trascinando e non viene sincronizzato con GitHub.
-Per caricare le miniature dopo un aggiornamento desktop, esegui una
+Per caricare le miniature offline dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
 oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli

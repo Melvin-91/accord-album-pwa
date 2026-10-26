@@ -121,6 +121,8 @@ test("searches genres and filters state while sorting ratings and names", () => 
     album("b", { name: "Alpha", artist: "Ada", rating: 4, genres: ["Rock"], status: "heard" }),
   ];
   assert.deepEqual(filterAlbums(albums, { search: "jazz" }).map((item) => item.id), ["a"]);
+  assert.deepEqual(filterAlbums(albums, { search: "JAZZ" }).map((item) => item.id), ["a"]);
+  assert.deepEqual(filterAlbums(albums, { search: "bEtA" }).map((item) => item.id), ["a"]);
   assert.deepEqual(filterAlbums(albums, { status: "heard", genre: "rock" }).map((item) => item.id), ["b"]);
   assert.deepEqual(filterAlbums(albums, { order: "name" }).map((item) => item.id), ["b", "a"]);
   assert.deepEqual(filterAlbums(albums, { order: "rating" }).map((item) => item.id), ["b", "a"]);
@@ -224,7 +226,7 @@ test("accepts Spotify playlist names, IDs, links, and URIs without accepting oth
 test("searches playlist pages only until the first page containing matching names", async () => {
   const playlists = (start, matchingIndex = -1) => Array.from({ length: 50 }, (_, index) => ({
     id: String(start + index).padStart(22, "0"),
-    name: start + index === matchingIndex ? "Discovery" : `Playlist ${start + index}`,
+    name: start + index === matchingIndex ? "dIsCoVeRy" : `Playlist ${start + index}`,
   }));
   const pages = new Map([
     [0, {
@@ -241,7 +243,7 @@ test("searches playlist pages only until the first page containing matching name
     }],
   ]);
   const requestedOffsets = [];
-  const matches = await findSpotifyPlaylistMatches(" discovery ", async (offset) => {
+  const matches = await findSpotifyPlaylistMatches(" DISCOVERY ", async (offset) => {
     requestedOffsets.push(offset);
     const page = pages.get(offset);
     assert.ok(page, `unexpected playlist page request at offset ${offset}`);
