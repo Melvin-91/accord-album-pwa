@@ -29,7 +29,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=20";
+} from "./core.mjs?v=21";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1398,10 +1398,11 @@ async function suggestListeningAlbums(button) {
       };
     }
     const filters = {
-      includedArtists: suggestionFilterValues("#lastfmIncludeArtists"),
       excludedArtists: suggestionFilterValues("#lastfmExcludeArtists"),
       includedGenres: suggestionFilterValues("#lastfmIncludeGenres"),
       excludedGenres: suggestionFilterValues("#lastfmExcludeGenres"),
+      includedGenresMatch: $("#lastfmIncludeGenresMatch").value,
+      excludedGenresMatch: $("#lastfmExcludeGenresMatch").value,
     };
     for (const [selector, key] of Object.entries(lastFmSuggestionPreferences)) {
       localStorage.setItem(key, $(selector).value.trim());
@@ -1421,12 +1422,10 @@ async function suggestListeningAlbums(button) {
         similar.set(key, entry);
       }
     }
-    const included = new Set(filters.includedArtists.map((value) => value.toLocaleLowerCase()));
     const candidates = filterUnheardArtists([...similar.values()], exclusion.names)
-      .filter((artist) => !included.size || included.has(artist.name.toLocaleLowerCase()))
       .sort((a, b) => b.support - a.support || b.match - a.match || a.name.localeCompare(b.name))
       .slice(0, 10);
-    if (!candidates.length) throw new Error("Last.fm non ha trovato artisti compatibili con i filtri inclusi/esclusi.");
+    if (!candidates.length) throw new Error("Last.fm non ha trovato artisti compatibili con i filtri di esclusione.");
     const rankings = [];
     for (const artist of candidates) {
       const data = await lastFmRequest({
@@ -2668,10 +2667,11 @@ const lastFmSuggestionPreferences = {
   "#lastfmSuggestionUser": "accord-lastfm-suggestion-user",
   "#lastfmSuggestionStart": "accord-lastfm-suggestion-start",
   "#lastfmSuggestionEnd": "accord-lastfm-suggestion-end",
-  "#lastfmIncludeArtists": "accord-lastfm-suggestion-include-artists",
   "#lastfmExcludeArtists": "accord-lastfm-suggestion-exclude-artists",
   "#lastfmIncludeGenres": "accord-lastfm-suggestion-include-genres",
   "#lastfmExcludeGenres": "accord-lastfm-suggestion-exclude-genres",
+  "#lastfmIncludeGenresMatch": "accord-lastfm-suggestion-include-genres-match",
+  "#lastfmExcludeGenresMatch": "accord-lastfm-suggestion-exclude-genres-match",
 };
 const savedSuggestionPeriod = localStorage.getItem("accord-lastfm-suggestion-days") || "30";
 const suggestionPeriods = new Set(["7", "30", "90", "365", "all", "custom"]);
@@ -2700,7 +2700,11 @@ if (initialSuggestionPeriod !== savedSuggestionPeriod) {
 }
 for (const [selector, key] of Object.entries(lastFmSuggestionPreferences)) {
   const input = $(selector);
-  input.value = localStorage.getItem(key)
+  const saved = localStorage.getItem(key);
+  const matchingMode = selector === "#lastfmIncludeGenresMatch" || selector === "#lastfmExcludeGenresMatch";
+  input.value = matchingMode
+    ? saved === "contains" ? "contains" : "exact"
+    : saved
     || (selector === "#lastfmSuggestionStart" ? dateValue(defaultStart)
       : selector === "#lastfmSuggestionEnd" ? todayValue : "");
   input.addEventListener("change", () => localStorage.setItem(key, input.value.trim()));

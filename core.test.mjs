@@ -256,6 +256,25 @@ test("excludes suggested albums already scrobbled by any credited artist", () =>
   assert.deepEqual(filterListeningAlbumSuggestions(albums, { knownAlbums: history.knownAlbums }), [albums[1]]);
 });
 
+test("matches included and excluded genres by exact value or contained text", () => {
+  const albums = [
+    { id: "technical", name: "Technical", artist: "Artist", genres: ["technical symphonic black metal"] },
+    { id: "black", name: "Black", artist: "Artist", genres: ["black metal"] },
+    { id: "thrash", name: "Thrash", artist: "Artist", genres: ["thrash metal"] },
+    { id: "jazz", name: "Jazz", artist: "Artist", genres: ["jazz"] },
+  ];
+  assert.deepEqual(filterListeningAlbumSuggestions(albums, {
+    includedGenres: ["metal"],
+    includedGenresMatch: "contains",
+    excludedGenres: ["thrash"],
+    excludedGenresMatch: "contains",
+  }).map((album) => album.id), ["technical", "black"]);
+  assert.deepEqual(filterListeningAlbumSuggestions(albums, {
+    includedGenres: ["technical symphonic black metal"],
+    includedGenresMatch: "exact",
+  }).map((album) => album.id), ["technical"]);
+});
+
 test("normalizes local Spotify history to artist names only", () => {
   const rows = [
     { master_metadata_album_artist_name: "  Cafe\u0301 Band ", ms_played: 1 },

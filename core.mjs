@@ -460,15 +460,18 @@ export function filterUnheardArtists(artists, heardArtists = []) {
 }
 
 export function filterListeningAlbumSuggestions(albums, {
-  knownAlbums = new Set(), collection = [], includedArtists = [], excludedArtists = [],
-  includedGenres = [], excludedGenres = [], heardArtists = [],
+  knownAlbums = new Set(), collection = [], excludedArtists = [],
+  includedGenres = [], excludedGenres = [], includedGenresMatch = "exact",
+  excludedGenresMatch = "exact", heardArtists = [],
 } = {}) {
   const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
-  const included = new Set(includedArtists.map(normalize).filter(Boolean));
   const excluded = new Set(excludedArtists.map(normalize).filter(Boolean));
   const heard = new Set(normalizeHeardArtistNames(heardArtists).map((name) => name.toLowerCase()));
   const genreIncludes = new Set(includedGenres.map(normalize).filter(Boolean));
   const genreExcludes = new Set(excludedGenres.map(normalize).filter(Boolean));
+  const matchesGenre = (genre, terms, mode) => mode === "contains"
+    ? [...terms].some((term) => genre.includes(term))
+    : terms.has(genre);
   const saved = new Set(collection.map((album) =>
     JSON.stringify([normalize(album.artist), normalize(album.name)])));
   const seen = new Set();
@@ -483,9 +486,8 @@ export function filterListeningAlbumSuggestions(albums, {
     const albumId = album.id || identity;
     if (!album.name || !album.artist || alreadyHeard || artistAlreadyHeard || saved.has(identity)
         || seen.has(albumId) || artists.some((artist) => excluded.has(artist))
-        || included.size && !artists.some((artist) => included.has(artist))
-        || genreIncludes.size && !genres.some((genre) => genreIncludes.has(genre))
-        || genres.some((genre) => genreExcludes.has(genre))) return false;
+        || genreIncludes.size && !genres.some((genre) => matchesGenre(genre, genreIncludes, includedGenresMatch))
+        || genres.some((genre) => matchesGenre(genre, genreExcludes, excludedGenresMatch))) return false;
     seen.add(albumId);
     return true;
   });

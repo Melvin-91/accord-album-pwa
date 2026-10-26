@@ -122,17 +122,26 @@
                   <input id="lastfmSuggestionEnd" type="date">
                 </label>
               </div>
-              <label>Artisti da includere (facoltativo)
-                <input id="lastfmIncludeArtists" maxlength="500" placeholder="Artista A, Artista B">
-              </label>
               <label>Artisti da escludere
                 <input id="lastfmExcludeArtists" maxlength="500" placeholder="Artista A, Artista B">
               </label>
               <label>Generi da includere
                 <input id="lastfmIncludeGenres" maxlength="300" placeholder="Rock, jazz">
               </label>
+              <label>Modalità generi inclusi
+                <select id="lastfmIncludeGenresMatch">
+                  <option value="exact">Genere esatto</option>
+                  <option value="contains">Contiene il testo</option>
+                </select>
+              </label>
               <label>Generi da escludere
                 <input id="lastfmExcludeGenres" maxlength="300" placeholder="Generi separati da virgole">
+              </label>
+              <label>Modalità generi esclusi
+                <select id="lastfmExcludeGenresMatch">
+                  <option value="exact">Genere esatto</option>
+                  <option value="contains">Contiene il testo</option>
+                </select>
               </label>
               <button id="lastfmSuggestionButton" class="secondary" type="button">Suggerisci album</button>
             </div>
@@ -307,6 +316,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=34"></script>
+    <script type="module" src="app.mjs?v=36"></script>
   </body>
 </html>
