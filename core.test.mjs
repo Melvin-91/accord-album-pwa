@@ -13,6 +13,7 @@ import {
   filterUnheardArtists,
   filterListeningAlbumSuggestions,
   findSpotifyPlaylistMatches,
+  lastFmAlbumCatalog,
   lastFmSuggestionRange,
   listeningAlbumSuggestions,
   listenBrainzRecommendations,
@@ -25,6 +26,7 @@ import {
   readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
   rankDiscogsSuggestionAlbums,
+  retryMusicBrainzRequest,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
@@ -350,6 +352,53 @@ test("falls back to one related catalog alternative per artist only when no dire
   assert.deepEqual(direct.map((album) => album.id), ["artist-2"]);
   assert.equal(direct[0].matchConfidence, "high");
   assert.throws(() => listeningAlbumSuggestions(albums, [], artists, 0), /Classifica album non valida/);
+});
+
+test("builds album candidates from Last.fm rankings when the MusicBrainz catalog is unavailable", () => {
+  const rankings = [
+    { artist: "Artist", name: "Most Played", playcount: 40 },
+    { artist: "Artist", name: "Next Played", playcount: 25 },
+    { artist: "Artist", name: "Most Played", playcount: 42 },
+    { artist: "Other", name: "Other Album", playcount: 30 },
+    { artist: "Unknown", name: "Ignored Album", playcount: 100 },
+  ];
+  const albums = lastFmAlbumCatalog(rankings, [{ name: "Artist" }, { name: "Other" }]);
+  assert.deepEqual(albums.map(({ artist, name, playcount }) => [artist, name, playcount]), [
+    ["Artist", "Most Played", 42],
+    ["Artist", "Next Played", 25],
+    ["Other", "Other Album", 30],
+  ]);
+  assert.ok(albums.every((album) => album.source === "Last.fm" && album.genres.length === 0));
+  assert.deepEqual(topListenedAlbums(albums, rankings, 1).map((album) => album.name), [
+    "Most Played",
+    "Other Album",
+  ]);
+});
+
+test("retries temporary MusicBrainz failures and immediately returns permanent failures", async () => {
+  let attempts = 0;
+  const waits = [];
+  const result = await retryMusicBrainzRequest(async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      const error = new Error("MusicBrainz unavailable");
+      error.status = 503;
+      throw error;
+    }
+    return "catalog";
+  }, async (milliseconds) => waits.push(milliseconds));
+  assert.equal(result, "catalog");
+  assert.equal(attempts, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+
+  let permanentAttempts = 0;
+  await assert.rejects(retryMusicBrainzRequest(async () => {
+    permanentAttempts += 1;
+    const error = new Error("Bad request");
+    error.status = 400;
+    throw error;
+  }, async () => {}), /Bad request/);
+  assert.equal(permanentAttempts, 1);
 });
 
 test("selects up to three most popular tracks per album without duplicate tracks", () => {

@@ -681,6 +681,62 @@ export function listeningAlbumSuggestions(albums, rankings, artists, maximumPerA
   return matches.length ? matches : relatedCatalogAlternatives(albums, artists, maximumPerArtist);
 }
 
+export function lastFmAlbumCatalog(rankings, artists) {
+  if (!Array.isArray(rankings) || !Array.isArray(artists)) {
+    throw new Error("Classifica Last.fm non valida.");
+  }
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const artistByName = new Map();
+  for (const artist of artists) {
+    const name = String(artist?.name || "").trim();
+    const key = normalize(name);
+    if (key && !artistByName.has(key)) artistByName.set(key, name);
+  }
+  const albums = new Map();
+  for (const entry of rankings) {
+    const artist = artistByName.get(normalize(entry?.artist));
+    const name = String(entry?.name || "").trim();
+    const playcount = Number(entry?.playcount);
+    if (!artist || !name || !Number.isFinite(playcount) || playcount < 0) continue;
+    const key = JSON.stringify([normalize(artist), normalize(name)]);
+    const previous = albums.get(key);
+    if (previous && previous.playcount >= playcount) continue;
+    const mbid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(entry?.mbid || "")
+      ? entry.mbid : "";
+    albums.set(key, {
+      id: `lastfm:${key}`,
+      mbid,
+      name,
+      artist,
+      artist_names: [artist],
+      artist_mbids: [],
+      year: "",
+      genres: [],
+      source: "Last.fm",
+      reason: `Classifica Last.fm: ${playcount} ascolti.`,
+      playcount,
+    });
+  }
+  return [...albums.values()];
+}
+
+export async function retryMusicBrainzRequest(request, wait) {
+  if (typeof request !== "function" || typeof wait !== "function") {
+    throw new Error("Richiesta o attesa MusicBrainz non valida.");
+  }
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await request();
+    } catch (error) {
+      const retryable = error instanceof TypeError || retryableStatuses.has(Number(error?.status));
+      if (!retryable || attempt === 2) throw error;
+      await wait(1000 * (2 ** attempt));
+    }
+  }
+  throw new Error("Richiesta MusicBrainz non completata.");
+}
+
 export function topDiscogsVersions(versions, maximumVersions = 5) {
   if (!Array.isArray(versions) || !Number.isInteger(maximumVersions)
       || maximumVersions < 1 || maximumVersions > 100) {

@@ -115,6 +115,11 @@ viene consultato in gruppi di massimo dieci artisti, fino a tre pagine da 100
 risultati per gruppo e a distanza di almeno 1,1 secondi; il conteggio aggregato e gli eventuali
 campioni parziali sono mostrati. I risultati sono riutilizzati per 15 minuti
 in una cache solo in memoria, limitata a otto query.
+In caso di errori temporanei MusicBrainz (HTTP 429, 5xx o rete), la PWA riprova
+fino a tre volte e poi usa le classifiche album Last.fm, mantenendo gli altri
+filtri; il riepilogo segnala esplicitamente il ripiego. Senza MusicBrainz non
+sono disponibili generi o anno, quindi i filtri che richiedono un genere
+continuano a escludere album privi di generi verificabili.
 
 Il limite di un album viene applicato a ogni artista accreditato, unificando le
 varianti tramite MBID MusicBrainz e usando il nome come ripiego; fra i

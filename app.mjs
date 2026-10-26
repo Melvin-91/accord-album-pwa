@@ -14,6 +14,7 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   listenBrainzRecommendations,
+  lastFmAlbumCatalog,
   lastFmSuggestionRange,
   musicBrainzCoverArtUrl,
   playlistAlbumRecords,
@@ -23,17 +24,19 @@ import {
   readMusicBrainzCatalog,
   readLastFmAllTimeArtists,
   rankDiscogsSuggestionAlbums,
+  retryMusicBrainzRequest,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
+  topListenedAlbums,
   topTracksPerAlbum,
   topDiscogsVersions,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=26";
+} from "./core.mjs?v=27";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -1340,6 +1343,8 @@ async function searchListeningMusicBrainzAlbums(artists) {
   };
 }
 
+class ListeningMusicBrainzUnavailableError extends Error {}
+
 async function searchListeningMusicBrainzAlbumBatch(artists) {
   const cacheKey = JSON.stringify(artists.map((artist) => artist.name.trim().toLocaleLowerCase()).sort());
   const now = Date.now();
@@ -1354,22 +1359,39 @@ async function searchListeningMusicBrainzAlbumBatch(artists) {
     const terms = artists.map((artist) => `artist:${JSON.stringify(artist.name)}`);
     const query = `primarytype:album AND (${terms.join(" OR ")})`;
     catalog = await readMusicBrainzCatalog(async (offset, limit) => {
-      const delay = 1100 - (Date.now() - lastListeningCatalogRequestAt);
-      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-      lastListeningCatalogRequestAt = Date.now();
       const parameters = new URLSearchParams({
         query,
         fmt: "json",
         limit: String(limit),
         offset: String(offset),
       });
-      const response = await fetch(`https://musicbrainz.org/ws/2/release-group?${parameters}`, {
-        headers: { Accept: "application/json" },
-        credentials: "omit",
-        referrerPolicy: "no-referrer",
-      });
-      if (!response.ok) throw new Error(`MusicBrainz ha risposto con HTTP ${response.status}.`);
-      return response.json();
+      try {
+        return await retryMusicBrainzRequest(async () => {
+          const delay = 1100 - (Date.now() - lastListeningCatalogRequestAt);
+          if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+          lastListeningCatalogRequestAt = Date.now();
+          const response = await fetch(`https://musicbrainz.org/ws/2/release-group?${parameters}`, {
+            headers: { Accept: "application/json" },
+            credentials: "omit",
+            referrerPolicy: "no-referrer",
+          });
+          if (!response.ok) {
+            const error = new Error(`MusicBrainz ha risposto con HTTP ${response.status}.`);
+            error.status = response.status;
+            throw error;
+          }
+          return response.json();
+        }, (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+      } catch (error) {
+        if (error instanceof TypeError || [429, 500, 502, 503, 504].includes(Number(error?.status))) {
+          throw new ListeningMusicBrainzUnavailableError(
+            error instanceof TypeError
+              ? "connessione non riuscita dopo tre tentativi."
+              : `${error.message} dopo tre tentativi.`,
+          );
+        }
+        throw error;
+      }
     });
     catalog.cached = false;
     listeningCatalogCache.set(cacheKey, { savedAt: now, catalog });
@@ -1776,14 +1798,36 @@ async function suggestListeningAlbums(button) {
         });
       });
     }
-    const catalog = await searchListeningMusicBrainzAlbums(candidates);
-    const eligibleAlbums = filterListeningAlbumSuggestions(catalog.albums, {
+    let catalog;
+    try {
+      catalog = await searchListeningMusicBrainzAlbums(candidates);
+    } catch (error) {
+      if (!(error instanceof ListeningMusicBrainzUnavailableError)) throw error;
+      catalog = {
+        albums: [],
+        truncated: true,
+        total: null,
+        fetched: 0,
+        pages: 0,
+        cached: false,
+        unavailable: true,
+        unavailableReason: error.message,
+      };
+    }
+    const catalogAlbums = catalog.unavailable ? lastFmAlbumCatalog(rankings, candidates) : catalog.albums;
+    const eligibleAlbums = filterListeningAlbumSuggestions(catalogAlbums, {
       knownAlbums: history.knownAlbums,
       collection: state.albums,
       heardArtists: exclusion.names,
       ...filters,
     });
-    const albumCandidates = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 2);
+    const albumCandidates = catalog.unavailable
+      ? topListenedAlbums(eligibleAlbums, rankings, 2).map((album) => ({
+        ...album,
+        matchConfidence: "lastfm",
+        matchReason: `Classifica album Last.fm: ${album.playcount} ascolti; MusicBrainz non disponibile.`,
+      }))
+      : listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 2);
     const discogsResult = await rateDiscogsSuggestionCandidates(albumCandidates);
     const albums = rankDiscogsSuggestionAlbums(discogsResult.albums);
     for (const album of albums) {
@@ -1808,10 +1852,12 @@ async function suggestListeningAlbums(button) {
       ? " · nessuna corrispondenza Last.fm: mostrate solo alternative correlate del catalogo MusicBrainz"
       : "";
     const coverage = history.partial ? " · campione parziale (massimo 1.000 ascolti)" : "";
-    const catalogNote = catalog.truncated
-      ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
-      : ` · catalogo completo: ${catalog.fetched} risultati`;
-    const catalogCache = catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "";
+    const catalogNote = catalog.unavailable
+      ? `MusicBrainz non disponibile (${catalog.unavailableReason}); classifica Last.fm usata come ripiego`
+      : `MusicBrainz ${catalog.pages} pagine${catalog.truncated
+        ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
+        : ` · catalogo completo: ${catalog.fetched} risultati`}`
+        + (catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "");
     const discogsNote = ` · Discogs ${discogsResult.rated}/${discogsResult.candidates} album valutati `
       + `(campione massimo ${DISCOGS_SUGGESTION_SAMPLE_SIZE} edizioni, ${discogsResult.requests}/`
       + `${discogsResult.requestLimit} richieste; ${discogsResult.unmatched} senza master canonico)`;
@@ -1826,7 +1872,7 @@ async function suggestListeningAlbums(button) {
     const artistCoverage = artistCount >= 10
       ? ` · obiettivo raggiunto: ${artistCount} artisti con un album ciascuno`
       : ` · trovati ${artistCount} artisti su ${candidates.length} candidati dopo aver esaminato ${expansion.seedsUsed} artisti di partenza${candidates.length === 30 ? " (limite di 30 candidati raggiunto)" : expansion.seedLimitReached ? " (limite di 30 seed raggiunto)" : expansion.exhausted ? " (seed disponibili esauriti)" : ""}`;
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${expansion.seedsUsed} artisti di partenza · ${albums.length} album candidati${artistCoverage}${relatedNote}${coverage} · ${exclusionCoverage} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}${discogsNote}${discogsWarnings.length ? ` · ${discogsWarnings.join("; ")}` : ""}.`;
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${expansion.seedsUsed} artisti di partenza · ${albums.length} album candidati${artistCoverage}${relatedNote}${coverage} · ${exclusionCoverage} · ${catalogNote} · ${discogsNote}${discogsWarnings.length ? ` · ${discogsWarnings.join("; ")}` : ""}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
