@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  albumPrimaryGenre,
+  albumSecondaryGenres,
   addPlaylistAlbums,
   bestSpotifyAlbumSuggestionMatch,
   decodeCoverArchive,
   encodeCoverArchive,
+  expandSimilarArtists,
   filterAlbums,
   filterUnheardArtists,
   filterListeningAlbumSuggestions,
@@ -15,6 +18,8 @@ import {
   musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
   normalizeHeardArtistNames,
+  NO_PRIMARY_GENRE_FILTER,
+  NO_SECONDARY_GENRE_FILTER,
   playlistAlbumRecords,
   primaryAlbumGenres,
   readLastFmAllTimeArtists,
@@ -123,6 +128,25 @@ test("searches genres and filters state while sorting ratings and names", () => 
   assert.deepEqual(filterAlbums(albums, { order: "manual" }).map((item) => item.id), ["a", "b"]);
 });
 
+test("filters primary and secondary genres independently, including albums without subgenres", () => {
+  const albums = [
+    album("a", { genres: ["Metal", "Death metal"], primary_genre: "Metal" }),
+    album("b", { genres: ["Metal"], primary_genre: "Metal" }),
+    album("c", { genres: ["Metal", "Black metal"], primary_genre: "Metal" }),
+    album("d", { genres: ["Rock", "Alternative rock"], primary_genre: "Rock" }),
+    album("e", { genres: [] }),
+  ];
+  assert.equal(albumPrimaryGenre(albums[0]), "Metal");
+  assert.deepEqual(albumSecondaryGenres(albums[0]), ["Death metal"]);
+  assert.deepEqual(filterAlbums(albums, { primaryGenre: "metal" }).map((item) => item.id), ["a", "b", "c"]);
+  assert.deepEqual(filterAlbums(albums, { primaryGenre: "metal", secondaryGenre: "death metal" })
+    .map((item) => item.id), ["a"]);
+  assert.deepEqual(filterAlbums(albums, { primaryGenre: "metal", secondaryGenre: NO_SECONDARY_GENRE_FILTER })
+    .map((item) => item.id), ["b"]);
+  assert.deepEqual(filterAlbums(albums, { secondaryGenre: "black metal" }).map((item) => item.id), ["c"]);
+  assert.deepEqual(filterAlbums(albums, { primaryGenre: NO_PRIMARY_GENRE_FILTER }).map((item) => item.id), ["e"]);
+});
+
 test("sorts by collection and keeps a local manual order while reordering filtered albums", () => {
   const albums = [
     album("a", { collections: ["Zeta"] }),
@@ -148,7 +172,26 @@ test("migrates v1 records and validates synced collections, tags, and cover hash
   assert.deepEqual(migrated[0].collections, []);
   assert.deepEqual(migrated[0].tags, []);
   assert.equal(migrated[0].cover_sha256, null);
+  assert.equal(migrated[0].primary_genre, "");
   assert.throws(() => validateAlbum(album("a", { tags: ["x".repeat(81)] })), /80 caratteri/);
+});
+
+test("migrates older genre lists by assigning their first genre as primary", () => {
+  const legacy = album("a", { genres: ["Death metal", "Progressive death metal"] });
+  delete legacy.primary_genre;
+  assert.equal(validateAlbum(legacy).primary_genre, "Death metal");
+  assert.equal(validateAlbum(album("b", {
+    genres: ["Death metal", "Progressive death metal"],
+    primary_genre: "death metal",
+  })).primary_genre, "Death metal");
+  assert.throws(() => validateAlbum(album("c", {
+    genres: ["Death metal"],
+    primary_genre: "Rock",
+  })), /deve essere assegnato/);
+  assert.deepEqual(validateDocument({
+    format: "accord-album-collection", version: 3,
+    albums: [album("current", { genres: ["Metal"], primary_genre: "Metal" })],
+  })[0].primary_genre, "Metal");
 });
 
 test("filters albums by collection and tag and searches both fields", () => {
@@ -208,7 +251,7 @@ test("searches playlist pages only until the first page containing matching name
   assert.deepEqual(matches.map((playlist) => playlist.id), ["0000000000000000000063"]);
 });
 
-test("keeps only the three most listened suggested albums per artist", () => {
+test("keeps only the most listened suggested album per artist", () => {
   const albums = Array.from({ length: 5 }, (_, index) => ({
     name: `Album ${index + 1}`,
     artist: "Artist",
@@ -220,11 +263,33 @@ test("keeps only the three most listened suggested albums per artist", () => {
     playcount: [3, 12, 8, 4, 1][index],
   }));
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
-    "Album 2", "Album 3", "Album 4",
+    "Album 2",
   ]);
 });
 
-test("falls back to up to three related catalog alternatives only when no direct album matches", () => {
+test("expands similar-artist discovery to 30 candidates before exhausting seeds", async () => {
+  const seeds = Array.from({ length: 8 }, (_, index) => ({ name: `Seed ${index + 1}` }));
+  const requested = [];
+  const result = await expandSimilarArtists(seeds, async (seed) => {
+    requested.push(seed.name);
+    const index = Number(seed.name.slice(-1));
+    return Array.from({ length: 5 }, (_, offset) => ({
+      name: `Related ${index}-${offset + 1}`,
+      match: 0.9 - offset / 100,
+    }));
+  });
+  assert.equal(requested.length, 6);
+  assert.equal(result.seedsUsed, 6);
+  assert.equal(result.artists.length, 30);
+  assert.equal(result.exhausted, false);
+
+  const exhausted = await expandSimilarArtists(seeds.slice(0, 2),
+    async (seed) => [{ name: `Related ${seed.name}`, match: 0.5 }]);
+  assert.equal(exhausted.artists.length, 2);
+  assert.equal(exhausted.exhausted, true);
+});
+
+test("falls back to one related catalog alternative per artist only when no direct album matches", () => {
   const albums = [
     { id: "other-1", name: "Other 1", artist: "Other", artist_names: ["Other"] },
     ...Array.from({ length: 4 }, (_, index) => ({
@@ -239,7 +304,7 @@ test("falls back to up to three related catalog alternatives only when no direct
     { name: "Other" },
   ];
   const alternatives = listeningAlbumSuggestions(albums, [], artists);
-  assert.deepEqual(alternatives.map((album) => album.id), ["artist-1", "artist-2", "artist-3", "other-1"]);
+  assert.deepEqual(alternatives.map((album) => album.id), ["artist-1", "other-1"]);
   assert.ok(alternatives.every((album) => album.matchConfidence === "related"));
   assert.ok(alternatives.every((album) => /non e' una corrispondenza Last\.fm/.test(album.matchReason)));
   const direct = listeningAlbumSuggestions(albums, [
@@ -399,7 +464,7 @@ test("caps aliases and collaborations by canonical credited artist", () => {
   const rankings = rows.map(([, artist, name, playcount]) => ({ artist, name, playcount }));
 
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
-    "Album 1", "Album 4", "Album 2",
+    "Album 1",
   ]);
 });
 
@@ -505,7 +570,9 @@ test("extracts and deduplicates only valid full albums from playlist items", () 
     { item: { ...albumItem, album: { ...albumItem.album, album_type: "single" } } },
     { item: { ...albumItem, album: { ...albumItem.album, id: "bad" } } },
   ]);
-  assert.deepEqual(albums, [album(id, { name: "Record", artist: "Artist", year: "2024" })]);
+  assert.deepEqual(albums, [album(id, {
+    name: "Record", artist: "Artist", year: "2024", primary_genre: "",
+  })]);
 
   const existing = album(id, { rating: 4, genres: ["Jazz"] });
   const result = addPlaylistAlbums([existing], albums);

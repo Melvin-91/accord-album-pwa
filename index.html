@@ -48,8 +48,11 @@
         <label class="search">Cerca
           <input id="searchInput" type="search" placeholder="Album, artista o genere" autocomplete="off">
         </label>
-        <label>Genere
-          <select id="genreFilter"><option value="">Tutti i generi</option></select>
+        <label>Genere principale
+          <select id="primaryGenreFilter"><option value="">Tutti i generi principali</option></select>
+        </label>
+        <label>Generi secondari
+          <select id="secondaryGenreFilter"><option value="">Tutti i generi secondari</option></select>
         </label>
         <label>Stato
           <select id="statusFilter">
@@ -316,6 +319,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=38"></script>
+    <script type="module" src="app.mjs?v=40"></script>
   </body>
 </html>

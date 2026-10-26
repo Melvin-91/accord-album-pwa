@@ -1,11 +1,16 @@
 import {
   addPlaylistAlbums,
+  albumPrimaryGenre,
+  albumSecondaryGenres,
   bestSpotifyAlbumSuggestionMatch,
+  expandSimilarArtists,
   filterListeningAlbumSuggestions,
   filterUnheardArtists,
   filterAlbums,
   moveAlbumInManualOrder,
   normalizeHeardArtistNames,
+  NO_PRIMARY_GENRE_FILTER,
+  NO_SECONDARY_GENRE_FILTER,
   decodeCoverArchive,
   encodeCoverArchive,
   listenBrainzRecommendations,
@@ -29,7 +34,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=22";
+} from "./core.mjs?v=24";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -472,17 +477,71 @@ function refreshGroupFilter(selector, key, allLabel) {
   $(selector).value = values.has(selected) ? selected : "";
 }
 
+function refreshGenreFilters() {
+  const primaryFilter = $("#primaryGenreFilter");
+  const secondaryFilter = $("#secondaryGenreFilter");
+  const selectedPrimary = primaryFilter.value;
+  const selectedSecondary = secondaryFilter.value;
+  const primaryCounts = new Map();
+  let albumsWithoutPrimary = 0;
+  for (const album of state.albums) {
+    const primary = albumPrimaryGenre(album);
+    if (!primary) {
+      albumsWithoutPrimary += 1;
+      continue;
+    }
+    const key = primary.toLocaleLowerCase();
+    const entry = primaryCounts.get(key) || { label: primary, count: 0 };
+    entry.count += 1;
+    primaryCounts.set(key, entry);
+  }
+  primaryFilter.replaceChildren(new Option(`Tutti i generi principali (${state.albums.length})`, ""));
+  primaryFilter.add(new Option(`Senza genere principale (${albumsWithoutPrimary})`, NO_PRIMARY_GENRE_FILTER));
+  for (const [key, entry] of [...primaryCounts].sort((left, right) => left[1].label.localeCompare(right[1].label))) {
+    primaryFilter.add(new Option(`${entry.label} (${entry.count})`, key));
+  }
+  if ([...primaryFilter.options].some((option) => option.value === selectedPrimary)) {
+    primaryFilter.value = selectedPrimary;
+  }
+
+  const primary = primaryFilter.value;
+  const scopedAlbums = primary === NO_PRIMARY_GENRE_FILTER
+    ? state.albums.filter((album) => !albumPrimaryGenre(album))
+    : primary ? state.albums.filter((album) => albumPrimaryGenre(album).toLocaleLowerCase() === primary)
+      : state.albums;
+  const secondaryCounts = new Map();
+  let albumsWithoutSecondary = 0;
+  for (const album of scopedAlbums) {
+    const secondaryGenres = albumSecondaryGenres(album);
+    if (!secondaryGenres.length) albumsWithoutSecondary += 1;
+    for (const genre of secondaryGenres) {
+      const key = genre.toLocaleLowerCase();
+      const entry = secondaryCounts.get(key) || { label: genre, count: 0 };
+      entry.count += 1;
+      secondaryCounts.set(key, entry);
+    }
+  }
+  secondaryFilter.replaceChildren(new Option(`Tutti i generi secondari (${scopedAlbums.length})`, ""));
+  secondaryFilter.add(new Option(`Nessun sottogenere (${albumsWithoutSecondary})`, NO_SECONDARY_GENRE_FILTER));
+  for (const [key, entry] of [...secondaryCounts].sort((left, right) => left[1].label.localeCompare(right[1].label))) {
+    secondaryFilter.add(new Option(`${entry.label} (${entry.count})`, key));
+  }
+  secondaryFilter.value = [...secondaryFilter.options].some((option) => option.value === selectedSecondary)
+    ? selectedSecondary : "";
+}
+
 function render() {
   finishManualDrag(false);
   ensureManualOrder();
   refreshSuggestionSeeds();
-  refreshGroupFilter("#genreFilter", "genres", "Tutti i generi");
+  refreshGenreFilters();
   refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
   refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
   const sortOrder = $("#sortOrder").value;
   const filteredAlbums = filterAlbums(state.albums, {
     search: $("#searchInput").value,
-    genre: $("#genreFilter").value,
+    primaryGenre: $("#primaryGenreFilter").value,
+    secondaryGenre: $("#secondaryGenreFilter").value,
     status: $("#statusFilter").value,
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
@@ -1257,8 +1316,8 @@ async function excludeAllTimeHeardArtists(result) {
   };
 }
 
-async function similarLastFmArtists(name) {
-  const data = await lastFmRequest({ method: "artist.getsimilar", artist: name, limit: "10", autocorrect: "0" });
+async function similarLastFmArtists(name, limit = 30) {
+  const data = await lastFmRequest({ method: "artist.getsimilar", artist: name, limit: String(limit), autocorrect: "0" });
   let rows = data.similarartists?.artist || [];
   if (!Array.isArray(rows)) rows = [rows];
   return rows.flatMap((artist) => {
@@ -1270,6 +1329,31 @@ async function similarLastFmArtists(name) {
 }
 
 async function searchListeningMusicBrainzAlbums(artists) {
+  const unique = new Map(artists.map((artist) => [artist.name.trim().toLocaleLowerCase(), artist]));
+  const distinctArtists = [...unique.values()];
+  if (!distinctArtists.length) throw new Error("MusicBrainz richiede almeno un artista da cercare.");
+  const catalogs = [];
+  for (let index = 0; index < distinctArtists.length; index += 10) {
+    catalogs.push(await searchListeningMusicBrainzAlbumBatch(distinctArtists.slice(index, index + 10)));
+  }
+  const albums = new Map();
+  for (const catalog of catalogs) {
+    for (const album of catalog.albums) {
+      if (!albums.has(album.id)) albums.set(album.id, album);
+    }
+  }
+  const knownTotals = catalogs.map((catalog) => catalog.total);
+  return {
+    albums: [...albums.values()],
+    truncated: catalogs.some((catalog) => catalog.truncated),
+    total: knownTotals.every(Number.isFinite) ? knownTotals.reduce((sum, value) => sum + value, 0) : null,
+    fetched: catalogs.reduce((sum, catalog) => sum + catalog.fetched, 0),
+    pages: catalogs.reduce((sum, catalog) => sum + catalog.pages, 0),
+    cached: catalogs.every((catalog) => catalog.cached),
+  };
+}
+
+async function searchListeningMusicBrainzAlbumBatch(artists) {
   const cacheKey = JSON.stringify(artists.map((artist) => artist.name.trim().toLocaleLowerCase()).sort());
   const now = Date.now();
   const cached = listeningCatalogCache.get(cacheKey);
@@ -1408,23 +1492,16 @@ async function suggestListeningAlbums(button) {
       localStorage.setItem(key, $(selector).value.trim());
     }
     const excluded = new Set(filters.excludedArtists.map((value) => value.toLocaleLowerCase()));
-    const seeds = history.artists.filter((artist) => !excluded.has(artist.name.toLocaleLowerCase())).slice(0, 5);
+    const seeds = history.artists.filter((artist) => !excluded.has(artist.name.toLocaleLowerCase()));
     if (!history.trackCount || !seeds.length) throw new Error("Nessun ascolto Last.fm utile nel periodo selezionato.");
-    const similar = new Map();
-    for (const seed of seeds) {
-      for (const candidate of await similarLastFmArtists(seed.name)) {
-        const key = candidate.name.toLocaleLowerCase();
-        if (excluded.has(key) || seeds.some((entry) => entry.name.toLocaleLowerCase() === key)) continue;
-        const entry = similar.get(key) || { ...candidate, seeds: [], support: 0 };
-        entry.support += 1;
-        entry.seeds.push(seed.name);
-        entry.match = Math.max(entry.match, candidate.match);
-        similar.set(key, entry);
-      }
-    }
-    const candidates = filterUnheardArtists([...similar.values()], exclusion.names)
-      .sort((a, b) => b.support - a.support || b.match - a.match || a.name.localeCompare(b.name))
-      .slice(0, 10);
+    const expansion = await expandSimilarArtists(seeds,
+      (seed) => similarLastFmArtists(seed.name, 30), {
+        maximumArtists: 30,
+        maximumSeeds: 30,
+        initialSeedCount: 5,
+        excludedNames: [...excluded, ...exclusion.names],
+      });
+    const candidates = filterUnheardArtists(expansion.artists, exclusion.names);
     if (!candidates.length) throw new Error("Last.fm non ha trovato artisti compatibili con i filtri di esclusione.");
     const rankings = [];
     for (const artist of candidates) {
@@ -1454,7 +1531,13 @@ async function suggestListeningAlbums(button) {
       heardArtists: exclusion.names,
       ...filters,
     });
-    const albums = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 3);
+    const albums = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 1);
+    const candidateNames = new Set(candidates.map((artist) => artist.name.toLocaleLowerCase()));
+    const suggestedArtistNames = new Set(albums.flatMap((album) =>
+      (Array.isArray(album.artist_names) ? album.artist_names : [album.artist])
+        .map((artist) => String(artist || "").trim().toLocaleLowerCase())
+        .filter((artist) => candidateNames.has(artist))));
+    const artistCount = suggestedArtistNames.size;
     renderListeningAlbumSuggestions(albums);
     const relatedNote = albums.some((album) => album.matchConfidence === "related")
       ? " · nessuna corrispondenza Last.fm: mostrate solo alternative correlate del catalogo MusicBrainz"
@@ -1473,7 +1556,10 @@ async function suggestListeningAlbums(button) {
         : ` · Spotify con data: ${exclusion.spotifyCount} artisti` +
           (exclusion.legacyCount ? `; ${exclusion.legacyCount} senza data, esclusi solo con tutto lo storico` : "") +
           (exclusion.spotifyCount || exclusion.legacyCount ? " (copertura in base ai file importati)" : "");
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${seeds.length} artisti di partenza · ${albums.length} album candidati${relatedNote}${coverage} · ${exclusionCoverage}${spotifyNote} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
+    const artistCoverage = artistCount >= 10
+      ? ` · obiettivo raggiunto: ${artistCount} artisti con un album ciascuno`
+      : ` · trovati ${artistCount} artisti su ${candidates.length} candidati dopo aver esaminato ${expansion.seedsUsed} artisti di partenza${candidates.length === 30 ? " (limite di 30 candidati raggiunto)" : expansion.seedLimitReached ? " (limite di 30 seed raggiunto)" : expansion.exhausted ? " (seed disponibili esauriti)" : ""}`;
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${expansion.seedsUsed} artisti di partenza · ${albums.length} album candidati${artistCoverage}${relatedNote}${coverage} · ${exclusionCoverage}${spotifyNote} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
@@ -1981,7 +2067,7 @@ function updateAlbum(id, changes) {
   }
 }
 
-for (const input of [$("#searchInput"), $("#genreFilter"), $("#statusFilter"),
+for (const input of [$("#searchInput"), $("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
   $("#collectionFilter"), $("#tagFilter")]) {
   input.addEventListener("input", render);
   input.addEventListener("change", render);
@@ -2524,9 +2610,9 @@ function encodeBase64(bytes) {
 async function writeRemote(owner, records, sha, branch) {
   const document = {
     format: "accord-album-collection",
-    version: 2,
+    version: 3,
     updated_at: new Date().toISOString(),
-    albums: validateDocument({ format: "accord-album-collection", version: 2, albums: records }),
+    albums: validateDocument({ format: "accord-album-collection", version: 3, albums: records }),
   };
   const bytes = new TextEncoder().encode(JSON.stringify(document, null, 2));
   const payload = { message: "Sync Accord album collection", content: encodeBase64(bytes), branch };

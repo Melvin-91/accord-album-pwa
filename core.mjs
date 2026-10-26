@@ -1,6 +1,9 @@
 export const ALBUM_STATES = new Set(["queued", "listening", "heard", "liked", "hidden"]);
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
-export const ALBUM_FIELDS = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
+const ALBUM_FIELDS_V2 = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
+export const ALBUM_FIELDS = [...ALBUM_FIELDS_V2, "primary_genre"];
+export const NO_PRIMARY_GENRE_FILTER = "__accord_no_primary_genre__";
+export const NO_SECONDARY_GENRE_FILTER = "__accord_no_secondary_genre__";
 
 export function musicBrainzCoverArtUrl(mbid) {
   const id = String(mbid || "").trim();
@@ -72,7 +75,7 @@ export function spotifyRedirectUriForPage(pageUrl) {
 
 export function validateAlbum(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
-      || ![ALBUM_FIELDS_V1, ALBUM_FIELDS].some((fields) =>
+      || ![ALBUM_FIELDS_V1, ALBUM_FIELDS_V2, ALBUM_FIELDS].some((fields) =>
         Object.keys(value).sort().join("|") === [...fields].sort().join("|"))) {
     throw new Error("Record album non valido.");
   }
@@ -108,6 +111,15 @@ export function validateAlbum(value) {
     }
   }
   if (genres.length > 20) throw new Error("Un album puo' avere al massimo 20 generi.");
+  if (typeof value.primary_genre !== "string" && Object.hasOwn(value, "primary_genre")) {
+    throw new Error("Genere principale album non valido.");
+  }
+  const requestedPrimary = String(value.primary_genre || "").trim().replace(/\s+/g, " ");
+  const primaryGenre = genres.find((genre) => genre.toLocaleLowerCase() === requestedPrimary.toLocaleLowerCase())
+    || genres[0] || "";
+  if (requestedPrimary && !genres.some((genre) => genre.toLocaleLowerCase() === requestedPrimary.toLocaleLowerCase())) {
+    throw new Error("Il genere principale deve essere assegnato all'album.");
+  }
   const groups = {};
   for (const key of ["collections", "tags"]) {
     if (!Array.isArray(value[key]) || value[key].some((label) => typeof label !== "string")) {
@@ -129,12 +141,12 @@ export function validateAlbum(value) {
   }
   if (value.cover_sha256 !== null && (typeof value.cover_sha256 !== "string"
       || !/^[0-9a-f]{64}$/.test(value.cover_sha256))) throw new Error("Impronta copertina album non valida.");
-  return { ...value, genres, ...groups };
+  return { ...value, genres, primary_genre: primaryGenre, ...groups };
 }
 
 export function validateDocument(document) {
   if (!document || document.format !== "accord-album-collection"
-      || ![1, 2].includes(document.version) || !Array.isArray(document.albums)) {
+      || ![1, 2, 3].includes(document.version) || !Array.isArray(document.albums)) {
     throw new Error("File del repository non supportato.");
   }
   const albums = document.albums.map(validateAlbum);
@@ -539,7 +551,66 @@ export async function readMusicBrainzCatalog(fetchPage, maximum = 300) {
   return { groups, total, fetched, pages, truncated };
 }
 
-export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
+export async function expandSimilarArtists(seeds, loadSimilarArtists, {
+  maximumArtists = 30, maximumSeeds = 30, initialSeedCount = 5, excludedNames = [],
+} = {}) {
+  if (!Array.isArray(seeds) || typeof loadSimilarArtists !== "function"
+      || !Number.isInteger(maximumArtists) || maximumArtists < 1
+      || !Number.isInteger(maximumSeeds) || maximumSeeds < 1
+      || !Number.isInteger(initialSeedCount) || initialSeedCount < 1
+      || !Array.isArray(excludedNames) || excludedNames.some((name) => typeof name !== "string")) {
+    throw new Error("Parametri di ricerca artisti simili non validi.");
+  }
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const availableSeeds = [];
+  const seenSeeds = new Set();
+  for (const seed of seeds) {
+    const name = String(seed?.name || "").trim();
+    const key = normalize(name);
+    if (key && !seenSeeds.has(key)) {
+      seenSeeds.add(key);
+      availableSeeds.push({ ...seed, name });
+    }
+  }
+  const limitedSeeds = availableSeeds.slice(0, maximumSeeds);
+  const excluded = new Set([...excludedNames, ...limitedSeeds.map((seed) => seed.name)].map(normalize));
+  const related = new Map();
+  let seedsUsed = 0;
+  for (const seed of limitedSeeds) {
+    const rows = await loadSimilarArtists(seed);
+    if (!Array.isArray(rows)) throw new Error("Risposta Last.fm degli artisti simili non valida.");
+    seedsUsed += 1;
+    const seenForSeed = new Set();
+    for (const candidate of rows) {
+      const name = String(candidate?.name || "").trim();
+      const key = normalize(name);
+      const match = Number(candidate?.match);
+      if (!key || seenForSeed.has(key) || !Number.isFinite(match) || match <= 0 || match > 1) continue;
+      seenForSeed.add(key);
+      const entry = related.get(key) || { ...candidate, name, seeds: [], support: 0 };
+      entry.support += 1;
+      entry.seeds.push(seed.name);
+      entry.match = Math.max(entry.match, match);
+      related.set(key, entry);
+    }
+    const eligibleCount = [...related.keys()].filter((key) => !excluded.has(key)).length;
+    if (seedsUsed >= Math.min(initialSeedCount, limitedSeeds.length) && eligibleCount >= maximumArtists) break;
+  }
+  const artists = [...related.entries()]
+    .filter(([key]) => !excluded.has(key))
+    .map(([, artist]) => artist)
+    .sort((left, right) => right.support - left.support || right.match - left.match
+      || normalize(left.name).localeCompare(normalize(right.name)))
+    .slice(0, maximumArtists);
+  return {
+    artists,
+    seedsUsed,
+    exhausted: seedsUsed === availableSeeds.length,
+    seedLimitReached: availableSeeds.length > maximumSeeds && seedsUsed === maximumSeeds,
+  };
+}
+
+export function topListenedAlbums(albums, rankings, maximumPerArtist = 1) {
   if (!Array.isArray(albums) || !Array.isArray(rankings)
       || !Number.isInteger(maximumPerArtist) || maximumPerArtist < 1) {
     throw new Error("Classifica album non valida.");
@@ -569,7 +640,9 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
     const limitKeys = new Set(artists.flatMap((artist, artistIndex) => {
       if (!artist) return [];
       const mbid = artistMbids[artistIndex];
-      return [validMbid(mbid) ? `mbid:${String(mbid).toLocaleLowerCase()}` : `name:${artist}`];
+      const keys = [`name:${artist}`];
+      if (validMbid(mbid)) keys.push(`mbid:${String(mbid).toLocaleLowerCase()}`);
+      return keys;
     }));
     const albumMbid = validMbid(album.mbid || album.sourceId) ? String(album.mbid || album.sourceId).toLocaleLowerCase() : "";
     const found = entries.flatMap((entry) => {
@@ -594,9 +667,15 @@ export function topListenedAlbums(albums, rankings, maximumPerArtist = 3) {
     rankCandidates.get(match.rankKey).add(match.album.id || `index:${match.index}`);
   }
   const counts = new Map();
+  const selectedRankKeys = new Set();
   return matches.sort((left, right) => right.score - left.score || left.index - right.index)
     .filter((match) => {
+      if (selectedRankKeys.has(match.rankKey)) {
+        return match.evidence === "mbid-conflict"
+          || (rankCandidates.get(match.rankKey)?.size || 0) > 1;
+      }
       if (match.limitKeys.some((key) => (counts.get(key) || 0) >= maximumPerArtist)) return false;
+      selectedRankKeys.add(match.rankKey);
       for (const key of match.limitKeys) counts.set(key, (counts.get(key) || 0) + 1);
       return true;
     })
@@ -655,7 +734,7 @@ function relatedCatalogAlternatives(albums, artists, maximumPerArtist) {
   return alternatives;
 }
 
-export function listeningAlbumSuggestions(albums, rankings, artists, maximumPerArtist = 3) {
+export function listeningAlbumSuggestions(albums, rankings, artists, maximumPerArtist = 1) {
   const matches = topListenedAlbums(albums, rankings, maximumPerArtist);
   return matches.length ? matches : relatedCatalogAlternatives(albums, artists, maximumPerArtist);
 }
@@ -748,12 +827,33 @@ export function threeWayMerge(base, local, remote, choices = {}) {
   return { albums: [...result.values()].sort((a, b) => a.id.localeCompare(b.id)), conflicts };
 }
 
+const normalizeAlbumGenre = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+
+export function albumPrimaryGenre(album) {
+  const genres = Array.isArray(album?.genres) ? album.genres : [];
+  const requested = normalizeAlbumGenre(album?.primary_genre);
+  return genres.find((genre) => normalizeAlbumGenre(genre) === requested) || genres[0] || "";
+}
+
+export function albumSecondaryGenres(album) {
+  const primary = normalizeAlbumGenre(albumPrimaryGenre(album));
+  return (Array.isArray(album?.genres) ? album.genres : [])
+    .filter((genre) => normalizeAlbumGenre(genre) !== primary);
+}
+
 export function filterAlbums(albums, {
-  search = "", genre = "", status = "", collection = "", tag = "", order = "artist",
+  search = "", genre = "", primaryGenre = "", secondaryGenre = "",
+  status = "", collection = "", tag = "", order = "artist",
 } = {}) {
   const query = search.trim().toLocaleLowerCase();
+  const legacyGenre = normalizeAlbumGenre(genre);
   const result = albums.filter((album) => (!status || album.status === status)
-    && (!genre || album.genres.some((value) => value.toLocaleLowerCase() === genre))
+    && (!legacyGenre || album.genres.some((value) => normalizeAlbumGenre(value) === legacyGenre))
+    && (!primaryGenre || (primaryGenre === NO_PRIMARY_GENRE_FILTER
+      ? !albumPrimaryGenre(album) : normalizeAlbumGenre(albumPrimaryGenre(album)) === normalizeAlbumGenre(primaryGenre)))
+    && (!secondaryGenre || (secondaryGenre === NO_SECONDARY_GENRE_FILTER
+      ? !albumSecondaryGenres(album).length
+      : albumSecondaryGenres(album).some((value) => normalizeAlbumGenre(value) === normalizeAlbumGenre(secondaryGenre))))
     && (!collection || album.collections.some((value) => value.toLocaleLowerCase() === collection))
     && (!tag || album.tags.some((value) => value.toLocaleLowerCase() === tag))
     && (!query || [album.name, album.artist, ...album.genres, ...album.collections, ...album.tags]

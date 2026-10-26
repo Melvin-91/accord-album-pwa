@@ -9,8 +9,13 @@ contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 La pagina e l'installazione mobile usano l'icona del gatto in PNG da 192 e
 512 pixel, con percorsi relativi al sito GitHub Pages.
 
-La raccolta mostra copertina, stato, anno, generi, voto, collezioni e tag.
-I record v1 sono compatibili e vengono migrati al successivo aggiornamento.
+La raccolta mostra copertina, stato, anno, genere principale, generi secondari,
+voto, collezioni e tag. I filtri separano il genere principale dai
+sottogeneri; scegliendo un principale, il secondo menu propone i relativi
+generi secondari e l'opzione **Nessun sottogenere**.
+I documenti v1 e v2 restano compatibili: il primo genere della lista diventa
+principale quando il record non ne specifica uno. La versione corrente
+sincronizza il genere principale insieme agli altri campi della raccolta.
 Le miniature JPEG sono conservate in `covers.bin` nel repository privato,
 verificate con SHA-256 e salvate in IndexedDB per l'uso offline. La
 sincronizzazione trasferisce solo i campi musicali previsti: non include
@@ -22,12 +27,15 @@ Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
 oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
-ascolti e MusicBrainz per il catalogo. Se nessun album corrisponde alle
-classifiche Last.fm, la PWA mostra fino a tre alternative correlate per artista
-simile, etichettate come tali e non come corrispondenze dirette. Username e
-filtri restano nel profilo browser; la cronologia non viene salvata o
-sincronizzata. I risultati vengono abbinati a Spotify con una singola ricerca
-solo dopo la scelta dell'utente.
+ascolti e MusicBrainz per il catalogo. La ricerca propone un solo album per
+artista, scelto in base agli ascolti. Se non trova almeno dieci artisti,
+amplia la ricerca fino a 30
+artisti seed e 30 candidati e segnala se esaurisce il limite. Quando mancano
+corrispondenze dirette nel catalogo, propone al massimo un'alternativa
+correlata per artista, etichettata come tale e non come corrispondenza diretta.
+Username e filtri restano nel profilo browser; la cronologia non viene salvata
+o sincronizzata. I risultati vengono abbinati a Spotify con una singola
+ricerca solo dopo la scelta dell'utente.
 Dalla scheda Raccolta si
 possono anche cercare album su Spotify per titolo, artista, ID o link e
 aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.
@@ -83,19 +91,26 @@ ultimi 7, 30, 90 o 365 giorni, tutto lo storico oppure un intervallo di date
 personalizzato. La PWA legge al massimo 1000 scrobble per richiesta (cinque
 pagine); se la cronologia è più ampia, il risultato indica che il campione è
 parziale. Last.fm fornisce artisti affini e le classifiche dei loro
-album più ascoltati; MusicBrainz fornisce catalogo e generi. Vengono proposti
-al massimo tre album più ascoltati per artista. Filtri opzionali
+album più ascoltati; MusicBrainz fornisce catalogo e generi. Viene proposto un
+solo album per artista: quello più ascoltato nella classifica Last.fm. La
+ricerca parte da cinque artisti e si estende, se serve, fino a 30 seed e 30
+artisti candidati; se non trova almeno dieci proposte, il riepilogo indica
+quanti artisti sono stati esaminati e se la ricerca ha raggiunto il limite.
+Filtri opzionali
 includono/escludono artisti e generi; un filtro di inclusione richiede generi presenti nel catalogo.
 Gli album già nella raccolta o già ascoltati nella cronologia consultata
 (titolo e artista accreditato) vengono esclusi; se il campione Last.fm è
-parziale, possono restare fuori ascolti più vecchi. Il catalogo MusicBrainz viene consultato in massimo tre pagine da
-100 risultati, a distanza di almeno 1,1 secondi; il conteggio e gli eventuali
+parziale, possono restare fuori ascolti più vecchi. Il catalogo MusicBrainz
+viene consultato in gruppi di massimo dieci artisti, fino a tre pagine da 100
+risultati per gruppo e a distanza di almeno 1,1 secondi; il conteggio aggregato e gli eventuali
 campioni parziali sono mostrati. I risultati sono riutilizzati per 15 minuti
 in una cache solo in memoria, limitata a otto query.
 
-Il limite massimo di tre album viene applicato a ogni artista accreditato,
-unificando le varianti tramite MBID MusicBrainz e usando il nome come ripiego;
-fra i candidati restano i più ascoltati. L'abbinamento usa l'MBID
+Il limite di un album viene applicato a ogni artista accreditato, unificando le
+varianti tramite MBID MusicBrainz e usando il nome come ripiego; fra i
+candidati resta quello più ascoltato. Le diverse edizioni dello stesso album
+restano selezionabili quando il catalogo non consente di distinguerle.
+L'abbinamento usa l'MBID
 Last.fm/MusicBrainz quando coincide, altrimenti artista e titolo esatti.
 Le schede caricano su richiesta la copertina Spotify della corrispondenza più
 coerente per titolo, artista e anno quando entrano nell'area visibile. Se
