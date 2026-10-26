@@ -20,6 +20,7 @@ button { cursor: pointer; padding: 9px 14px; font-weight: 600; }
 button:hover { background: #303030; border-color: #555; }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 input, select, textarea { min-height: 40px; padding: 8px 10px; width: 100%; }
+input::placeholder, textarea::placeholder { color: #999; font-style: italic; opacity: 1; }
 label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px max(20px, calc((100vw - 1120px) / 2)); border-bottom: 1px solid #202020; background: #090909; position: sticky; top: 0; z-index: 2; }
 .brand, .header-actions, .dialog-heading, .dialog-actions { display: flex; align-items: center; gap: 12px; }
@@ -40,6 +41,7 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .tab-intro { display: flex; justify-content: space-between; align-items: end; gap: 30px; }
 .tab-intro h2 { margin: 6px 0 0; font-size: clamp(24px, 4vw, 36px); line-height: 1.15; }
 .tab-intro > p { max-width: 410px; margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.placeholder-help { display: block; margin-top: 8px; font-size: 12px; }
 .intro { padding: 42px 0 28px; }
 .playlist-import { display: flex; flex-direction: column; align-items: stretch; gap: 14px; margin: 0 0 16px; padding: 18px 20px; background: var(--surface); border: 1px solid #262626; border-radius: 16px; }
 .playlist-import h2 { margin: 4px 0; font-size: 17px; }
@@ -53,9 +55,6 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .lastfm-suggestion-controls button { grid-column: 1 / -1; justify-self: start; }
 .lastfm-suggestion-date-range { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .lastfm-suggestion-date-range[hidden] { display: none; }
-.spotify-history-import { display: grid; gap: 10px; padding: 12px; border: 1px solid #353535; border-radius: 10px; }
-.spotify-history-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.spotify-history-import .summary { margin: 0; }
 .suggestion-controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
 .suggestion-controls label { flex: 1; }
 .suggestion-controls button { flex: none; }

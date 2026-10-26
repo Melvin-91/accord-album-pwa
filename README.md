@@ -13,6 +13,8 @@ La raccolta mostra copertina, stato, anno, genere principale, generi secondari,
 voto, collezioni e tag. I filtri separano il genere principale dai
 sottogeneri; scegliendo un principale, il secondo menu propone i relativi
 generi secondari e l'opzione **Nessun sottogenere**.
+Nei campi, il testo grigio e corsivo è un esempio e non viene salvato finché
+non lo inserisci.
 I documenti v1 e v2 restano compatibili: il primo genere della lista diventa
 principale quando il record non ne specifica uno. La versione corrente
 sincronizza il genere principale insieme agli altri campi della raccolta.
@@ -27,7 +29,8 @@ Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
 oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
-ascolti e MusicBrainz per il catalogo. La ricerca propone un solo album per
+ascolti e MusicBrainz per il catalogo; non importa file di cronologia Spotify.
+La ricerca propone un solo album per
 artista, scelto in base agli ascolti. Se non trova almeno dieci artisti,
 amplia la ricerca fino a 30
 artisti seed e 30 candidati e segnala se esaurisce il limite. Quando mancano

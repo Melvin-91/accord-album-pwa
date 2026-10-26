@@ -11,7 +11,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=15">
+    <link rel="stylesheet" href="style.css?v=16">
     <title>Accord · La mia raccolta</title>
   </head>
   <body>
@@ -30,7 +30,7 @@
     <main>
       <section class="intro tab-intro">
         <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua musica, su desktop e telefono.</h2></div>
-        <p>Gestisci la raccolta e scopri nuovi suggerimenti. Se configuri il repository privato, Accord sincronizza la raccolta e archivia lì le copertine.</p>
+        <p>Gestisci la raccolta e scopri nuovi suggerimenti. Se configuri il repository privato, Accord sincronizza la raccolta e archivia lì le copertine.<span class="placeholder-help">Il testo grigio e corsivo nei campi è solo un esempio: non è inserito e scompare quando scrivi.</span></p>
       </section>
 
       <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
@@ -93,7 +93,7 @@
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Accord usa gli ascolti Last.fm del periodo selezionato per trovare artisti simili e suggerire fino a tre album per ciascuno. Puoi escludere gli artisti ascoltati in un periodo diverso. MusicBrainz fornisce il catalogo e i generi; per ridurre le richieste, la ricerca considera al massimo 1.000 ascolti e 5 artisti.</p>
+            <p>Accord usa gli ascolti Last.fm del periodo selezionato per trovare artisti simili e consiglia un solo album per artista, scelto in base ai suoi ascolti. Se necessario amplia la ricerca per trovare almeno dieci artisti, fino a 30 seed e 30 candidati. Puoi escludere gli artisti presenti in un altro periodo Last.fm. MusicBrainz fornisce il catalogo e i generi; il campione di partenza considera al massimo 1.000 ascolti.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -147,17 +147,6 @@
                 </select>
               </label>
               <button id="lastfmSuggestionButton" class="secondary" type="button">Suggerisci album</button>
-            </div>
-            <div class="spotify-history-import">
-              <label>File Spotify Extended Streaming History (JSON)
-                <input id="spotifyHistoryFiles" type="file" accept=".json,application/json" multiple>
-              </label>
-              <div class="spotify-history-actions">
-                <button id="spotifyHistoryImportButton" class="secondary" type="button">Importa artisti ascoltati</button>
-                <button id="spotifyHistoryClearButton" class="secondary" type="button">Rimuovi dati Spotify</button>
-              </div>
-              <p id="spotifyHistoryStatus" class="summary" role="status" aria-live="polite"></p>
-              <p class="notice">Seleziona tutti i file dell’esportazione, anche se sono divisi in più gruppi. Accord li legge solo in memoria e conserva nel browser il nome di ciascun artista e la data del suo ultimo ascolto. I file originali e la cronologia completa non vengono caricati né sincronizzati con GitHub.</p>
             </div>
             <p class="notice">Il nome utente e i filtri restano nel profilo del browser. Accord invia la chiave API solo a Last.fm; credenziali e cronologia non vengono sincronizzate con GitHub. Gli album di MusicBrainz vengono abbinati a Spotify solo quando ne aggiungi uno. Se trova una sola corrispondenza verificata, Accord la inserisce automaticamente nella raccolta.</p>
           </section>
@@ -319,6 +308,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=40"></script>
+    <script type="module" src="app.mjs?v=41"></script>
   </body>
 </html>
