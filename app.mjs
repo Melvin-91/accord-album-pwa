@@ -2,6 +2,7 @@ import {
   addPlaylistAlbums,
   albumPrimaryGenre,
   albumSecondaryGenres,
+  aggregateDiscogsEditionRatings,
   bestSpotifyAlbumSuggestionMatch,
   expandSimilarArtists,
   filterListeningAlbumSuggestions,
@@ -21,16 +22,18 @@ import {
   listeningAlbumSuggestions,
   readMusicBrainzCatalog,
   readLastFmAllTimeArtists,
+  rankDiscogsSuggestionAlbums,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
   topTracksPerAlbum,
+  topDiscogsVersions,
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=25";
+} from "./core.mjs?v=26";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -39,9 +42,15 @@ const ACTIVE_VIEW_TAB_KEY = "accord-active-view-tab";
 const SUGGESTION_RETURN_KEY = "accord-spotify-suggestion-return";
 const REPOSITORY = "accord-music-data";
 const API = "https://api.github.com";
+const DISCOGS_API = "https://api.discogs.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
 const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
+const DISCOGS_SUGGESTION_CACHE_KEY = "accord-discogs-suggestion-cache-v1";
+const DISCOGS_SUGGESTION_CACHE_AGE = 14 * 24 * 60 * 60 * 1000;
+const DISCOGS_SUGGESTION_SAMPLE_SIZE = 5;
+const DISCOGS_SUGGESTION_REQUEST_LIMIT = 200;
+const DISCOGS_SUGGESTION_PAGES_LIMIT = 20;
 localStorage.removeItem("accord-spotify-heard-artists-v1");
 localStorage.removeItem("accord-spotify-heard-artist-last-played-v1");
 const suggestedSourceAlbums = new Map();
@@ -56,6 +65,9 @@ const listeningCatalogCache = new Map();
 const allTimeArtistCache = new Map();
 let suggestedMatchAlbumId = null;
 let lastListeningCatalogRequestAt = 0;
+let lastDiscogsSuggestionRequestAt = 0;
+let discogsSuggestionCache;
+let discogsSuggestionCacheWarning = "";
 let suggestionCoverObserver = null;
 let suggestionCoverTokenPromise = null;
 let suggestionCoverJobsActive = 0;
@@ -1408,6 +1420,281 @@ async function searchListeningMusicBrainzAlbumBatch(artists) {
     pages: catalog.pages, cached: catalog.cached };
 }
 
+class DiscogsSuggestionApiError extends Error {}
+class DiscogsSuggestionBudgetError extends Error {}
+
+function getDiscogsSuggestionCache() {
+  if (discogsSuggestionCache) return discogsSuggestionCache;
+  const empty = { version: 1, searches: {}, masters: {}, releases: {} };
+  const serialized = localStorage.getItem(DISCOGS_SUGGESTION_CACHE_KEY);
+  if (!serialized) {
+    discogsSuggestionCache = empty;
+    return discogsSuggestionCache;
+  }
+  try {
+    const cached = JSON.parse(serialized);
+    const isRecord = (value) => value && typeof value === "object" && !Array.isArray(value);
+    if (cached?.version === 1 && isRecord(cached.searches) && isRecord(cached.masters)
+        && isRecord(cached.releases)) {
+      discogsSuggestionCache = cached;
+      return discogsSuggestionCache;
+    }
+    discogsSuggestionCacheWarning = "Cache Discogs con formato non valido; ricostruita durante la ricerca.";
+  } catch (error) {
+    discogsSuggestionCacheWarning = `Cache Discogs non leggibile: ${error.message}`;
+  }
+  discogsSuggestionCache = empty;
+  return discogsSuggestionCache;
+}
+
+function saveDiscogsSuggestionCache() {
+  localStorage.setItem(DISCOGS_SUGGESTION_CACHE_KEY, JSON.stringify(discogsSuggestionCache));
+}
+
+function recentDiscogsEntry(entry) {
+  return entry && Number.isFinite(entry.savedAt) && entry.savedAt <= Date.now()
+    && Date.now() - entry.savedAt < DISCOGS_SUGGESTION_CACHE_AGE;
+}
+
+async function discogsSuggestionRequest(path, parameters, state) {
+  if (state.requests >= DISCOGS_SUGGESTION_REQUEST_LIMIT) {
+    throw new DiscogsSuggestionBudgetError("Raggiunto il limite di richieste Discogs per questa ricerca.");
+  }
+  const delay = 2600 - (Date.now() - lastDiscogsSuggestionRequestAt);
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+  const url = new URL(path, DISCOGS_API);
+  for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, String(value));
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new DiscogsSuggestionApiError(`Discogs non raggiungibile: ${error.message}`);
+    }
+    throw error;
+  }
+  lastDiscogsSuggestionRequestAt = Date.now();
+  state.requests += 1;
+  if (!response.ok) {
+    throw new DiscogsSuggestionApiError(
+      response.status === 429
+        ? "Discogs ha raggiunto il limite di richieste."
+        : `Discogs ha risposto con HTTP ${response.status}.`,
+    );
+  }
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new DiscogsSuggestionApiError("Risposta Discogs non leggibile.");
+    throw error;
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new DiscogsSuggestionApiError("Risposta Discogs non valida.");
+  }
+  return data;
+}
+
+function normalizeDiscogsTitle(value) {
+  return String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[\[(][^\])]*(?:deluxe|expanded|anniversary|reissue|remastered|remaster|edition|bonus|mono|stereo)[^\])]*[\])]/g, " ")
+    .replace(/\s[-–—:]\s[^-–—:]*(?:deluxe|expanded|anniversary|reissue|remastered|remaster|edition|bonus|mono|stereo)[^-–—:]*$/g, " ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function findDiscogsSuggestionMaster(album, state, cache) {
+  const artist = String(album.artist_names?.[0] || album.artist || "").trim();
+  const queryKey = JSON.stringify([
+    normalizeDiscogsTitle(artist),
+    normalizeDiscogsTitle(album.name),
+    String(album.year || ""),
+  ]);
+  const cached = cache.searches[queryKey];
+  if (recentDiscogsEntry(cached)) {
+    return cached.masterId === null || Number.isSafeInteger(cached.masterId) ? cached.masterId : null;
+  }
+  const parameters = new URLSearchParams({
+    artist,
+    release_title: album.name,
+    type: "master",
+    per_page: "20",
+    sort: "have",
+    sort_order: "desc",
+  });
+  const data = await discogsSuggestionRequest(`/database/search?${parameters}`, {}, state);
+  if (!Array.isArray(data.results)) throw new DiscogsSuggestionApiError("Ricerca master Discogs senza risultati validi.");
+  const artistKey = normalizeDiscogsTitle(artist);
+  const albumKey = normalizeDiscogsTitle(album.name);
+  const matches = data.results.flatMap((result) => {
+    if (typeof result?.title !== "string") return [];
+    let title = result.title;
+    const separator = title.indexOf(" - ");
+    if (separator > 0 && normalizeDiscogsTitle(title.slice(0, separator)) === artistKey) {
+      title = title.slice(separator + 3);
+    }
+    if (normalizeDiscogsTitle(title) !== albumKey) return [];
+    const id = Number(result.master_id || result.id);
+    return Number.isSafeInteger(id) && id > 0 ? [{ id, year: String(result.year || "") }] : [];
+  });
+  const matchingYear = album.year ? matches.filter((match) => match.year === String(album.year)) : [];
+  const candidates = matchingYear.length ? matchingYear : matches;
+  const masterIds = [...new Set(candidates.map((match) => match.id))];
+  const masterId = masterIds.length === 1 ? masterIds[0] : null;
+  cache.searches[queryKey] = { savedAt: Date.now(), masterId };
+  saveDiscogsSuggestionCache();
+  return masterId;
+}
+
+async function readDiscogsSuggestionRating(masterId, state, cache) {
+  const cacheKey = String(masterId);
+  const cached = cache.masters[cacheKey];
+  if (recentDiscogsEntry(cached) && cached.rating && typeof cached.rating === "object") return cached.rating;
+  const versions = [];
+  const seen = new Set();
+  let page = 1;
+  let pages = 1;
+  let expectedPages = null;
+  let total = null;
+  while (page <= pages) {
+    const data = await discogsSuggestionRequest(`/masters/${masterId}/versions`, {
+      per_page: 100,
+      page,
+    }, state);
+    const pagination = data.pagination;
+    const rows = data.versions;
+    const reportedPages = Number(pagination?.pages);
+    if (!Number.isSafeInteger(reportedPages) || reportedPages < 1
+        || !Array.isArray(rows) || rows.length > 100) {
+      throw new DiscogsSuggestionApiError("Elenco edizioni Discogs non valido.");
+    }
+    if (expectedPages !== null && expectedPages !== reportedPages) {
+      throw new DiscogsSuggestionApiError("Conteggio pagine Discogs instabile.");
+    }
+    expectedPages = reportedPages;
+    pages = reportedPages;
+    if (pages > DISCOGS_SUGGESTION_PAGES_LIMIT) {
+      throw new DiscogsSuggestionApiError("Catalogo edizioni Discogs troppo ampio per il campione.");
+    }
+    const reportedItems = Number(pagination.items);
+    if (Number.isSafeInteger(reportedItems) && reportedItems >= 0) {
+      if (total !== null && total !== reportedItems) {
+        throw new DiscogsSuggestionApiError("Conteggio edizioni Discogs instabile.");
+      }
+      total = reportedItems;
+    }
+    for (const version of rows) {
+      const id = Number(version?.id);
+      if (!Number.isSafeInteger(id) || id < 1 || seen.has(id)) {
+        throw new DiscogsSuggestionApiError("Edizioni Discogs mancanti o duplicate.");
+      }
+      seen.add(id);
+      versions.push(version);
+    }
+    page += 1;
+  }
+  if (total !== null && seen.size !== total) {
+    throw new DiscogsSuggestionApiError("Elenco edizioni Discogs incompleto.");
+  }
+  let selected;
+  try {
+    selected = topDiscogsVersions(versions, DISCOGS_SUGGESTION_SAMPLE_SIZE);
+  } catch (error) {
+    throw new DiscogsSuggestionApiError(error.message);
+  }
+  const ratings = new Map();
+  for (const version of selected) {
+    const releaseId = Number(version.id);
+    const saved = cache.releases[String(releaseId)];
+    let rating;
+    if (recentDiscogsEntry(saved)) {
+      rating = saved.rating;
+    } else {
+      const data = await discogsSuggestionRequest(`/releases/${releaseId}/rating`, {}, state);
+      rating = data.rating;
+      cache.releases[String(releaseId)] = { savedAt: Date.now(), rating };
+      saveDiscogsSuggestionCache();
+    }
+    ratings.set(releaseId, rating);
+  }
+  let rating;
+  try {
+    rating = aggregateDiscogsEditionRatings(selected, ratings, DISCOGS_SUGGESTION_SAMPLE_SIZE);
+  } catch (error) {
+    throw new DiscogsSuggestionApiError(error.message);
+  }
+  rating.discogs_versions = total ?? versions.length;
+  rating.discogs_master = masterId;
+  rating.discogs_url = `https://www.discogs.com/master/${masterId}`;
+  rating.discogs_complete = false;
+  rating.discogs_updated = new Date().toISOString();
+  cache.masters[cacheKey] = { savedAt: Date.now(), rating };
+  saveDiscogsSuggestionCache();
+  return rating;
+}
+
+async function rateDiscogsSuggestionCandidates(candidates) {
+  const cache = getDiscogsSuggestionCache();
+  const state = { requests: 0 };
+  const ratings = new Map();
+  const targets = [];
+  const artistCounts = new Map();
+  for (const album of candidates) {
+    const artist = String(album.artist_names?.[0] || album.artist || "").trim().toLocaleLowerCase();
+    const mbid = String(album.artist_mbids?.[0] || "").toLocaleLowerCase();
+    const artistKey = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(mbid)
+      ? `mbid:${mbid}` : `name:${artist}`;
+    if ((artistCounts.get(artistKey) || 0) >= 2) continue;
+    artistCounts.set(artistKey, (artistCounts.get(artistKey) || 0) + 1);
+    targets.push(album);
+  }
+  let rated = 0;
+  let unmatched = 0;
+  let limited = false;
+  let unavailable = "";
+  for (let index = 0; index < targets.length; index += 1) {
+    const album = targets[index];
+    $("#suggestionStatus").textContent =
+      `Discogs · album ${index + 1}/${targets.length} · richieste ${state.requests}/${DISCOGS_SUGGESTION_REQUEST_LIMIT}…`;
+    try {
+      const masterId = await findDiscogsSuggestionMaster(album, state, cache);
+      if (!masterId) {
+        unmatched += 1;
+        continue;
+      }
+      const rating = await readDiscogsSuggestionRating(masterId, state, cache);
+      if (rating.discogs !== null && rating.discogs_votes >= 2) rated += 1;
+      ratings.set(album.id, { ...album, ...rating });
+    } catch (error) {
+      if (error instanceof DiscogsSuggestionBudgetError) {
+        limited = true;
+        unavailable = error.message;
+        break;
+      }
+      if (error instanceof DiscogsSuggestionApiError) {
+        unavailable = error.message;
+        break;
+      }
+      throw error;
+    }
+  }
+  return {
+    albums: candidates.map((album) => ratings.get(album.id) || album),
+    rated,
+    unmatched,
+    candidates: targets.length,
+    requests: state.requests,
+    requestLimit: DISCOGS_SUGGESTION_REQUEST_LIMIT,
+    limited,
+    unavailable,
+    cacheWarning: discogsSuggestionCacheWarning,
+  };
+}
+
 async function suggestListeningAlbums(button) {
   button.disabled = true;
   $("#suggestionStatus").textContent = "Leggo gli ascolti Last.fm e preparo le proposte…";
@@ -1496,7 +1783,20 @@ async function suggestListeningAlbums(button) {
       heardArtists: exclusion.names,
       ...filters,
     });
-    const albums = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 1);
+    const albumCandidates = listeningAlbumSuggestions(eligibleAlbums, rankings, candidates, 2);
+    const discogsResult = await rateDiscogsSuggestionCandidates(albumCandidates);
+    const albums = rankDiscogsSuggestionAlbums(discogsResult.albums);
+    for (const album of albums) {
+      if (album.discogs !== null && album.discogs_votes >= 2) {
+        album.matchReason += ` Discogs: media ponderata ${album.discogs}/5 su ${album.discogs_votes} voti, `
+          + `${album.discogs_sampled_versions}/${album.discogs_versions} edizioni campionate; `
+          + "i voti delle edizioni non corrispondono a utenti unici.";
+      } else {
+        album.matchReason += album.matchConfidence === "related"
+          ? " Discogs non disponibile con voti sufficienti; ripiego sul catalogo MusicBrainz dell'artista simile."
+          : " Discogs non disponibile con voti sufficienti; ripiego sulla classifica Last.fm.";
+      }
+    }
     const candidateNames = new Set(candidates.map((artist) => artist.name.toLocaleLowerCase()));
     const suggestedArtistNames = new Set(albums.flatMap((album) =>
       (Array.isArray(album.artist_names) ? album.artist_names : [album.artist])
@@ -1512,13 +1812,21 @@ async function suggestListeningAlbums(button) {
       ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
       : ` · catalogo completo: ${catalog.fetched} risultati`;
     const catalogCache = catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "";
+    const discogsNote = ` · Discogs ${discogsResult.rated}/${discogsResult.candidates} album valutati `
+      + `(campione massimo ${DISCOGS_SUGGESTION_SAMPLE_SIZE} edizioni, ${discogsResult.requests}/`
+      + `${discogsResult.requestLimit} richieste; ${discogsResult.unmatched} senza master canonico)`;
+    const discogsWarnings = [...new Set([
+      discogsResult.limited ? "budget Discogs esaurito; ripiego su Last.fm per i restanti candidati" : "",
+      discogsResult.unavailable,
+      discogsResult.cacheWarning,
+    ].filter(Boolean))];
     const exclusionLabels = { none: "nessuna", 30: "ultimi 30 giorni", 90: "ultimi 3 mesi", 365: "ultimi 365 giorni", all: "tutto lo storico" };
     const exclusionCoverage = exclusionPeriod === "none" ? "esclusione disattivata"
       : `esclusione ${exclusionLabels[exclusionPeriod]}: Last.fm ${exclusion.lastfmCount} artisti${exclusion.partial ? " (campione parziale, max 1.000 ascolti)" : ""}`;
     const artistCoverage = artistCount >= 10
       ? ` · obiettivo raggiunto: ${artistCount} artisti con un album ciascuno`
       : ` · trovati ${artistCount} artisti su ${candidates.length} candidati dopo aver esaminato ${expansion.seedsUsed} artisti di partenza${candidates.length === 30 ? " (limite di 30 candidati raggiunto)" : expansion.seedLimitReached ? " (limite di 30 seed raggiunto)" : expansion.exhausted ? " (seed disponibili esauriti)" : ""}`;
-    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${expansion.seedsUsed} artisti di partenza · ${albums.length} album candidati${artistCoverage}${relatedNote}${coverage} · ${exclusionCoverage} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}.`;
+    $("#suggestionStatus").textContent = `${history.trackCount} ascolti nel periodo · ${expansion.seedsUsed} artisti di partenza · ${albums.length} album candidati${artistCoverage}${relatedNote}${coverage} · ${exclusionCoverage} · MusicBrainz ${catalog.pages} pagine${catalogNote}${catalogCache}${discogsNote}${discogsWarnings.length ? ` · ${discogsWarnings.join("; ")}` : ""}.`;
   } catch (error) {
     $("#suggestionStatus").textContent = `Suggerimenti Last.fm non riusciti: ${error.message}`;
   } finally {
@@ -1625,6 +1933,12 @@ function renderListeningAlbumSuggestions(albums) {
       .filter(Boolean).join("\n");
     info.append(name, detail);
     if (matchDetail.textContent) info.append(matchDetail);
+    if (album.discogs !== null && album.discogs_votes >= 2) {
+      const ratingDetail = document.createElement("span");
+      ratingDetail.className = "suggestion-detail suggestion-genres";
+      ratingDetail.textContent = `Discogs ${album.discogs}/5 · ${album.discogs_votes} voti · ${album.discogs_sampled_versions}/${album.discogs_versions} edizioni campionate`;
+      info.append(ratingDetail);
+    }
     info.append(genreDetail);
     const button = document.createElement("button");
     button.className = "secondary";

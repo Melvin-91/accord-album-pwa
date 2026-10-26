@@ -4,6 +4,7 @@ import {
   albumPrimaryGenre,
   albumSecondaryGenres,
   addPlaylistAlbums,
+  aggregateDiscogsEditionRatings,
   bestSpotifyAlbumSuggestionMatch,
   decodeCoverArchive,
   encodeCoverArchive,
@@ -23,6 +24,7 @@ import {
   primaryAlbumGenres,
   readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
+  rankDiscogsSuggestionAlbums,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
@@ -261,6 +263,45 @@ test("keeps only the most listened suggested album per artist", () => {
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
     "Album 2",
   ]);
+});
+
+test("aggregates the most collected Discogs editions weighted by their vote counts", () => {
+  const versions = [
+    { id: 11, stats: { community: { in_collection: 10, in_wantlist: 20 } } },
+    { id: 12, stats: { community: { in_collection: 80, in_wantlist: 2 } } },
+    { id: 13, stats: { community: { in_collection: 40, in_wantlist: 30 } } },
+    { id: 14, stats: { community: { in_collection: 60, in_wantlist: 1 } } },
+  ];
+  const ratings = new Map([
+    [12, { average: 4.5, count: 100 }],
+    [14, { average: 2, count: 10 }],
+  ]);
+  assert.deepEqual(aggregateDiscogsEditionRatings(versions, ratings, 2), {
+    discogs: 4.27,
+    discogs_votes: 110,
+    discogs_editions: 2,
+    discogs_versions: 4,
+    discogs_sampled_versions: 2,
+    discogs_sampled: true,
+  });
+  assert.throws(() => aggregateDiscogsEditionRatings(versions, ratings, 0), /Campione versioni Discogs/);
+});
+
+test("chooses one Discogs-ranked album per artist and falls back to Last.fm order without votes", () => {
+  const candidates = [
+    { id: "a-listened", name: "Last.fm favorite", artist: "Artist A", artist_names: ["Artist A"],
+      artist_mbids: ["83d91898-7763-47d7-b03b-b92132375c47"] },
+    { id: "a-rated", name: "Discogs favorite", artist: "Artist A", artist_names: ["Artist A"],
+      artist_mbids: ["83d91898-7763-47d7-b03b-b92132375c47"], discogs: 4.5, discogs_votes: 100 },
+    { id: "b-small-sample", name: "Small sample", artist: "Artist B", artist_names: ["Artist B"],
+      discogs: 4.9, discogs_votes: 2 },
+    { id: "b-fallback", name: "Fallback", artist: "Artist B", artist_names: ["Artist B"] },
+  ];
+  const ranked = rankDiscogsSuggestionAlbums(candidates);
+  assert.deepEqual(ranked.map((album) => album.id), ["a-rated", "b-small-sample"]);
+  assert.ok(ranked[0].discogs_rank_score > ranked[1].discogs_rank_score);
+  assert.deepEqual(rankDiscogsSuggestionAlbums(candidates.slice(0, 2)).map((album) => album.id), ["a-rated"]);
+  assert.throws(() => rankDiscogsSuggestionAlbums(null), /Suggerimenti Discogs/);
 });
 
 test("expands similar-artist discovery to 30 candidates before exhausting seeds", async () => {

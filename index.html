@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org https://ws.audioscrobbler.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://musicbrainz.org https://labs.api.listenbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="./assets/malt_metal.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
@@ -93,7 +93,7 @@
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Accord usa gli ascolti Last.fm del periodo selezionato per trovare artisti simili e consiglia un solo album per artista, scelto in base ai suoi ascolti. Se necessario amplia la ricerca per trovare almeno dieci artisti, fino a 30 seed e 30 candidati. Puoi escludere gli artisti presenti in un altro periodo Last.fm. MusicBrainz fornisce il catalogo e i generi; il campione di partenza considera al massimo 1.000 ascolti.</p>
+            <p>Accord usa Last.fm per trovare artisti simili, poi confronta fino a due album candidati per artista con i voti Discogs. Aggrega la media ponderata dei voti sulle cinque edizioni più diffuse, correggendo i campioni piccoli; se Discogs non ha un abbinamento affidabile ripiega su Last.fm. La prima ricerca può richiedere tempo e usa al massimo 200 richieste; i risultati restano in cache locale per 14 giorni. Se necessario amplia la ricerca per trovare almeno dieci artisti, fino a 30 seed e 30 candidati. Puoi escludere gli artisti presenti in un altro periodo Last.fm. MusicBrainz fornisce il catalogo e i generi; il campione di partenza considera al massimo 1.000 ascolti.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -308,6 +308,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=41"></script>
+    <script type="module" src="app.mjs?v=42"></script>
   </body>
 </html>

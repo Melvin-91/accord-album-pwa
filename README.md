@@ -29,9 +29,10 @@ Per caricare le miniature dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
 La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
 oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
-ascolti e MusicBrainz per il catalogo; non importa file di cronologia Spotify.
-La ricerca propone un solo album per
-artista, scelto in base agli ascolti. Se non trova almeno dieci artisti,
+ascolti. MusicBrainz fornisce catalogo e generi; Discogs è la fonte primaria
+per scegliere gli album tramite i voti della community, con Last.fm come
+ripiego quando il master o i voti non sono disponibili; non importa file di
+cronologia Spotify. La ricerca propone un solo album per artista. Se non trova almeno dieci artisti,
 amplia la ricerca fino a 30
 artisti seed e 30 candidati e segnala se esaurisce il limite. Quando mancano
 corrispondenze dirette nel catalogo, propone al massimo un'alternativa
@@ -94,8 +95,14 @@ ultimi 7, 30, 90 o 365 giorni, tutto lo storico oppure un intervallo di date
 personalizzato. La PWA legge al massimo 1000 scrobble per richiesta (cinque
 pagine); se la cronologia è più ampia, il risultato indica che il campione è
 parziale. Last.fm fornisce artisti affini e le classifiche dei loro
-album più ascoltati; MusicBrainz fornisce catalogo e generi. Viene proposto un
-solo album per artista: quello più ascoltato nella classifica Last.fm. La
+album più ascoltati; MusicBrainz fornisce catalogo e generi. Per ogni artista
+confronta al massimo i due candidati più ascoltati da Last.fm e sceglie in base
+al punteggio Discogs: media ponderata per il numero di voti e corretta verso
+la media di 3,5 quando il campione è piccolo. L'aggregazione consulta le cinque
+edizioni più diffuse, misurate dagli utenti Discogs che le possiedono; non sono
+voti di utenti unici tra edizioni. Se l'abbinamento canonico o i voti non sono
+disponibili, usa la classifica Last.fm. Ogni ricerca è limitata a 200 richieste
+Discogs e i dati sono conservati nel browser per 14 giorni. La
 ricerca parte da cinque artisti e si estende, se serve, fino a 30 seed e 30
 artisti candidati; se non trova almeno dieci proposte, il riepilogo indica
 quanti artisti sono stati esaminati e se la ricerca ha raggiunto il limite.
@@ -111,7 +118,8 @@ in una cache solo in memoria, limitata a otto query.
 
 Il limite di un album viene applicato a ogni artista accreditato, unificando le
 varianti tramite MBID MusicBrainz e usando il nome come ripiego; fra i
-candidati resta quello più ascoltato. Le diverse edizioni dello stesso album
+candidati resta quello con il punteggio Discogs più alto, oppure quello più
+ascoltato quando non ci sono voti Discogs sufficienti. Le diverse edizioni dello stesso album
 restano selezionabili quando il catalogo non consente di distinguerle.
 L'abbinamento usa l'MBID
 Last.fm/MusicBrainz quando coincide, altrimenti artista e titolo esatti.

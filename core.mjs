@@ -681,6 +681,101 @@ export function listeningAlbumSuggestions(albums, rankings, artists, maximumPerA
   return matches.length ? matches : relatedCatalogAlternatives(albums, artists, maximumPerArtist);
 }
 
+export function topDiscogsVersions(versions, maximumVersions = 5) {
+  if (!Array.isArray(versions) || !Number.isInteger(maximumVersions)
+      || maximumVersions < 1 || maximumVersions > 100) {
+    throw new Error("Campione versioni Discogs non valido.");
+  }
+  const seen = new Set();
+  const popularity = (value) => {
+    if (value === undefined || value === null) return 0;
+    const count = Number(value);
+    if (!Number.isSafeInteger(count) || count < 0) throw new Error("Conteggio raccolta Discogs non valido.");
+    return count;
+  };
+  return versions.map((version) => {
+    const id = Number(version?.id);
+    if (!Number.isSafeInteger(id) || id < 1 || seen.has(id)) {
+      throw new Error("Edizione Discogs mancante o duplicata.");
+    }
+    seen.add(id);
+    return {
+      id,
+      collection: popularity(version?.stats?.community?.in_collection),
+      wantlist: popularity(version?.stats?.community?.in_wantlist),
+      version,
+    };
+  }).sort((left, right) => right.collection - left.collection || right.wantlist - left.wantlist
+    || left.id - right.id).slice(0, maximumVersions).map((entry) => entry.version);
+}
+
+export function aggregateDiscogsEditionRatings(versions, ratings, maximumVersions = 5) {
+  if (!(ratings instanceof Map)) throw new Error("Campione voti Discogs non valido.");
+  const ranked = topDiscogsVersions(versions, maximumVersions);
+  let weighted = 0;
+  let votes = 0;
+  let editions = 0;
+  for (const version of ranked) {
+    const rating = ratings.get(Number(version.id));
+    const count = Number(rating?.count);
+    const average = Number(rating?.average);
+    if (!Number.isSafeInteger(count) || count < 0 || !Number.isFinite(average)
+        || (count > 0 && (average < 1 || average > 5))) {
+      throw new Error("Voto Discogs mancante o non valido.");
+    }
+    if (count) {
+      weighted += average * count;
+      votes += count;
+      editions += 1;
+    }
+  }
+  return {
+    discogs: votes >= 2 ? Math.round(weighted / votes * 100) / 100 : null,
+    discogs_votes: votes,
+    discogs_editions: editions,
+    discogs_versions: versions.length,
+    discogs_sampled_versions: ranked.length,
+    discogs_sampled: true,
+  };
+}
+
+export function rankDiscogsSuggestionAlbums(albums) {
+  if (!Array.isArray(albums)) throw new Error("Suggerimenti Discogs non validi.");
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const validMbid = (value) => /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(String(value || ""));
+  const ranked = albums.map((album, index) => {
+    if (!album || typeof album !== "object" || Array.isArray(album)) {
+      throw new Error("Album suggerito Discogs non valido.");
+    }
+    const votes = Number(album.discogs_votes);
+    const rating = Number(album.discogs);
+    const hasDiscogs = Number.isSafeInteger(votes) && votes >= 2
+      && Number.isFinite(rating) && rating >= 1 && rating <= 5;
+    const score = hasDiscogs ? Math.round(((votes * rating + 5 * 3.5) / (votes + 5)) * 100) / 100 : null;
+    const artists = (Array.isArray(album.artist_names) ? album.artist_names : [album.artist]).map(normalize);
+    const artistMbids = Array.isArray(album.artist_mbids) ? album.artist_mbids : [];
+    const limitKeys = new Set(artists.flatMap((artist, artistIndex) => {
+      if (!artist) return [];
+      const keys = [`name:${artist}`];
+      if (validMbid(artistMbids[artistIndex])) keys.push(`mbid:${String(artistMbids[artistIndex]).toLocaleLowerCase()}`);
+      return keys;
+    }));
+    return { album, index, score, votes: hasDiscogs ? votes : 0,
+      limitKeys: limitKeys.size ? [...limitKeys] : [`name:${normalize(album.artist)}`] };
+  }).sort((left, right) => Number(right.score !== null) - Number(left.score !== null)
+    || (right.score ?? 0) - (left.score ?? 0) || right.votes - left.votes || left.index - right.index);
+  const used = new Set();
+  const selected = [];
+  for (const entry of ranked) {
+    if (entry.limitKeys.some((key) => used.has(key))) continue;
+    for (const key of entry.limitKeys) used.add(key);
+    selected.push(entry.score === null
+      ? entry.album
+      : { ...entry.album, discogs_rank_score: entry.score });
+  }
+  return selected;
+}
+
 export function addPlaylistAlbums(collection, additions) {
   const albums = new Map(collection.map((album) => [validateAlbum(album).id, album]));
   let added = 0;
