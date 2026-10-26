@@ -404,7 +404,7 @@ $("#settingsForm").addEventListener("submit", (event) => {
   const owner = $("#ownerInput").value.trim();
   const token = $("#tokenInput").value.trim() || credentials().token;
   if (!/^[A-Za-z0-9-]{1,39}$/.test(owner) || !token) {
-    showMessage("Configurazione incompleta", "Inserisci il proprietario e un fine-grained token GitHub valido.");
+    showMessage("Configurazione incompleta", "Inserisci il proprietario e un token GitHub a privilegi limitati valido.");
     return;
   }
   const clientId = $("#spotifyClientIdInput").value.trim();
@@ -505,7 +505,7 @@ function render() {
   $("#emptyState").hidden = albums.length !== 0;
   $("#emptyState").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
-    : "La raccolta è vuota su questo dispositivo. Se gli album sono in Accord desktop, avvia prima “Sincronizza ora” sul PC con il repository accord-music-data, poi premi “Sincronizza” qui. In alternativa, importa una playlist Spotify.";
+    : "Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist Spotify.";
   const albumsWithoutCover = state.albums.filter((album) => !album.cover_sha256).length;
   setCoverNotice(albumsWithoutCover
     ? `${albumsWithoutCover} album non hanno ancora una miniatura nel repository. Avvia “Sincronizza ora” in Accord desktop dopo l’aggiornamento, poi premi “Sincronizza” sul telefono.`
@@ -1456,14 +1456,14 @@ async function suggestListeningAlbums(button) {
     });
     const albums = topListenedAlbums(eligibleAlbums, rankings, 3);
     renderListeningAlbumSuggestions(albums);
-    const coverage = history.partial ? " · campione parziale (massimo 1000 scrobble)" : "";
+    const coverage = history.partial ? " · campione parziale (massimo 1.000 ascolti)" : "";
     const catalogNote = catalog.truncated
       ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
       : ` · catalogo completo: ${catalog.fetched} risultati`;
     const catalogCache = catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "";
     const exclusionLabels = { none: "nessuna", 30: "ultimi 30 giorni", 90: "ultimi 3 mesi", 365: "ultimi 365 giorni", all: "tutto lo storico" };
     const exclusionCoverage = exclusionPeriod === "none" ? "esclusione disattivata"
-      : `esclusione ${exclusionLabels[exclusionPeriod]}: Last.fm ${exclusion.lastfmCount} artisti${exclusion.partial ? " (campione parziale, max 1000 scrobble)" : ""}`;
+      : `esclusione ${exclusionLabels[exclusionPeriod]}: Last.fm ${exclusion.lastfmCount} artisti${exclusion.partial ? " (campione parziale, max 1.000 ascolti)" : ""}`;
     const spotifyNote = exclusionPeriod === "all"
       ? ` · Spotify locale: ${exclusion.spotifyCount} artisti`
       : exclusionPeriod === "none" ? ""

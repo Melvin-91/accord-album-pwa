@@ -30,7 +30,7 @@
     <main>
       <section class="intro tab-intro">
         <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua musica, su desktop e telefono.</h2></div>
-        <p>Gestisci la raccolta di album e scopri nuovi suggerimenti. Le miniature vengono archiviate nel repository privato configurato.</p>
+        <p>Gestisci la raccolta e scopri nuovi suggerimenti. Se configuri il repository privato, Accord sincronizza la raccolta e archivia lì le copertine.</p>
       </section>
 
       <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
@@ -40,7 +40,7 @@
 
       <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
       <section class="playlist-import">
-        <div><p class="eyebrow">ALBUM</p><h2>Aggiungi album</h2><p>Cerca da Last.fm, MusicBrainz o Spotify, oppure importa quelli mancanti da una playlist Spotify. Le aggiunte manuali sincronizzano se GitHub è configurato; le importazioni da playlist restano locali.</p></div>
+        <div><p class="eyebrow">ALBUM</p><h2>Aggiungi album</h2><p>Cerca album su Last.fm, MusicBrainz o Spotify, oppure importa quelli mancanti da una playlist Spotify. Gli album aggiunti manualmente si sincronizzano quando GitHub è configurato; quelli importati dalle playlist restano su questo dispositivo.</p></div>
         <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Aggiungi album</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>
       </section>
 
@@ -86,11 +86,11 @@
         <section class="suggestions" aria-labelledby="suggestionHeading">
           <div class="suggestion-intro tab-intro">
             <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
-            <p>Puoi esplorare un artista della raccolta con ListenBrainz oppure generare album affini agli ascolti Last.fm. La cronologia non viene sincronizzata con GitHub.</p>
+            <p>Esplora artisti simili a quelli della raccolta con ListenBrainz oppure ricevi suggerimenti basati sui tuoi ascolti Last.fm. La cronologia resta su questo dispositivo e non viene sincronizzata con GitHub.</p>
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Legge gli scrobble nell’intervallo scelto, trova artisti affini e seleziona fino a 3 album per artista in base agli ascolti Last.fm. Puoi scegliere separatamente il periodo di ascolto da escludere. Il catalogo e i generi arrivano da MusicBrainz. Il campione Last.fm è limitato a 1000 scrobble e 5 artisti; i dati importati restano nel browser.</p>
+            <p>Accord usa gli ascolti Last.fm del periodo selezionato per trovare artisti simili e suggerire fino a tre album per ciascuno. Puoi escludere gli artisti ascoltati in un periodo diverso. MusicBrainz fornisce il catalogo e i generi; per ridurre le richieste, la ricerca considera al massimo 1.000 ascolti e 5 artisti.</p>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -154,9 +154,9 @@
                 <button id="spotifyHistoryClearButton" class="secondary" type="button">Rimuovi dati Spotify</button>
               </div>
               <p id="spotifyHistoryStatus" class="summary" role="status" aria-live="polite"></p>
-              <p class="notice">Seleziona tutti i file dell’esportazione, anche in più gruppi se necessario. I JSON vengono letti solo in memoria: nel browser restano i nomi degli artisti e il loro ultimo ascolto datato; né file né cronologia completa sono caricati o sincronizzati su GitHub.</p>
+              <p class="notice">Seleziona tutti i file dell’esportazione, anche se sono divisi in più gruppi. Accord li legge solo in memoria e conserva nel browser il nome di ciascun artista e la data del suo ultimo ascolto. I file originali e la cronologia completa non vengono caricati né sincronizzati con GitHub.</p>
             </div>
-            <p class="notice">Username e filtri restano solo nel profilo browser; la chiave API è inviata a Last.fm. Nessuna cronologia o credenziale viene inviata a GitHub. I risultati MusicBrainz vengono abbinati a Spotify solo quando scegli un album; se c’è una sola corrispondenza verificata, viene aggiunta automaticamente alla raccolta.</p>
+            <p class="notice">Il nome utente e i filtri restano nel profilo del browser. Accord invia la chiave API solo a Last.fm; credenziali e cronologia non vengono sincronizzate con GitHub. Gli album di MusicBrainz vengono abbinati a Spotify solo quando ne aggiungi uno. Se trova una sola corrispondenza verificata, Accord la inserisce automaticamente nella raccolta.</p>
           </section>
           <div class="suggestion-controls">
             <label>Artista di partenza
@@ -170,7 +170,7 @@
             </label>
             <button id="suggestionSearch" class="secondary" type="button">Cerca suggerimenti</button>
           </div>
-          <p class="notice">La fonte Spotify usa un endpoint deprecato e può smettere di funzionare; ListenBrainz resta la fonte consigliata.</p>
+          <p class="notice">Spotify usa un endpoint deprecato, che potrebbe smettere di funzionare. Per i suggerimenti, è preferibile usare ListenBrainz.</p>
           <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
           <section id="suggestionArtists" class="suggestion-list" aria-label="Artisti suggeriti"></section>
           <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
@@ -182,20 +182,20 @@
       <form id="settingsForm" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">IMPOSTAZIONI PRIVATE</p><h2>GitHub e Spotify</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
         <label>Proprietario GitHub
-          <input id="ownerInput" autocomplete="username" required pattern="[A-Za-z0-9\-]{1,39}" placeholder="username">
+          <input id="ownerInput" autocomplete="username" required pattern="[A-Za-z0-9\-]{1,39}" placeholder="nome-utente">
         </label>
-        <label>Fine-grained personal access token
-          <input id="tokenInput" type="password" autocomplete="new-password" placeholder="ghp_…">
+        <label>Token di accesso GitHub limitato (fine-grained)
+          <input id="tokenInput" type="password" autocomplete="new-password" placeholder="github_pat_…">
         </label>
-        <p class="notice">Crea un token limitato al solo repository privato <code>accord-music-data</code>, con permesso Contents in lettura/scrittura. Il token viene memorizzato in questo profilo browser; chiunque possa usare il profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token non viene inviato a servizi diversi da api.github.com.</p>
-        <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza automaticamente all’avvio (può inviare le modifiche locali al repository)</label>
+        <p class="notice">Limita il token al repository privato <code>accord-music-data</code> e abilita il permesso Contents in lettura e scrittura. Accord lo salva nel profilo del browser, quindi chiunque possa usare quel profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token viene inviato solo a api.github.com.</p>
+        <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza all’avvio; le modifiche locali possono essere inviate al repository.</label>
         <hr>
         <p class="eyebrow">LAST.FM</p>
         <label>Chiave API Last.fm
           <input id="lastfmApiKeyInput" type="password" autocomplete="new-password" placeholder="Chiave API (32 caratteri)">
         </label>
         <div class="dialog-actions settings-actions"><button id="clearLastfmApiKey" class="secondary" type="button">Dimentica chiave</button><button id="saveLastfmApiKey" class="secondary" type="button">Salva chiave</button></div>
-        <p class="notice">La chiave è conservata solo in questo profilo browser, non nella raccolta né su GitHub, ed è inviata esclusivamente a Last.fm. Puoi crearne una su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
+        <p class="notice">Accord conserva la chiave solo in questo profilo del browser, separata dalla raccolta, e la invia esclusivamente a Last.fm. Non viene sincronizzata con GitHub. Puoi creare una chiave su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
         <hr>
         <p class="eyebrow">SPOTIFY</p>
         <label>Client ID dell’app Spotify
@@ -204,7 +204,7 @@
         <label>Redirect URI registrato nell’app Spotify
           <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
         </label>
-        <p class="notice">Registra esattamente questo Redirect URI, con la barra finale, nelle impostazioni della tua app Spotify. È lo stesso nel browser e nella PWA installata. La connessione usa OAuth Authorization Code con PKCE: non inserire un client secret. I token Spotify restano solo nella sessione del browser e non vengono sincronizzati.</p>
+        <p class="notice">Registra questo URI di reindirizzamento, inclusa la barra finale, nelle impostazioni dell’app Spotify. È lo stesso nel browser e nella PWA installata. Accord usa Authorization Code con PKCE, quindi non inserire un client secret. I token Spotify restano nella sessione del browser e non vengono sincronizzati.</p>
         <div class="dialog-actions settings-actions"><button id="clearCredentials" class="secondary" type="button">Dimentica GitHub</button><button id="disconnectSpotify" class="secondary" type="button">Scollega Spotify</button><button class="primary" value="save">Salva</button></div>
       </form>
     </dialog>
@@ -215,7 +215,7 @@
         <label>Nome, ID o link della playlist
           <input id="playlistInput" required maxlength="300" autocomplete="off" placeholder="Nome playlist o link open.spotify.com/playlist/…">
         </label>
-        <p class="notice">Per limitare le richieste Spotify, la ricerca per nome si ferma alla prima pagina con corrispondenze; ID e link saltano questa ricerca. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Verranno salvati solo i record album previsti da Accord, non brani o dati della playlist. L’importazione non avvia la sincronizzazione GitHub.</p>
+        <p class="notice">Quando cerchi una playlist per nome, Accord controlla solo la prima pagina di risultati. Se inserisci un ID o un link, la ricerca per nome non serve. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Accord salva nella raccolta solo i dati degli album, non i brani o le altre informazioni della playlist. L’importazione non avvia la sincronizzazione con GitHub.</p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Continua</button></div>
       </form>
     </dialog>
@@ -244,7 +244,7 @@
             <input id="manualAlbumYear" maxlength="9" autocomplete="off" placeholder="Es. 1990-1999">
           </label>
         </div>
-        <p id="manualAlbumSourceNotice" class="notice">Last.fm usa una sola richiesta per titolo, artista o genere; non fornisce un filtro anno.</p>
+        <p id="manualAlbumSourceNotice" class="notice">Last.fm consente di cercare per titolo, artista o genere in un’unica richiesta, ma non supporta il filtro per anno.</p>
         <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
         <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca album"></section>
         <div class="dialog-actions"><button class="secondary" value="cancel">Chiudi</button><button id="manualAlbumSearchButton" class="primary" value="search">Cerca</button></div>
@@ -268,7 +268,7 @@
           <input id="suggestionPlaylistName" required maxlength="100" autocomplete="off" placeholder="Es. Da scoprire">
         </label>
         <p id="suggestionPlaylistStatus" class="notice" role="status" aria-live="polite"></p>
-        <p class="notice">Verranno aggiunti fino a tre brani più popolari per ciascun album Spotify abbinato. La playlist sarà privata e la creazione richiede il permesso playlist-modify-private.</p>
+        <p class="notice">Accord aggiunge fino a tre brani popolari per ogni album Spotify abbinato. La playlist resta privata. Per crearla, Spotify richiede il permesso <code>playlist-modify-private</code>.</p>
         <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="create">Crea playlist privata</button></div>
       </form>
     </dialog>
@@ -316,6 +316,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=36"></script>
+    <script type="module" src="app.mjs?v=37"></script>
   </body>
 </html>
