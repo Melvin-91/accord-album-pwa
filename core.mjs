@@ -737,6 +737,11 @@ export async function retryMusicBrainzRequest(request, wait) {
   throw new Error("Richiesta MusicBrainz non completata.");
 }
 
+export function shouldStopDiscogsSuggestionQueue(status) {
+  return status === null || status === undefined || status === 0
+    || [401, 403, 429].includes(status) || (Number.isInteger(status) && status >= 500);
+}
+
 export function topDiscogsVersions(versions, maximumVersions = 5) {
   if (!Array.isArray(versions) || !Number.isInteger(maximumVersions)
       || maximumVersions < 1 || maximumVersions > 100) {

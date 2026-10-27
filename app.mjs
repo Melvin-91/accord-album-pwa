@@ -25,6 +25,7 @@ import {
   readLastFmAllTimeArtists,
   rankDiscogsSuggestionAlbums,
   retryMusicBrainzRequest,
+  shouldStopDiscogsSuggestionQueue,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
   spotifyPlaylistId,
@@ -1679,7 +1680,12 @@ async function searchListeningMusicBrainzAlbumBatch(artists) {
     pages: catalog.pages, cached: catalog.cached };
 }
 
-class DiscogsSuggestionApiError extends Error {}
+class DiscogsSuggestionApiError extends Error {
+  constructor(message, { stopQueue = false } = {}) {
+    super(message);
+    this.stopQueue = stopQueue;
+  }
+}
 class DiscogsSuggestionBudgetError extends Error {}
 
 function getDiscogsSuggestionCache() {
@@ -1732,7 +1738,9 @@ async function discogsSuggestionRequest(path, parameters, state) {
     });
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new DiscogsSuggestionApiError(`Discogs non raggiungibile: ${error.message}`);
+      throw new DiscogsSuggestionApiError(`Discogs non raggiungibile: ${error.message}`, {
+        stopQueue: shouldStopDiscogsSuggestionQueue(null),
+      });
     }
     throw error;
   }
@@ -1743,17 +1751,20 @@ async function discogsSuggestionRequest(path, parameters, state) {
       response.status === 429
         ? "Discogs ha raggiunto il limite di richieste."
         : `Discogs ha risposto con HTTP ${response.status}.`,
+      { stopQueue: shouldStopDiscogsSuggestionQueue(response.status) },
     );
   }
   let data;
   try {
     data = await response.json();
   } catch (error) {
-    if (error instanceof SyntaxError) throw new DiscogsSuggestionApiError("Risposta Discogs non leggibile.");
+    if (error instanceof SyntaxError) {
+      throw new DiscogsSuggestionApiError("Risposta Discogs non leggibile.", { stopQueue: true });
+    }
     throw error;
   }
   if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new DiscogsSuggestionApiError("Risposta Discogs non valida.");
+    throw new DiscogsSuggestionApiError("Risposta Discogs non valida.", { stopQueue: true });
   }
   return data;
 }
@@ -1912,11 +1923,15 @@ async function rateDiscogsSuggestionCandidates(candidates) {
     targets.push(album);
   }
   let rated = 0;
+  let attempted = 0;
+  let failed = 0;
+  let failureReason = "";
   let unmatched = 0;
   let limited = false;
   let unavailable = "";
   for (let index = 0; index < targets.length; index += 1) {
     const album = targets[index];
+    attempted += 1;
     $("#suggestionStatus").textContent =
       `Discogs · album ${index + 1}/${targets.length} · richieste ${state.requests}/${DISCOGS_SUGGESTION_REQUEST_LIMIT}…`;
     try {
@@ -1935,8 +1950,13 @@ async function rateDiscogsSuggestionCandidates(candidates) {
         break;
       }
       if (error instanceof DiscogsSuggestionApiError) {
-        unavailable = error.message;
-        break;
+        if (error.stopQueue) {
+          unavailable = error.message;
+          break;
+        }
+        failed += 1;
+        failureReason ||= error.message;
+        continue;
       }
       throw error;
     }
@@ -1944,6 +1964,9 @@ async function rateDiscogsSuggestionCandidates(candidates) {
   return {
     albums: candidates.map((album) => ratings.get(album.id) || album),
     rated,
+    attempted,
+    failed,
+    failureReason,
     unmatched,
     candidates: targets.length,
     requests: state.requests,
@@ -2095,12 +2118,15 @@ async function suggestListeningAlbums(button) {
         ? ` · catalogo parziale: ${catalog.fetched} di ${catalog.total ?? "?"} risultati consultati`
         : ` · catalogo completo: ${catalog.fetched} risultati`}`
         + (catalog.cached ? " · catalogo riutilizzato dalla cache in memoria (15 min)" : "");
-    const discogsNote = ` · Discogs ${discogsResult.rated}/${discogsResult.candidates} album valutati `
-      + `(campione massimo ${DISCOGS_SUGGESTION_SAMPLE_SIZE} edizioni, ${discogsResult.requests}/`
-      + `${discogsResult.requestLimit} richieste; ${discogsResult.unmatched} senza master canonico)`;
+    const discogsNote = ` · Discogs ${discogsResult.rated}/${discogsResult.attempted} album con voti sufficienti `
+      + `(${discogsResult.attempted}/${discogsResult.candidates} candidati esaminati; `
+      + `${discogsResult.unmatched} senza master canonico; ${discogsResult.failed} errori per album; `
+      + `campione massimo ${DISCOGS_SUGGESTION_SAMPLE_SIZE} edizioni, ${discogsResult.requests}/`
+      + `${discogsResult.requestLimit} richieste)`;
     const discogsWarnings = [...new Set([
       discogsResult.limited ? "budget Discogs esaurito; ripiego su Last.fm per i restanti candidati" : "",
       discogsResult.unavailable,
+      discogsResult.failed ? `Almeno un album saltato: ${discogsResult.failureReason}` : "",
       discogsResult.cacheWarning,
     ].filter(Boolean))];
     const exclusionLabels = { none: "nessuna", 30: "ultimi 30 giorni", 90: "ultimi 3 mesi", 365: "ultimi 365 giorni", all: "tutto lo storico" };

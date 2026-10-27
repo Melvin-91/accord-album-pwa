@@ -31,6 +31,7 @@ import {
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
+  shouldStopDiscogsSuggestionQueue,
   summarizeLastFmTracks,
   topTracksPerAlbum,
   topListenedAlbums,
@@ -267,6 +268,15 @@ test("keeps only the most listened suggested album per artist", () => {
   assert.deepEqual(topListenedAlbums(albums, rankings).map((album) => album.name), [
     "Album 2",
   ]);
+});
+
+test("stops Discogs suggestions only for queue-wide API failures", () => {
+  for (const status of [null, undefined, 0, 401, 403, 429, 500, 503]) {
+    assert.equal(shouldStopDiscogsSuggestionQueue(status), true, `status ${status}`);
+  }
+  for (const status of [200, 400, 404]) {
+    assert.equal(shouldStopDiscogsSuggestionQueue(status), false, `status ${status}`);
+  }
 });
 
 test("aggregates the most collected Discogs editions weighted by their vote counts", () => {

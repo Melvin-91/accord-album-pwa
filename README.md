@@ -107,7 +107,9 @@ la media di 3,5 quando il campione è piccolo. L'aggregazione consulta le cinque
 edizioni più diffuse, misurate dagli utenti Discogs che le possiedono; non sono
 voti di utenti unici tra edizioni. Se l'abbinamento canonico o i voti non sono
 disponibili, usa la classifica Last.fm. Ogni ricerca è limitata a 200 richieste
-Discogs e i dati sono conservati nel browser per 14 giorni. La
+Discogs e i dati sono conservati nel browser per 14 giorni. Un errore su un
+singolo album non interrompe la valutazione degli altri; il riepilogo distingue
+i candidati esaminati, quelli senza master e quelli saltati per errore. La
 ricerca parte da cinque artisti e si estende, se serve, fino a 30 seed e 30
 artisti candidati; se non trova almeno dieci proposte, il riepilogo indica
 quanti artisti sono stati esaminati e se la ricerca ha raggiunto il limite.
