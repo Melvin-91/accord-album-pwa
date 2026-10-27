@@ -11,7 +11,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=17">
+    <link rel="stylesheet" href="style.css?v=18">
     <title>Accord v1.0.0 · La mia raccolta</title>
   </head>
   <body>
@@ -36,6 +36,7 @@
       <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
         <button id="collectionTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="collectionPanel" tabindex="0">Raccolta album</button>
         <button id="suggestionsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="suggestionsPanel" tabindex="-1">Suggerimenti</button>
+        <button id="playlistBuilderTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="playlistBuilderPanel" tabindex="-1">Crea playlist</button>
       </nav>
 
       <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
@@ -88,7 +89,7 @@
         <section class="suggestions" aria-labelledby="suggestionHeading">
           <div class="suggestion-intro tab-intro">
             <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
-            <p>Esplora artisti simili a quelli della raccolta con ListenBrainz oppure ricevi suggerimenti basati sui tuoi ascolti Last.fm. La cronologia resta su questo dispositivo e non viene sincronizzata con GitHub.</p>
+            <p>Ricevi suggerimenti di album basati sui tuoi ascolti Last.fm. La cronologia resta su questo dispositivo e non viene sincronizzata con GitHub.</p>
           </div>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading">
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
@@ -149,22 +150,39 @@
             </div>
             <p class="notice">Il nome utente e i filtri restano nel profilo del browser. Accord invia la chiave API solo a Last.fm; credenziali e cronologia non vengono sincronizzate con GitHub. Gli album di MusicBrainz vengono abbinati a Spotify solo quando ne aggiungi uno. Se trova una sola corrispondenza verificata, Accord la inserisce automaticamente nella raccolta.</p>
           </section>
-          <div class="suggestion-controls">
-            <label>Artista di partenza
-              <select id="suggestionSeed"><option value="">Nessun artista nella raccolta</option></select>
+          <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
+          <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
+        </section>
+      </section>
+
+      <section id="playlistBuilderPanel" class="tab-panel" role="tabpanel" aria-labelledby="playlistBuilderTab" tabindex="0" hidden>
+        <section class="suggestions playlist-builder" aria-labelledby="playlistBuilderHeading">
+          <div class="tab-intro">
+            <div><p class="eyebrow">CREAZIONE SPOTIFY</p><h2 id="playlistBuilderHeading">Crea una playlist</h2></div>
+            <p>Accord usa i tuoi artisti Spotify più ascoltati e i loro brani più popolari. Controlla l'anteprima prima di creare una playlist privata.</p>
+          </div>
+          <div class="playlist-builder-controls">
+            <label>Numero di artisti
+              <input id="playlistArtistCount" type="number" min="1" max="20" step="1" value="5" required>
             </label>
-            <label>Fonte suggerimenti
-              <select id="suggestionSource">
-                <option value="listenbrainz">ListenBrainz · consigli musicali</option>
-                <option value="spotify-related">Spotify · artisti correlati (sperimentale, endpoint deprecato)</option>
+            <label>Brani per artista
+              <input id="playlistTracksPerArtist" type="number" min="1" max="10" step="1" value="3" required>
+            </label>
+            <label>Periodo di ascolto
+              <select id="playlistTimeRange">
+                <option value="short_term">Ultime 4 settimane</option>
+                <option value="medium_term" selected>Ultimi 6 mesi</option>
+                <option value="long_term">Tutto lo storico</option>
               </select>
             </label>
-            <button id="suggestionSearch" class="secondary" type="button">Cerca suggerimenti</button>
+            <label>Nome playlist
+              <input id="playlistBuilderName" maxlength="100" required autocomplete="off" value="Nuove scoperte">
+            </label>
+            <button id="playlistPreviewButton" class="secondary" type="button">Genera anteprima</button>
           </div>
-          <p class="notice">Spotify usa un endpoint deprecato, che potrebbe smettere di funzionare. Per i suggerimenti, è preferibile usare ListenBrainz.</p>
-          <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
-          <section id="suggestionArtists" class="suggestion-list" aria-label="Artisti suggeriti"></section>
-          <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
+          <p id="playlistBuilderStatus" class="summary" role="status" aria-live="polite">Collega Spotify per caricare l'anteprima.</p>
+          <section id="playlistBuilderPreview" class="suggestion-list" aria-label="Anteprima brani playlist"></section>
+          <button id="playlistCreateButton" class="primary" type="button" disabled>Crea playlist privata</button>
         </section>
       </section>
     </main>
@@ -252,29 +270,6 @@
       </form>
     </dialog>
 
-    <dialog id="suggestionPlaylistDialog">
-      <form id="suggestionPlaylistForm" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">CREAZIONE SPOTIFY</p><h2>Playlist dai suggerimenti</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-        <label>Nome playlist
-          <input id="suggestionPlaylistName" required maxlength="100" autocomplete="off" placeholder="Es. Da scoprire">
-        </label>
-        <p id="suggestionPlaylistStatus" class="notice" role="status" aria-live="polite"></p>
-        <p class="notice">Accord aggiunge fino a tre brani popolari per ogni album Spotify abbinato. La playlist resta privata. Per crearla, Spotify richiede il permesso <code>playlist-modify-private</code>.</p>
-        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="create">Crea playlist privata</button></div>
-      </form>
-    </dialog>
-
-    <dialog id="musicbrainzArtistDialog">
-      <form id="musicbrainzArtistForm" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">IDENTIFICAZIONE ARTISTA</p><h2>Scegli il profilo corretto</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-        <p>MusicBrainz ha trovato più artisti con questo nome. Scegli il profilo giusto per evitare suggerimenti riferiti a un omonimo.</p>
-        <label>Profili corrispondenti
-          <select id="musicbrainzArtistChoice" required></select>
-        </label>
-        <div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Continua</button></div>
-      </form>
-    </dialog>
-
     <dialog id="conflictDialog">
       <form id="conflictForm" method="dialog">
         <div class="dialog-heading"><div><p class="eyebrow">MODIFICHE SIMULTANEE</p><h2>Risolvi i conflitti</h2></div></div>
@@ -306,6 +301,6 @@
         </label>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=48"></script>
+    <script type="module" src="app.mjs?v=49"></script>
   </body>
 </html>

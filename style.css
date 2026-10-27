@@ -59,6 +59,14 @@ main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
 .suggestion-controls { display: flex; align-items: end; gap: 12px; margin-top: 14px; }
 .suggestion-controls label { flex: 1; }
 .suggestion-controls button { flex: none; }
+.playlist-builder { display: grid; gap: 14px; }
+.playlist-builder-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; }
+.playlist-builder-controls button { justify-self: start; }
+.playlist-builder > .summary { margin: 0; }
+.playlist-track-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid #353535; border-radius: 10px; }
+.playlist-track-card p { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.playlist-track-card .suggestion-detail { text-align: right; }
+.playlist-builder #playlistCreateButton { justify-self: start; }
 .manual-search-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .manual-search-fields label { min-width: 0; }
 .suggestions .summary { margin: 12px 0 0; }
@@ -153,6 +161,8 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   .playlist-import-actions button { flex: 1 1 140px; padding-inline: 10px; }
   .lastfm-suggestion-controls { grid-template-columns: 1fr; }
   .lastfm-suggestion-controls button { width: 100%; }
+  .playlist-builder-controls { grid-template-columns: 1fr; }
+  .playlist-builder-controls button, .playlist-builder #playlistCreateButton { width: 100%; }
   .lastfm-suggestion-date-range { grid-template-columns: 1fr; }
   .suggestion-controls { align-items: stretch; flex-direction: column; }
   .suggestion-controls button { width: 100%; }
