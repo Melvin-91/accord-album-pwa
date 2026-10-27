@@ -11,7 +11,8 @@ contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 La pagina e l'installazione mobile usano l'icona del gatto in PNG da 192 e
 512 pixel, con percorsi relativi al sito GitHub Pages.
 
-La raccolta mostra copertina, stato, anno, genere principale, generi secondari,
+La raccolta mostra copertina, stato (Da ascoltare, In ascolto, Mi piace o Non
+mi piace), anno, genere principale, generi secondari,
 voto, collezioni e tag. I filtri separano il genere principale dai
 sottogeneri; scegliendo un principale, il secondo menu propone i relativi
 generi secondari e l'opzione **Nessun sottogenere**.

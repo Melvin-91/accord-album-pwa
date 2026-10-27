@@ -27,6 +27,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; font-weig
 .brand img { object-fit: contain; }
 .brand h1 { margin: 0; font-size: 16px; }
 .eyebrow { margin: 0 0 3px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.app-version { display: inline-block; margin-left: 5px; padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; font-size: 9px; letter-spacing: 0; vertical-align: 1px; }
 .sync-state { color: var(--muted); font-size: 12px; }
 .topbar:has(#syncButton:disabled)::after { content: ""; position: absolute; inset: auto 0 -1px; width: 35%; height: 3px; background: #dedede; animation: sync-progress 1.2s ease-in-out infinite; }
 @keyframes sync-progress { from { transform: translateX(-100%); } to { transform: translateX(300%); } }

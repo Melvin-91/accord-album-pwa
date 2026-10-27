@@ -19,6 +19,7 @@ import {
   listenBrainzRecommendations,
   musicBrainzCoverArtUrl,
   moveAlbumInManualOrder,
+  normalizeAlbumStatus,
   NO_PRIMARY_GENRE_FILTER,
   NO_SECONDARY_GENRE_FILTER,
   playlistAlbumRecords,
@@ -63,6 +64,14 @@ test("builds a safe Cover Art Archive URL from a MusicBrainz release-group ID", 
   );
   assert.equal(musicBrainzCoverArtUrl("https://example.com"), null);
   assert.equal(musicBrainzCoverArtUrl(""), null);
+});
+
+test("migrates legacy album states to the current collection states", () => {
+  assert.equal(normalizeAlbumStatus("heard"), "liked");
+  assert.equal(normalizeAlbumStatus("hidden"), "disliked");
+  assert.equal(validateAlbum(album("heard", { status: "heard" })).status, "liked");
+  assert.equal(validateAlbum(album("hidden", { status: "hidden" })).status, "disliked");
+  assert.equal(validateAlbum(album("disliked", { status: "disliked" })).status, "disliked");
 });
 
 test("selects up to three distinct album genres in catalog order", () => {
@@ -119,12 +128,12 @@ test("merges independent additions without propagating deletions", () => {
 test("searches genres and filters state while sorting ratings and names", () => {
   const albums = [
     album("a", { name: "Beta", artist: "Zed", rating: 3, genres: ["Jazz"] }),
-    album("b", { name: "Alpha", artist: "Ada", rating: 4, genres: ["Rock"], status: "heard" }),
+    album("b", { name: "Alpha", artist: "Ada", rating: 4, genres: ["Rock"], status: "liked" }),
   ];
   assert.deepEqual(filterAlbums(albums, { search: "jazz" }).map((item) => item.id), ["a"]);
   assert.deepEqual(filterAlbums(albums, { search: "JAZZ" }).map((item) => item.id), ["a"]);
   assert.deepEqual(filterAlbums(albums, { search: "bEtA" }).map((item) => item.id), ["a"]);
-  assert.deepEqual(filterAlbums(albums, { status: "heard", genre: "rock" }).map((item) => item.id), ["b"]);
+  assert.deepEqual(filterAlbums(albums, { status: "liked", genre: "rock" }).map((item) => item.id), ["b"]);
   assert.deepEqual(filterAlbums(albums, { order: "name" }).map((item) => item.id), ["b", "a"]);
   assert.deepEqual(filterAlbums(albums, { order: "rating" }).map((item) => item.id), ["b", "a"]);
   assert.deepEqual(filterAlbums(albums, { order: "genre" }).map((item) => item.id), ["a", "b"]);

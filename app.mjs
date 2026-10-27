@@ -9,6 +9,7 @@ import {
   filterUnheardArtists,
   filterAlbums,
   moveAlbumInManualOrder,
+  normalizeAlbumStatus,
   NO_PRIMARY_GENRE_FILTER,
   NO_SECONDARY_GENRE_FILTER,
   decodeCoverArchive,
@@ -37,7 +38,7 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=27";
+} from "./core.mjs?v=28";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -49,6 +50,9 @@ const API = "https://api.github.com";
 const DISCOGS_API = "https://api.discogs.com";
 const SPOTIFY_API = "https://api.spotify.com/v1";
 const SPOTIFY_ACCOUNTS = "https://accounts.spotify.com";
+const SPOTIFY_COOLDOWN_KEY = "accord-spotify-rate-limit-until-v1";
+const SPOTIFY_MAX_READ_RETRIES = 2;
+const SPOTIFY_MAX_AUTOMATIC_WAIT_MS = 30_000;
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
 const DISCOGS_SUGGESTION_CACHE_KEY = "accord-discogs-suggestion-cache-v1";
 const DISCOGS_SUGGESTION_CACHE_AGE = 14 * 24 * 60 * 60 * 1000;
@@ -84,8 +88,10 @@ let suggestionCoverFailureShown = false;
 let collectionCoverObserver = null;
 let collectionCoverTokenPromise = null;
 let collectionCoverJobsActive = 0;
+let collectionCoverBatchScheduled = false;
+let spotifyApiRequestQueue = Promise.resolve();
 const LASTFM_KEY = "accord-lastfm-api-key";
-const labels = { queued: "Da ascoltare", listening: "In ascolto", heard: "Ascoltato", liked: "Mi piace", hidden: "Non proporre" };
+const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Mi piace", disliked: "Non mi piace" };
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();
@@ -171,6 +177,10 @@ function loadState() {
       : [];
     const sortOrders = ["artist", "name", "year", "rating", "genre", "collection", "manual"];
     const sortOrder = sortOrders.includes(saved.sortOrder) ? saved.sortOrder : "artist";
+    const hasLegacyStatuses = [saved.albums, saved.base].some((records) =>
+      Array.isArray(records) && records.some((album) =>
+        album && normalizeAlbumStatus(album.status) !== album.status));
+    if (hasLegacyStatuses) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, albums, base }));
     return { albums, base, manualOrder, sortOrder };
   } catch (error) {
     queueMicrotask(() => showMessage("Archivio locale non leggibile", error.message));
@@ -810,7 +820,7 @@ async function musicBrainzCollectionCoverUrl(album) {
   return `https://coverartarchive.org/release-group/${matches[0].id.toLocaleLowerCase()}/front-500`;
 }
 
-async function loadCollectionCover(task) {
+async function loadCollectionCover(task, spotifyAlbum, spotifyError = "") {
   if (!collectionCoverTaskIsCurrent(task)) return;
   const { album } = task;
   const errors = [];
@@ -827,37 +837,24 @@ async function loadCollectionCover(task) {
     return true;
   };
 
-  const cachedUrl = collectionCoverImageUrls.get(album.id);
-  if (cachedUrl) {
-    if (await tryImage(cachedUrl, "Copertina memorizzata")) return;
-    collectionCoverImageUrls.delete(album.id);
-  }
-
-  let token = null;
-  try {
-    token = await collectionSpotifyToken();
-  } catch (error) {
-    errors.push(`Sessione Spotify: ${error.message}`);
-  }
-  if (token && collectionCoverTaskIsCurrent(task)) {
-    try {
-      const details = await spotifyRequest(`albums/${encodeURIComponent(album.id)}`, token);
-      const images = Array.isArray(details.images) ? details.images
-        .filter((image) => trustedSpotifyCoverUrl(image?.url))
-        .sort((left, right) => Math.abs((left.width || 300) - 300) - Math.abs((right.width || 300) - 300))
-        : [];
-      let loaded = false;
-      for (const image of images) {
-        if (await tryImage(trustedSpotifyCoverUrl(image.url), "Spotify")) {
-          loaded = true;
-          break;
-        }
+  if (spotifyError) {
+    errors.push(`Spotify: ${spotifyError}`);
+  } else if (spotifyAlbum && collectionCoverTaskIsCurrent(task)) {
+    const images = Array.isArray(spotifyAlbum.images) ? spotifyAlbum.images
+      .filter((image) => trustedSpotifyCoverUrl(image?.url))
+      .sort((left, right) => Math.abs((left.width || 300) - 300) - Math.abs((right.width || 300) - 300))
+      : [];
+    let loaded = false;
+    for (const image of images) {
+      if (await tryImage(trustedSpotifyCoverUrl(image.url), "Spotify")) {
+        loaded = true;
+        break;
       }
-      if (loaded) return;
-      if (!images.length) errors.push("Spotify: nessuna immagine verificabile.");
-    } catch (error) {
-      errors.push(`Spotify: ${error.message}`);
     }
+    if (loaded) return;
+    if (!images.length) errors.push("Spotify: nessuna immagine verificabile.");
+  } else {
+    errors.push("Spotify: nessuna immagine verificabile.");
   }
 
   if (!collectionCoverTaskIsCurrent(task)) return;
@@ -892,6 +889,48 @@ async function loadCollectionCover(task) {
   updateCollectionCoverNotice();
 }
 
+async function loadCollectionCoverBatch(tasks) {
+  const cached = await Promise.all(tasks.map(async (task) => {
+    const url = collectionCoverImageUrls.get(task.album.id);
+    if (!url || !collectionCoverTaskIsCurrent(task)) return false;
+    if (await showCollectionCoverImage(task, url)) {
+      collectionCoverRemoteIds.add(task.album.id);
+      collectionCoverFailures.delete(task.album.id);
+      updateCollectionCoverNotice();
+      return true;
+    }
+    collectionCoverImageUrls.delete(task.album.id);
+    return false;
+  }));
+  const pending = tasks.filter((task, index) => !cached[index] && collectionCoverTaskIsCurrent(task));
+  const albumsById = new Map();
+  let spotifyError = "";
+  if (pending.length) {
+    try {
+      const token = await collectionSpotifyToken();
+      if (!token) throw new Error("Sessione Spotify non disponibile.");
+      const ids = pending.map((task) => task.album.id);
+      const query = new URLSearchParams({ ids: ids.join(",") });
+      const data = await spotifyRequest(`albums?${query}`, token);
+      if (!data || !Array.isArray(data.albums) || data.albums.length !== ids.length) {
+        throw new Error("Spotify non ha restituito tutte le copertine richieste.");
+      }
+      data.albums.forEach((album, index) => {
+        if (album === null) return;
+        if (!album || album.id !== ids[index]) {
+          throw new Error("Spotify ha restituito album fuori ordine o non verificabili.");
+        }
+        albumsById.set(album.id, album);
+      });
+    } catch (error) {
+      spotifyError = error.message;
+    }
+  }
+  await Promise.all(tasks.map((task, index) => cached[index] ? null : loadCollectionCover(
+    task, albumsById.get(task.album.id) || null, spotifyError,
+  )));
+}
+
 function enqueueCollectionCover(task) {
   if (!collectionCoverTaskIsCurrent(task)) return;
   if (!("IntersectionObserver" in window)) {
@@ -917,15 +956,25 @@ function enqueueCollectionCover(task) {
 }
 
 function processCollectionCoverQueue() {
-  while (collectionCoverJobsActive < 2 && collectionCoverQueue.length) {
-    const task = collectionCoverQueue.shift();
-    if (!collectionCoverTaskIsCurrent(task)) continue;
-    collectionCoverJobsActive += 1;
-    void loadCollectionCover(task).finally(() => {
-      collectionCoverJobsActive -= 1;
+  if (collectionCoverJobsActive || collectionCoverBatchScheduled || !collectionCoverQueue.length) return;
+  collectionCoverBatchScheduled = true;
+  queueMicrotask(() => {
+    collectionCoverBatchScheduled = false;
+    const tasks = [];
+    while (tasks.length < 20 && collectionCoverQueue.length) {
+      const task = collectionCoverQueue.shift();
+      if (collectionCoverTaskIsCurrent(task)) tasks.push(task);
+    }
+    if (!tasks.length) {
+      processCollectionCoverQueue();
+      return;
+    }
+    collectionCoverJobsActive = 1;
+    void loadCollectionCoverBatch(tasks).finally(() => {
+      collectionCoverJobsActive = 0;
       processCollectionCoverQueue();
     });
-  }
+  });
 }
 
 function refreshSuggestionSeeds() {
@@ -2735,25 +2784,126 @@ async function spotifyAccessToken() {
   return tokens.access_token;
 }
 
+function spotifyDelay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function storedSpotifyCooldown() {
+  const until = Number(localStorage.getItem(SPOTIFY_COOLDOWN_KEY));
+  if (!Number.isFinite(until) || until <= 0) {
+    localStorage.removeItem(SPOTIFY_COOLDOWN_KEY);
+    return 0;
+  }
+  return until;
+}
+
+function saveSpotifyCooldown(until) {
+  const previous = storedSpotifyCooldown();
+  localStorage.setItem(SPOTIFY_COOLDOWN_KEY, String(Math.max(previous, until)));
+}
+
+async function waitForSpotifyCooldown(retryRead) {
+  while (true) {
+    const remaining = storedSpotifyCooldown() - Date.now();
+    if (remaining <= 0) {
+      localStorage.removeItem(SPOTIFY_COOLDOWN_KEY);
+      return;
+    }
+    if (!retryRead || remaining > SPOTIFY_MAX_AUTOMATIC_WAIT_MS) {
+      throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(remaining / 1000)} secondi.`);
+    }
+    await spotifyDelay(remaining);
+  }
+}
+
+function spotifyRetryAfterMs(response) {
+  const value = response.headers.get("Retry-After");
+  if (value && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+    return Math.max(1000, Math.ceil(Number(value) * 1000));
+  }
+  const date = value ? Date.parse(value) : NaN;
+  return Number.isFinite(date) ? Math.max(1000, date - Date.now()) : 5000;
+}
+
+async function spotifyQuotaExceeded(response) {
+  try {
+    const error = (await response.clone().json()).error || {};
+    return String(error.reason || "").toLocaleLowerCase() === "quota_exceeded"
+      || String(error.message || "").toLocaleLowerCase().includes("quota exceeded");
+  } catch {
+    return false;
+  }
+}
+
+function queueSpotifyApiRequest(request) {
+  const queued = spotifyApiRequestQueue.then(() => {
+    if (navigator.locks?.request) {
+      return navigator.locks.request("accord-spotify-api", request);
+    }
+    return request();
+  });
+  spotifyApiRequestQueue = queued.then(() => undefined, () => undefined);
+  return queued;
+}
+
+function spotifyRetryDelay(retry) {
+  return 500 * (2 ** retry) + Math.floor(Math.random() * 250);
+}
+
+async function spotifyApiFetch(url, options, retryRead) {
+  return queueSpotifyApiRequest(async () => {
+    let rateRetries = 0;
+    let transientRetries = 0;
+    while (true) {
+      await waitForSpotifyCooldown(retryRead);
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (error) {
+        if (!retryRead || transientRetries >= SPOTIFY_MAX_READ_RETRIES) throw error;
+        const delay = spotifyRetryDelay(transientRetries);
+        transientRetries += 1;
+        await spotifyDelay(delay);
+        continue;
+      }
+      if (response.status === 429) {
+        const delay = spotifyRetryAfterMs(response);
+        saveSpotifyCooldown(Date.now() + delay);
+        if (retryRead && rateRetries < SPOTIFY_MAX_READ_RETRIES
+            && delay <= SPOTIFY_MAX_AUTOMATIC_WAIT_MS && !await spotifyQuotaExceeded(response)) {
+          rateRetries += 1;
+          await spotifyDelay(delay);
+          continue;
+        }
+        throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(delay / 1000)} secondi.`);
+      }
+      if (retryRead && [500, 502, 503, 504].includes(response.status)
+          && transientRetries < SPOTIFY_MAX_READ_RETRIES) {
+        const delay = spotifyRetryDelay(transientRetries);
+        transientRetries += 1;
+        await spotifyDelay(delay);
+        continue;
+      }
+      return response;
+    }
+  });
+}
+
 async function spotifyRequest(path, accessToken) {
   const url = new URL(path, `${SPOTIFY_API}/`);
   if (url.origin !== "https://api.spotify.com" || !url.pathname.startsWith("/v1/")) {
     throw new Error("Indirizzo API Spotify non valido.");
   }
-  const response = await fetch(url, {
+  const response = await spotifyApiFetch(url, {
     headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
     credentials: "omit",
     referrerPolicy: "no-referrer",
-  });
+  }, true);
   if (response.status === 401) {
     clearSpotifySession();
     throw new Error("Sessione Spotify scaduta. Avvia di nuovo l’importazione per autorizzarti.");
   }
   if (response.status === 403) throw new Error("Spotify non consente questa richiesta. Verifica accesso e autorizzazioni.");
-  if (response.status === 429) {
-    const delay = response.headers.get("Retry-After");
-    throw new Error(`Limite richieste Spotify raggiunto${delay ? `; riprova tra ${delay} secondi` : ""}.`);
-  }
   if (!response.ok) throw new Error(`Richiesta Spotify non riuscita (HTTP ${response.status}).`);
   return response.json();
 }
@@ -2763,7 +2913,7 @@ async function spotifyWriteRequest(path, accessToken, body) {
   if (url.origin !== "https://api.spotify.com" || !url.pathname.startsWith("/v1/")) {
     throw new Error("Indirizzo API Spotify non valido.");
   }
-  const response = await fetch(url, {
+  const response = await spotifyApiFetch(url, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -2773,17 +2923,13 @@ async function spotifyWriteRequest(path, accessToken, body) {
     body: JSON.stringify(body),
     credentials: "omit",
     referrerPolicy: "no-referrer",
-  });
+  }, false);
   if (response.status === 401) {
     clearSpotifySession();
     throw new Error("Sessione Spotify scaduta. Ricollega l’account e riprova.");
   }
   if (response.status === 403) {
     throw new Error("Spotify ha negato la scrittura. Autorizza il permesso playlist-modify-private e riprova.");
-  }
-  if (response.status === 429) {
-    const delay = response.headers.get("Retry-After");
-    throw new Error(`Limite richieste Spotify raggiunto${delay ? `; riprova tra ${delay} secondi` : ""}.`);
   }
   if (!response.ok) throw new Error(`Scrittura Spotify non riuscita (HTTP ${response.status}).`);
   return response.status === 204 ? {} : response.json();
@@ -3160,6 +3306,7 @@ async function readRemote(owner) {
   const response = await fetch(fileUrl, { headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer" });
   let albums = [];
   let sha = null;
+  let legacyStatusesFound = false;
   if (response.status !== 404) {
     if (!response.ok) {
       if ([401, 403].includes(response.status)) throw new Error(`Accesso al file rifiutato da GitHub (HTTP ${response.status}). Verifica il permesso Contents.`);
@@ -3170,6 +3317,8 @@ async function readRemote(owner) {
     try {
       const bytes = Uint8Array.from(atob(file.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
       const document = JSON.parse(new TextDecoder().decode(bytes));
+      legacyStatusesFound = Array.isArray(document?.albums) && document.albums.some((album) =>
+        album && normalizeAlbumStatus(album.status) !== album.status);
       albums = validateDocument(document);
       sha = file.sha;
     } catch (error) {
@@ -3181,7 +3330,7 @@ async function readRemote(owner) {
     headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
   });
   if (metadataResponse.status === 404) {
-    return { albums, sha, branch, covers: new Map(), coversSha: null, coverArchive: new Uint8Array() };
+    return { albums, sha, branch, covers: new Map(), coversSha: null, coverArchive: new Uint8Array(), legacyStatusesFound };
   }
   if (!metadataResponse.ok) {
     if ([401, 403].includes(metadataResponse.status)) throw new Error(`Accesso a covers.bin rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
@@ -3197,7 +3346,7 @@ async function readRemote(owner) {
   if (!rawResponse.ok) throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download di covers.bin.`);
   const coverArchive = new Uint8Array(await rawResponse.arrayBuffer());
   const covers = await decodeCoverArchive(coverArchive);
-  return { albums, sha, branch, covers, coversSha: metadata.sha, coverArchive };
+  return { albums, sha, branch, covers, coversSha: metadata.sha, coverArchive, legacyStatusesFound };
 }
 
 function encodeBase64(bytes) {
@@ -3334,7 +3483,9 @@ async function sync(choices = {}) {
     if (coversChanged) await writeRemoteCovers(owner, updatedCoverArchive, remote.coversSha, remote.branch);
     const remoteState = JSON.stringify(remote.albums);
     const finalState = JSON.stringify(merged.albums);
-    if (finalState !== remoteState) await writeRemote(owner, merged.albums, remote.sha, remote.branch);
+    if (finalState !== remoteState || remote.legacyStatusesFound) {
+      await writeRemote(owner, merged.albums, remote.sha, remote.branch);
+    }
     state.albums = merged.albums;
     state.base = merged.albums;
     saveState();

@@ -1,9 +1,14 @@
-export const ALBUM_STATES = new Set(["queued", "listening", "heard", "liked", "hidden"]);
+export const ALBUM_STATES = new Set(["queued", "listening", "liked", "disliked"]);
+const LEGACY_ALBUM_STATES = { heard: "liked", hidden: "disliked" };
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
 const ALBUM_FIELDS_V2 = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
 export const ALBUM_FIELDS = [...ALBUM_FIELDS_V2, "primary_genre"];
 export const NO_PRIMARY_GENRE_FILTER = "__accord_no_primary_genre__";
 export const NO_SECONDARY_GENRE_FILTER = "__accord_no_secondary_genre__";
+
+export function normalizeAlbumStatus(status) {
+  return LEGACY_ALBUM_STATES[status] || status;
+}
 
 export function musicBrainzCoverArtUrl(mbid) {
   const id = String(mbid || "").trim();
@@ -88,6 +93,7 @@ export function validateAlbum(value) {
   for (const key of ["id", "name", "artist", "url", "year", "status"]) {
     if (typeof value[key] !== "string") throw new Error(`Campo album non valido: ${key}.`);
   }
+  value = { ...value, status: normalizeAlbumStatus(value.status) };
   const url = new URL(value.url);
   const match = url.pathname.match(/^\/album\/([A-Za-z0-9]+)$/);
   if (url.protocol !== "https:" || url.host !== "open.spotify.com" || url.username || url.password
