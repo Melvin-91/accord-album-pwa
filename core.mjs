@@ -253,6 +253,135 @@ export function spotifyAlbumId(input) {
   return id;
 }
 
+export function createTimedJsonCache({ maxEntries = 256, now = () => Date.now() } = {}) {
+  if (!Number.isInteger(maxEntries) || maxEntries < 1 || typeof now !== "function") {
+    throw new TypeError("Configurazione cache non valida.");
+  }
+  const entries = new Map();
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  return {
+    get(key) {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt <= now()) {
+        entries.delete(key);
+        return undefined;
+      }
+      return clone(entry.value);
+    },
+    set(key, value, ttl) {
+      if (!Number.isFinite(ttl) || ttl <= 0) return;
+      const currentTime = now();
+      entries.set(key, { expiresAt: currentTime + ttl, value: clone(value) });
+      for (const [cachedKey, entry] of entries) {
+        if (entry.expiresAt <= currentTime) entries.delete(cachedKey);
+      }
+      while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+    },
+    clear() {
+      entries.clear();
+    },
+  };
+}
+
+export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.now() } = {}) {
+  if (!Number.isInteger(maxEntries) || maxEntries < 1 || typeof now !== "function") {
+    throw new TypeError("Configurazione cache non valida.");
+  }
+  const entries = new Map();
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  const header = (headers, name) => {
+    if (typeof headers?.get === "function") return headers.get(name) || "";
+    const key = Object.keys(headers || {}).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+    return key ? headers[key] : "";
+  };
+  const policy = (headers) => {
+    const cacheControl = header(headers, "Cache-Control");
+    const etag = header(headers, "ETag");
+    const directives = new Map();
+    for (const directive of String(cacheControl || "").split(",")) {
+      const [name, ...parts] = directive.trim().split("=");
+      if (name) directives.set(name.toLowerCase(), parts.join("=").trim().replace(/^"|"$/g, ""));
+    }
+    if (directives.has("no-store")) return null;
+    const parsedMaxAge = directives.has("max-age") ? Number(directives.get("max-age")) : null;
+    const maxAge = Number.isSafeInteger(parsedMaxAge) && parsedMaxAge >= 0 ? parsedMaxAge : null;
+    const noCache = directives.has("no-cache");
+    if (!etag && (maxAge === null || maxAge === 0 || noCache)) return null;
+    return {
+      etag: String(etag || ""),
+      cacheControl: String(cacheControl || ""),
+      maxAge: maxAge !== null && !noCache ? maxAge : 0,
+    };
+  };
+  const put = (key, value, headers) => {
+    const details = policy(headers);
+    if (!details) {
+      entries.delete(key);
+      return;
+    }
+    const currentTime = now();
+    entries.set(key, {
+      value: clone(value),
+      etag: details.etag,
+      cacheControl: details.cacheControl,
+      expiresAt: currentTime + details.maxAge * 1000,
+    });
+    for (const [cachedKey, entry] of entries) {
+      if (entry.expiresAt <= currentTime && !entry.etag) entries.delete(cachedKey);
+    }
+    while (entries.size > maxEntries) entries.delete(entries.keys().next().value);
+  };
+  return {
+    get(key) {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      if (entry.expiresAt <= now()) {
+        if (!entry.etag) entries.delete(key);
+        return undefined;
+      }
+      return clone(entry.value);
+    },
+    stale(key) {
+      const entry = entries.get(key);
+      if (!entry) return null;
+      if (!entry.etag) {
+        if (entry.expiresAt <= now()) entries.delete(key);
+        return null;
+      }
+      return { value: clone(entry.value), etag: entry.etag };
+    },
+    set: put,
+    revalidate(key, headers) {
+      const entry = entries.get(key);
+      if (!entry) return undefined;
+      const mergedHeaders = {
+        "Cache-Control": entry.cacheControl,
+        ETag: entry.etag,
+      };
+      for (const name of ["Cache-Control", "ETag"]) {
+        const value = header(headers, name);
+        if (value) mergedHeaders[name] = value;
+      }
+      put(key, entry.value, mergedHeaders);
+      return clone(entry.value);
+    },
+    clear() {
+      entries.clear();
+    },
+  };
+}
+
+export function spotifyCacheableRead(url) {
+  const path = url.pathname.startsWith("/v1/") ? url.pathname.slice(4) : url.pathname.replace(/^\/+/, "");
+  if (path === "search" || path === "me/top/artists" || path === "me/top/tracks") return true;
+  const parts = path.split("/");
+  if (parts.length === 2 && ["albums", "artists", "tracks"].includes(parts[0])) return true;
+  return parts.length === 3
+    && (parts[0] === "artists" && parts[2] === "albums"
+      || parts[0] === "albums" && parts[2] === "tracks");
+}
+
 export function playlistAlbumRecords(entries, playlistName = "") {
   const albums = new Map();
   for (const entry of entries) {
@@ -340,6 +469,71 @@ export function summarizeLastFmTracks(tracks) {
     artists: [...artists.values()].sort((a, b) => b.plays - a.plays || a.name.localeCompare(b.name)),
     knownAlbums,
     trackCount,
+  };
+}
+
+export function validateLastFmHistoryDocument(document) {
+  const fields = ["format", "version", "account", "complete", "updated_at", "coverage", "scrobbles"];
+  if (!document || typeof document !== "object" || Array.isArray(document)
+      || Object.keys(document).sort().join("|") !== fields.sort().join("|")
+      || document.format !== "accord-lastfm-history" || document.version !== 1
+      || document.complete !== true
+      || typeof document.account !== "string"
+      || !/^[A-Za-z0-9_. -]{1,64}$/.test(document.account.trim())
+      || typeof document.updated_at !== "string" || !Number.isFinite(Date.parse(document.updated_at))
+      || !Array.isArray(document.coverage) || !Array.isArray(document.scrobbles)) {
+    throw new Error("Archivio Last.fm non valido.");
+  }
+  const coverage = document.coverage.map((interval) => {
+    if (!Array.isArray(interval) || interval.length !== 2
+        || !Number.isSafeInteger(interval[0]) || !Number.isSafeInteger(interval[1])
+        || interval[0] < 0 || interval[0] > interval[1] || interval[1] > 253402300799) {
+      throw new Error("Copertura dell’archivio Last.fm non valida.");
+    }
+    return [interval[0], interval[1]];
+  }).sort((left, right) => left[0] - right[0]);
+  const mergedCoverage = [];
+  for (const [first, last] of coverage) {
+    const previous = mergedCoverage.at(-1);
+    if (previous && first <= previous[1] + 1) previous[1] = Math.max(previous[1], last);
+    else mergedCoverage.push([first, last]);
+  }
+  if (mergedCoverage.length !== 1 || mergedCoverage[0][0] !== 0) {
+    throw new Error("L’archivio Last.fm non copre tutto lo storico dall’inizio.");
+  }
+  const scrobbles = new Map();
+  for (const row of document.scrobbles) {
+    if (!row || typeof row !== "object" || Array.isArray(row)
+        || Object.keys(row).sort().join("|") !== ["stamp", "artist", "name", "album"].sort().join("|")
+        || !Number.isSafeInteger(row.stamp) || row.stamp < 0 || row.stamp > mergedCoverage[0][1]
+        || typeof row.artist !== "string" || !row.artist.trim() || row.artist.length > 500
+        || typeof row.name !== "string" || !row.name.trim() || row.name.length > 500
+        || typeof row.album !== "string" || row.album.length > 500) {
+      throw new Error("Record dell’archivio Last.fm non valido.");
+    }
+    const normalized = {
+      stamp: row.stamp,
+      artist: row.artist.trim(),
+      name: row.name.trim(),
+      album: row.album.trim(),
+    };
+    const key = JSON.stringify([
+      normalized.stamp,
+      normalized.artist.normalize("NFKC").toLocaleLowerCase(),
+      normalized.name.normalize("NFKC").toLocaleLowerCase(),
+    ]);
+    const previous = scrobbles.get(key);
+    if (!previous || (!previous.album && normalized.album)) scrobbles.set(key, normalized);
+  }
+  return {
+    format: "accord-lastfm-history",
+    version: 1,
+    account: document.account.trim(),
+    complete: true,
+    updated_at: document.updated_at,
+    coverage: mergedCoverage,
+    scrobbles: [...scrobbles.values()].sort((left, right) =>
+      left.stamp - right.stamp || left.artist.localeCompare(right.artist) || left.name.localeCompare(right.name)),
   };
 }
 

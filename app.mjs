@@ -4,6 +4,8 @@ import {
   albumSecondaryGenres,
   aggregateDiscogsEditionRatings,
   bestSpotifyAlbumSuggestionMatch,
+  createConditionalJsonCache,
+  createTimedJsonCache,
   expandSimilarArtists,
   filterListeningAlbumSuggestions,
   filterUnheardArtists,
@@ -28,6 +30,7 @@ import {
   shouldStopDiscogsSuggestionQueue,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
+  spotifyCacheableRead,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   summarizeLastFmTracks,
@@ -36,11 +39,16 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
-} from "./core.mjs?v=28";
+  validateLastFmHistoryDocument,
+} from "./core.mjs?v=32";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
 const COVER_STORE = "covers";
+const LASTFM_HISTORY_STORE = "lastfm-history";
+const LASTFM_HISTORY_USE_KEY = "accord-use-synced-lastfm-history";
+const MAX_LASTFM_HISTORY_ARCHIVE_BYTES = 50 * 1024 * 1024;
+const MAX_LASTFM_HISTORY_JSON_BYTES = 200 * 1024 * 1024;
 const ACTIVE_VIEW_TAB_KEY = "accord-active-view-tab";
 const SUGGESTION_RETURN_KEY = "accord-spotify-suggestion-return";
 const REPOSITORY = "accord-music-data";
@@ -52,14 +60,27 @@ const SPOTIFY_COOLDOWN_KEY = "accord-spotify-rate-limit-until-v1";
 const SPOTIFY_MAX_READ_RETRIES = 2;
 const SPOTIFY_MAX_AUTOMATIC_WAIT_MS = 30_000;
 const LASTFM_API = "https://ws.audioscrobbler.com/2.0/";
+const LASTFM_REQUEST_INTERVAL_MS = 1000;
+const LASTFM_RESPONSE_CACHE_TTL = 6 * 60 * 60 * 1000;
+const LASTFM_RESPONSE_CACHE_METHODS = new Set([
+  "album.search", "album.gettoptags", "artist.getsimilar", "artist.gettopalbums", "tag.gettopalbums",
+]);
+const LASTFM_REQUEST_AT_KEY = "accord-lastfm-request-at-v1";
+const LASTFM_COOLDOWN_KEY = "accord-lastfm-cooldown-until-v1";
 const DISCOGS_SUGGESTION_CACHE_KEY = "accord-discogs-suggestion-cache-v1";
 const DISCOGS_SUGGESTION_CACHE_AGE = 14 * 24 * 60 * 60 * 1000;
 const DISCOGS_SUGGESTION_SAMPLE_SIZE = 5;
 const DISCOGS_SUGGESTION_REQUEST_LIMIT = 200;
 const DISCOGS_SUGGESTION_PAGES_LIMIT = 20;
+const DISCOGS_REQUEST_AT_KEY = "accord-discogs-request-at-v1";
+const DISCOGS_RATE_LIMIT_KEY = "accord-discogs-rate-limit-v1";
+const DISCOGS_COOLDOWN_KEY = "accord-discogs-cooldown-until-v1";
 localStorage.removeItem("accord-spotify-heard-artists-v1");
 localStorage.removeItem("accord-spotify-heard-artist-last-played-v1");
 const suggestedSourceAlbums = new Map();
+const spotifyReadCache = createConditionalJsonCache();
+const lastFmResponseCache = createTimedJsonCache({ maxEntries: 128 });
+const lastFmPendingRequests = new Map();
 const suggestedSpotifyCoverMatches = new Map();
 const suggestedCoverFrames = new Map();
 const suggestedSpotifyMatchCache = new Map();
@@ -76,7 +97,8 @@ const allTimeArtistCache = new Map();
 let suggestedMatchAlbumId = null;
 let topArtistPlaylistPreview = null;
 let lastListeningCatalogRequestAt = 0;
-let lastDiscogsSuggestionRequestAt = 0;
+let lastFmApiRequestQueue = Promise.resolve();
+let discogsApiRequestQueue = Promise.resolve();
 let discogsSuggestionCache;
 let discogsSuggestionCacheWarning = "";
 let suggestionCoverObserver = null;
@@ -129,12 +151,21 @@ tabList.addEventListener("keydown", (event) => {
 let coverDatabasePromise;
 let coverRenderGeneration = 0;
 let coverObjectUrls = [];
+let cachedLastFmHistoryDocument;
 
 function openCoverDatabase() {
   if (!coverDatabasePromise) {
     coverDatabasePromise = new Promise((resolve, reject) => {
-      const request = indexedDB.open(COVER_DATABASE, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore(COVER_STORE, { keyPath: "id" });
+      const request = indexedDB.open(COVER_DATABASE, 2);
+      request.onupgradeneeded = () => {
+        const database = request.result;
+        if (!database.objectStoreNames.contains(COVER_STORE)) {
+          database.createObjectStore(COVER_STORE, { keyPath: "id" });
+        }
+        if (!database.objectStoreNames.contains(LASTFM_HISTORY_STORE)) {
+          database.createObjectStore(LASTFM_HISTORY_STORE, { keyPath: "key" });
+        }
+      };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(new Error(`Archivio offline delle copertine non disponibile: ${request.error?.message || "errore IndexedDB"}`));
       request.onblocked = () => reject(new Error("Aggiornamento dell'archivio offline delle copertine bloccato da un'altra scheda."));
@@ -161,6 +192,58 @@ async function cacheCover(id, data) {
     transaction.onabort = () => reject(new Error(`Impossibile salvare la copertina offline: ${transaction.error?.message || request.error?.message || "transazione IndexedDB interrotta"}`));
     transaction.onerror = () => reject(new Error(`Impossibile salvare la copertina offline: ${transaction.error?.message || request.error?.message || "errore IndexedDB"}`));
   });
+}
+
+async function cacheLastFmHistory(document) {
+  const validated = validateLastFmHistoryDocument(document);
+  const database = await openCoverDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(LASTFM_HISTORY_STORE, "readwrite");
+    const request = transaction.objectStore(LASTFM_HISTORY_STORE).put({
+      key: validated.account.normalize("NFKC").toLocaleLowerCase(),
+      document: validated,
+    });
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(new Error(
+      `Impossibile salvare la cronologia Last.fm offline: ${transaction.error?.message || request.error?.message || "transazione interrotta"}`));
+    transaction.onerror = () => reject(new Error(
+      `Impossibile salvare la cronologia Last.fm offline: ${transaction.error?.message || request.error?.message || "errore IndexedDB"}`));
+  });
+  cachedLastFmHistoryDocument = validated;
+  return validated;
+}
+
+async function getCachedLastFmHistory(username) {
+  const accountKey = username.normalize("NFKC").trim().toLocaleLowerCase();
+  if (cachedLastFmHistoryDocument
+      && cachedLastFmHistoryDocument.account.normalize("NFKC").toLocaleLowerCase() === accountKey) {
+    return cachedLastFmHistoryDocument;
+  }
+  const database = await openCoverDatabase();
+  const document = await new Promise((resolve, reject) => {
+    const request = database.transaction(LASTFM_HISTORY_STORE, "readonly")
+      .objectStore(LASTFM_HISTORY_STORE).get(accountKey);
+    request.onsuccess = () => resolve(request.result?.document || null);
+    request.onerror = () => reject(new Error(
+      `Impossibile leggere la cronologia Last.fm offline: ${request.error?.message || "errore IndexedDB"}`));
+  });
+  if (!document) return null;
+  cachedLastFmHistoryDocument = validateLastFmHistoryDocument(document);
+  return cachedLastFmHistoryDocument;
+}
+
+async function clearCachedLastFmHistory() {
+  const database = await openCoverDatabase();
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(LASTFM_HISTORY_STORE, "readwrite");
+    const request = transaction.objectStore(LASTFM_HISTORY_STORE).clear();
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(new Error(
+      `Impossibile eliminare la cronologia Last.fm offline: ${transaction.error?.message || request.error?.message || "transazione interrotta"}`));
+    transaction.onerror = () => reject(new Error(
+      `Impossibile eliminare la cronologia Last.fm offline: ${transaction.error?.message || request.error?.message || "errore IndexedDB"}`));
+  });
+  cachedLastFmHistoryDocument = null;
 }
 
 function loadState() {
@@ -374,6 +457,7 @@ function credentials() {
     owner: localStorage.getItem("accord-album-owner") || "",
     token: localStorage.getItem("accord-album-token") || "",
     autoSync: localStorage.getItem("accord-album-autosync") === "true",
+    useSyncedLastFmHistory: localStorage.getItem(LASTFM_HISTORY_USE_KEY) === "true",
   };
 }
 
@@ -404,6 +488,7 @@ function openSettings() {
   $("#tokenInput").value = "";
   $("#tokenInput").placeholder = current.token ? "Token salvato (vuoto per mantenerlo)" : "ghp_…";
   $("#autoSyncInput").checked = current.autoSync;
+  $("#useSyncedLastfmHistoryInput").checked = current.useSyncedLastFmHistory;
   $("#spotifyClientIdInput").value = spotify.clientId;
   $("#spotifyRedirectUriInput").value = spotify.redirectUri;
   $("#lastfmApiKeyInput").value = "";
@@ -430,6 +515,19 @@ $("#clearLastfmApiKey").addEventListener("click", () => {
   $("#lastfmApiKeyInput").value = "";
   $("#lastfmApiKeyInput").placeholder = "Chiave API (32 caratteri)";
   setSyncState("Chiave Last.fm dimenticata");
+});
+$("#forgetSyncedLastfmHistory").addEventListener("click", async () => {
+  if (!window.confirm("Eliminare da questo browser la copia offline della cronologia Last.fm? Il file nel repository GitHub non verrà modificato.")) {
+    return;
+  }
+  try {
+    await clearCachedLastFmHistory();
+    localStorage.removeItem(LASTFM_HISTORY_USE_KEY);
+    $("#useSyncedLastfmHistoryInput").checked = false;
+    setSyncState("Copia locale della cronologia Last.fm eliminata");
+  } catch (error) {
+    showMessage("Eliminazione non riuscita", error.message);
+  }
 });
 $("#settingsForm").addEventListener("submit", (event) => {
   if (event.submitter?.value !== "save") return;
@@ -463,6 +561,8 @@ $("#settingsForm").addEventListener("submit", (event) => {
   localStorage.setItem("accord-album-owner", owner);
   localStorage.setItem("accord-album-token", token);
   localStorage.setItem("accord-album-autosync", String($("#autoSyncInput").checked));
+  localStorage.setItem(LASTFM_HISTORY_USE_KEY, String($("#useSyncedLastfmHistoryInput").checked));
+  updateSuggestionToolUi();
   if (clientId) localStorage.setItem("accord-spotify-client-id", clientId);
   else localStorage.removeItem("accord-spotify-client-id");
   localStorage.setItem("accord-spotify-redirect-uri", redirectUri.href);
@@ -479,9 +579,12 @@ $("#clearCredentials").addEventListener("click", () => {
   localStorage.removeItem("accord-album-owner");
   localStorage.removeItem("accord-album-token");
   localStorage.removeItem("accord-album-autosync");
+  localStorage.removeItem(LASTFM_HISTORY_USE_KEY);
   $("#ownerInput").value = "";
   $("#tokenInput").value = "";
   $("#autoSyncInput").checked = false;
+  $("#useSyncedLastfmHistoryInput").checked = false;
+  updateSuggestionToolUi();
   setSyncState("Credenziali dimenticate");
 });
 
@@ -841,31 +944,12 @@ async function loadCollectionCover(task, spotifyAlbum, spotifyError = "") {
       .filter((image) => trustedSpotifyCoverUrl(image?.url))
       .sort((left, right) => Math.abs((left.width || 300) - 300) - Math.abs((right.width || 300) - 300))
       : [];
-    let loaded = false;
     for (const image of images) {
-      if (await tryImage(trustedSpotifyCoverUrl(image.url), "Spotify")) {
-        loaded = true;
-        break;
-      }
+      if (await tryImage(trustedSpotifyCoverUrl(image.url), "Spotify")) return;
     }
-    if (loaded) return;
     if (!images.length) errors.push("Spotify: nessuna immagine verificabile.");
   } else {
     errors.push("Spotify: nessuna immagine verificabile.");
-  }
-
-  if (!collectionCoverTaskIsCurrent(task)) return;
-  try {
-    const oembedUrl = new URL("https://open.spotify.com/oembed");
-    oembedUrl.searchParams.set("url", album.url);
-    const response = await fetch(oembedUrl, { credentials: "omit", referrerPolicy: "no-referrer" });
-    if (!response.ok) throw new Error(`Spotify oEmbed ha risposto con HTTP ${response.status}.`);
-    const metadata = await response.json();
-    const coverUrl = trustedSpotifyCoverUrl(metadata.thumbnail_url);
-    if (coverUrl && await tryImage(coverUrl, "Spotify oEmbed")) return;
-    errors.push("Spotify oEmbed: nessuna immagine verificabile.");
-  } catch (error) {
-    errors.push(`Spotify oEmbed: ${error.message}`);
   }
 
   if (!collectionCoverTaskIsCurrent(task)) return;
@@ -900,32 +984,30 @@ async function loadCollectionCoverBatch(tasks) {
     return false;
   }));
   const pending = tasks.filter((task, index) => !cached[index] && collectionCoverTaskIsCurrent(task));
-  const albumsById = new Map();
-  let spotifyError = "";
+  let token = null;
+  let tokenError = "";
   if (pending.length) {
     try {
-      const token = await collectionSpotifyToken();
-      if (!token) throw new Error("Sessione Spotify non disponibile.");
-      const ids = pending.map((task) => task.album.id);
-      const query = new URLSearchParams({ ids: ids.join(",") });
-      const data = await spotifyRequest(`albums?${query}`, token);
-      if (!data || !Array.isArray(data.albums) || data.albums.length !== ids.length) {
-        throw new Error("Spotify non ha restituito tutte le copertine richieste.");
-      }
-      data.albums.forEach((album, index) => {
-        if (album === null) return;
-        if (!album || album.id !== ids[index]) {
-          throw new Error("Spotify ha restituito album fuori ordine o non verificabili.");
-        }
-        albumsById.set(album.id, album);
-      });
+      token = await collectionSpotifyToken();
+      if (!token) tokenError = "Sessione Spotify non disponibile.";
     } catch (error) {
-      spotifyError = error.message;
+      tokenError = error.message;
     }
   }
-  await Promise.all(tasks.map((task, index) => cached[index] ? null : loadCollectionCover(
-    task, albumsById.get(task.album.id) || null, spotifyError,
-  )));
+  await Promise.all(tasks.map(async (task, index) => {
+    if (cached[index]) return;
+    let spotifyAlbum = null;
+    let spotifyError = tokenError;
+    if (token && collectionCoverTaskIsCurrent(task)) {
+      try {
+        spotifyAlbum = await spotifyRequest(`albums/${encodeURIComponent(task.album.id)}`, token);
+        if (spotifyAlbum?.id !== task.album.id) throw new Error("Spotify ha restituito un album non corrispondente.");
+      } catch (error) {
+        spotifyError = error.message;
+      }
+    }
+    await loadCollectionCover(task, spotifyAlbum, spotifyError);
+  }));
 }
 
 function enqueueCollectionCover(task) {
@@ -1326,7 +1408,60 @@ async function lastFmRequest(values) {
     openSettings();
     throw new Error("Configura la chiave API Last.fm nelle impostazioni, poi riprova.");
   }
+  const cacheable = LASTFM_RESPONSE_CACHE_METHODS.has(values.method);
+  const cacheKey = JSON.stringify(Object.entries(values).sort(([left], [right]) => left.localeCompare(right)));
+  if (cacheable) {
+    const cached = lastFmResponseCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    if (lastFmPendingRequests.has(cacheKey)) return lastFmPendingRequests.get(cacheKey);
+  }
   const parameters = new URLSearchParams({ ...values, api_key: apiKey, format: "json" });
+  const request = async () => {
+    const queued = lastFmApiRequestQueue.then(async () => {
+      if (navigator.locks?.request) {
+        return navigator.locks.request("accord-lastfm-api", async () => {
+          const cooldownUntil = Number(localStorage.getItem(LASTFM_COOLDOWN_KEY)) || 0;
+          if (cooldownUntil > Date.now()) {
+            throw new Error(`Limite Last.fm attivo; riprova tra ${Math.ceil((cooldownUntil - Date.now()) / 1000)} secondi.`);
+          }
+          const lastRequestAt = Number(localStorage.getItem(LASTFM_REQUEST_AT_KEY)) || 0;
+          const delay = LASTFM_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
+          if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+          const currentCooldown = Number(localStorage.getItem(LASTFM_COOLDOWN_KEY)) || 0;
+          if (currentCooldown > Date.now()) {
+            throw new Error(`Limite Last.fm attivo; riprova tra ${Math.ceil((currentCooldown - Date.now()) / 1000)} secondi.`);
+          }
+          localStorage.setItem(LASTFM_REQUEST_AT_KEY, String(Date.now()));
+          return fetchLastFmResponse(parameters);
+        });
+      }
+      const cooldownUntil = Number(localStorage.getItem(LASTFM_COOLDOWN_KEY)) || 0;
+      if (cooldownUntil > Date.now()) {
+        throw new Error(`Limite Last.fm attivo; riprova tra ${Math.ceil((cooldownUntil - Date.now()) / 1000)} secondi.`);
+      }
+      const lastRequestAt = Number(localStorage.getItem(LASTFM_REQUEST_AT_KEY)) || 0;
+      const delay = LASTFM_REQUEST_INTERVAL_MS - (Date.now() - lastRequestAt);
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      localStorage.setItem(LASTFM_REQUEST_AT_KEY, String(Date.now()));
+      return fetchLastFmResponse(parameters);
+    });
+    lastFmApiRequestQueue = queued.then(() => undefined, () => undefined);
+    return queued;
+  };
+  const pending = request();
+  if (cacheable) lastFmPendingRequests.set(cacheKey, pending);
+  try {
+    const data = await pending;
+    if (cacheable) lastFmResponseCache.set(cacheKey, data, LASTFM_RESPONSE_CACHE_TTL);
+    return data;
+  } finally {
+    if (cacheable && lastFmPendingRequests.get(cacheKey) === pending) {
+      lastFmPendingRequests.delete(cacheKey);
+    }
+  }
+}
+
+async function fetchLastFmResponse(parameters) {
   let response;
   try {
     response = await fetch(`${LASTFM_API}?${parameters}`, {
@@ -1337,11 +1472,26 @@ async function lastFmRequest(values) {
   } catch {
     throw new Error("Last.fm non raggiungibile. Verifica la connessione e riprova.");
   }
+  if (response.status === 429) {
+    const retryAfter = Number(response.headers.get("Retry-After"));
+    const cooldown = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 60_000;
+    localStorage.setItem(LASTFM_COOLDOWN_KEY, String(Date.now() + cooldown));
+    throw new Error(`Limite Last.fm raggiunto; riprova tra ${Math.ceil(cooldown / 1000)} secondi.`);
+  }
   if (!response.ok) throw new Error(`Last.fm ha risposto con HTTP ${response.status}.`);
-  const data = await response.json();
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error("Risposta Last.fm non leggibile.");
+    throw error;
+  }
   if (data.error) {
     if (["10", "26"].includes(String(data.error))) throw new Error("Chiave API Last.fm non valida o sospesa.");
-    if (String(data.error) === "29") throw new Error("Limite Last.fm raggiunto; riprova più tardi.");
+    if (String(data.error) === "29") {
+      localStorage.setItem(LASTFM_COOLDOWN_KEY, String(Date.now() + 60_000));
+      throw new Error("Limite Last.fm raggiunto; riprova tra un minuto.");
+    }
     throw new Error(data.message || "Last.fm non ha completato la richiesta.");
   }
   return data;
@@ -1412,7 +1562,46 @@ async function recentLastFmScrobbles(username, range) {
       return Number.isFinite(stamp) && stamp >= (from ?? 0) && stamp <= to;
     }));
   }
-  return { ...summarizeLastFmTracks(tracks), partial: totalPages > pageLimit };
+  return { ...summarizeLastFmTracks(tracks), tracks, partial: totalPages > pageLimit };
+}
+
+function lastFmArchiveTracks(document, range) {
+  const from = range.from ?? 0;
+  const to = range.to;
+  return document.scrobbles
+    .filter((row) => row.stamp >= from && row.stamp <= to)
+    .map((row) => ({
+      artist: { name: row.artist },
+      name: row.name,
+      album: { name: row.album },
+      date: { uts: String(row.stamp) },
+    }));
+}
+
+function summarizeLastFmRange(tracks, range) {
+  const from = range.from ?? 0;
+  const selected = tracks.filter((track) => {
+    const stamp = Number(track?.date?.uts);
+    return Number.isFinite(stamp) && stamp >= from && stamp <= range.to;
+  });
+  return { ...summarizeLastFmTracks(selected), tracks: selected, partial: false, syncedArchive: true };
+}
+
+async function completeLastFmArchiveTracks(username, document, to) {
+  const accountKey = (value) => value.normalize("NFKC").trim().toLocaleLowerCase();
+  if (accountKey(document.account) !== accountKey(username)) {
+    throw new Error("L’archivio Last.fm sincronizzato appartiene a un altro account. Esporta l’account corretto da Desktop.");
+  }
+  const coveredUntil = document.coverage[0][1];
+  const tracks = lastFmArchiveTracks(document, { from: 0, to: Math.min(to, coveredUntil) });
+  if (to > coveredUntil) {
+    const delta = await recentLastFmScrobbles(username, { from: coveredUntil + 1, to });
+    if (delta.partial) {
+      throw new Error("Gli ascolti successivi all’esportazione superano 1.000. Sincronizza tutto lo storico in Desktop e riesporta Last.fm.");
+    }
+    tracks.push(...delta.tracks);
+  }
+  return tracks;
 }
 
 async function lastFmAllTimeArtistNames(username) {
@@ -1617,51 +1806,95 @@ function recentDiscogsEntry(entry) {
 }
 
 async function discogsSuggestionRequest(path, parameters, state) {
-  if (state.requests >= DISCOGS_SUGGESTION_REQUEST_LIMIT) {
-    throw new DiscogsSuggestionBudgetError("Raggiunto il limite di richieste Discogs per questa ricerca.");
-  }
-  const delay = 2600 - (Date.now() - lastDiscogsSuggestionRequestAt);
-  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-  const url = new URL(path, DISCOGS_API);
-  for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, String(value));
-  let response;
-  try {
-    response = await fetch(url, {
-      headers: { Accept: "application/json" },
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-    });
-  } catch (error) {
-    if (error instanceof TypeError) {
-      throw new DiscogsSuggestionApiError(`Discogs non raggiungibile: ${error.message}`, {
-        stopQueue: shouldStopDiscogsSuggestionQueue(null),
-      });
-    }
-    throw error;
-  }
-  lastDiscogsSuggestionRequestAt = Date.now();
-  state.requests += 1;
-  if (!response.ok) {
-    throw new DiscogsSuggestionApiError(
-      response.status === 429
-        ? "Discogs ha raggiunto il limite di richieste."
-        : `Discogs ha risposto con HTTP ${response.status}.`,
-      { stopQueue: shouldStopDiscogsSuggestionQueue(response.status) },
-    );
-  }
-  let data;
-  try {
-    data = await response.json();
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new DiscogsSuggestionApiError("Risposta Discogs non leggibile.", { stopQueue: true });
-    }
-    throw error;
-  }
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new DiscogsSuggestionApiError("Risposta Discogs non valida.", { stopQueue: true });
-  }
-  return data;
+  const queued = discogsApiRequestQueue.then(async () => {
+    const request = async () => {
+      if (state.requests >= DISCOGS_SUGGESTION_REQUEST_LIMIT) {
+        throw new DiscogsSuggestionBudgetError("Raggiunto il limite di richieste Discogs per questa ricerca.");
+      }
+      const cooldownUntil = Number(localStorage.getItem(DISCOGS_COOLDOWN_KEY)) || 0;
+      if (cooldownUntil > Date.now()) {
+        throw new DiscogsSuggestionApiError(
+          `Limite Discogs attivo; riprova tra ${Math.ceil((cooldownUntil - Date.now()) / 1000)} secondi.`,
+          { stopQueue: true },
+        );
+      }
+      const rateLimit = Number(localStorage.getItem(DISCOGS_RATE_LIMIT_KEY)) || 25;
+      const interval = Math.ceil(60_000 / rateLimit * 1.1);
+      const lastRequestAt = Number(localStorage.getItem(DISCOGS_REQUEST_AT_KEY)) || 0;
+      const delay = interval - (Date.now() - lastRequestAt);
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+      const currentCooldown = Number(localStorage.getItem(DISCOGS_COOLDOWN_KEY)) || 0;
+      if (currentCooldown > Date.now()) {
+        throw new DiscogsSuggestionApiError(
+          `Limite Discogs attivo; riprova tra ${Math.ceil((currentCooldown - Date.now()) / 1000)} secondi.`,
+          { stopQueue: true },
+        );
+      }
+      localStorage.setItem(DISCOGS_REQUEST_AT_KEY, String(Date.now()));
+      state.requests += 1;
+      const url = new URL(path, DISCOGS_API);
+      for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, String(value));
+      let response;
+      try {
+        response = await fetch(url, {
+          headers: { Accept: "application/vnd.discogs.v2.discogs+json" },
+          credentials: "omit",
+          referrerPolicy: "no-referrer",
+        });
+      } catch (error) {
+        if (error instanceof TypeError) {
+          throw new DiscogsSuggestionApiError(`Discogs non raggiungibile: ${error.message}`, {
+            stopQueue: shouldStopDiscogsSuggestionQueue(null),
+          });
+        }
+        throw error;
+      }
+      const rawLimit = response.headers.get("X-Discogs-Ratelimit");
+      const reportedLimit = rawLimit ? Number(rawLimit) : NaN;
+      if (Number.isSafeInteger(reportedLimit) && reportedLimit > 0) {
+        localStorage.setItem(DISCOGS_RATE_LIMIT_KEY, String(reportedLimit));
+      }
+      const rawRemaining = response.headers.get("X-Discogs-Ratelimit-Remaining");
+      const reportedRemaining = rawRemaining ? Number(rawRemaining) : NaN;
+      if (Number.isSafeInteger(reportedRemaining) && reportedRemaining === 0) {
+        localStorage.setItem(DISCOGS_COOLDOWN_KEY, String(Date.now() + 60_000));
+      }
+      if (!response.ok) {
+        if (response.status === 429) {
+          const retryAfter = response.headers.get("Retry-After");
+          const retrySeconds = Number(retryAfter);
+          const retryDate = Date.parse(retryAfter || "");
+          const cooldown = Number.isFinite(retrySeconds) && retrySeconds > 0
+            ? retrySeconds * 1000
+            : Number.isFinite(retryDate) && retryDate > Date.now() ? retryDate - Date.now() : 60_000;
+          localStorage.setItem(DISCOGS_COOLDOWN_KEY, String(Date.now() + cooldown));
+        }
+        throw new DiscogsSuggestionApiError(
+          response.status === 429
+            ? "Discogs ha raggiunto il limite di richieste."
+            : `Discogs ha risposto con HTTP ${response.status}.`,
+          { stopQueue: shouldStopDiscogsSuggestionQueue(response.status) },
+        );
+      }
+      let data;
+      try {
+        data = await response.json();
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          throw new DiscogsSuggestionApiError("Risposta Discogs non leggibile.", { stopQueue: true });
+        }
+        throw error;
+      }
+      if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new DiscogsSuggestionApiError("Risposta Discogs non valida.", { stopQueue: true });
+      }
+      return data;
+    };
+    if (navigator.locks?.request) return navigator.locks.request("accord-discogs-api", request);
+    return request();
+  });
+  discogsApiRequestQueue = queued.then(() => undefined, () => undefined);
+  return queued;
 }
 
 function normalizeDiscogsTitle(value) {
@@ -1802,7 +2035,7 @@ async function readDiscogsSuggestionRating(masterId, state, cache) {
   return rating;
 }
 
-async function rateDiscogsSuggestionCandidates(candidates) {
+async function rateDiscogsSuggestionCandidates(candidates, status = $("#suggestionStatus")) {
   const cache = getDiscogsSuggestionCache();
   const state = { requests: 0 };
   const ratings = new Map();
@@ -1827,7 +2060,7 @@ async function rateDiscogsSuggestionCandidates(candidates) {
   for (let index = 0; index < targets.length; index += 1) {
     const album = targets[index];
     attempted += 1;
-    $("#suggestionStatus").textContent =
+    status.textContent =
       `Discogs · album ${index + 1}/${targets.length} · richieste ${state.requests}/${DISCOGS_SUGGESTION_REQUEST_LIMIT}…`;
     try {
       const masterId = await findDiscogsSuggestionMaster(album, state, cache);
@@ -1891,17 +2124,30 @@ async function suggestListeningAlbums(button) {
     localStorage.setItem("accord-lastfm-suggestion-user", username);
     localStorage.setItem("accord-lastfm-suggestion-days", period);
     localStorage.setItem("accord-lastfm-suggestion-exclusion", exclusionPeriod);
-    const history = await recentLastFmScrobbles(username, range);
+    const useSyncedHistory = credentials().useSyncedLastFmHistory;
+    const syncedArchive = useSyncedHistory ? await getCachedLastFmHistory(username) : null;
+    if (useSyncedHistory && !syncedArchive) {
+      throw new Error("Cronologia sincronizzata non trovata su questo dispositivo. Attiva l’opzione in Impostazioni e premi Sincronizza.");
+    }
+    const syncedTracks = syncedArchive
+      ? await completeLastFmArchiveTracks(username, syncedArchive, Math.floor(Date.now() / 1000)) : null;
+    const history = syncedArchive
+      ? summarizeLastFmRange(syncedTracks, range)
+      : await recentLastFmScrobbles(username, range);
     let exclusion;
     if (exclusionPeriod === "none") {
       exclusion = { names: [], lastfmCount: 0, partial: false };
     } else if (exclusionPeriod === "all") {
-      const allTimeHeard = await allTimeHeardArtistNames(username);
+      const allTimeHeard = syncedArchive
+        ? summarizeLastFmRange(syncedTracks, { from: null, to: Math.floor(Date.now() / 1000) })
+        : await allTimeHeardArtistNames(username);
       exclusion = { ...allTimeHeard, partial: false };
     } else {
       const exclusionRange = lastFmSuggestionRange(exclusionPeriod);
       const windowHistory = period === exclusionPeriod ? history
-        : await recentLastFmScrobbles(username, exclusionRange);
+        : syncedArchive
+          ? summarizeLastFmRange(syncedTracks, exclusionRange)
+          : await recentLastFmScrobbles(username, exclusionRange);
       exclusion = {
         names: windowHistory.artists.map((artist) => artist.name),
         lastfmCount: windowHistory.artists.length,
@@ -2004,7 +2250,10 @@ async function suggestListeningAlbums(button) {
     const relatedNote = albums.some((album) => album.matchConfidence === "related")
       ? " · nessuna corrispondenza Last.fm: mostrate solo alternative correlate del catalogo MusicBrainz"
       : "";
-    const coverage = history.partial ? " · campione parziale (massimo 1.000 ascolti)" : "";
+    const coverage = history.partial ? " · campione parziale (massimo 1.000 ascolti)"
+      : history.syncedArchive
+        ? ` · archivio completo fino al ${new Date(syncedArchive.coverage[0][1] * 1000).toLocaleDateString()} + ascolti recenti Last.fm`
+        : "";
     const catalogNote = catalog.unavailable
       ? `MusicBrainz non disponibile (${catalog.unavailableReason}); classifica Last.fm usata come ripiego`
       : `MusicBrainz ${catalog.pages} pagine${catalog.truncated
@@ -2179,6 +2428,303 @@ function renderListeningAlbumSuggestions(albums) {
   }
 }
 
+const spotifyTimeRanges = new Set(["short_term", "medium_term", "long_term"]);
+
+function spotifySuggestionAlbumKey(artist, name) {
+  const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  return JSON.stringify([normalize(artist), normalize(name)]);
+}
+
+async function readSpotifyTopArtists(timeRange, accessToken) {
+  const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
+  const response = await spotifyRequest(`me/top/artists?${parameters}`, accessToken);
+  if (!Array.isArray(response?.items) || response.items.length > 50
+      || response.items.some((artist) => !/^[A-Za-z0-9]{22}$/.test(artist?.id || "")
+        || typeof artist.name !== "string" || !artist.name.trim())) {
+    throw new Error("Spotify non ha restituito una classifica artisti verificabile.");
+  }
+  if (!response.items.length) throw new Error("Spotify non ha trovato artisti nel periodo selezionato.");
+  return response.items;
+}
+
+async function readSpotifyTopTracks(timeRange, accessToken) {
+  const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
+  const response = await spotifyRequest(`me/top/tracks?${parameters}`, accessToken);
+  if (!Array.isArray(response?.items) || response.items.length > 50
+      || response.items.some((track) => !/^[A-Za-z0-9]{22}$/.test(track?.id || "")
+        || !track.name?.trim() || !track.album?.id || !track.album?.name)) {
+    throw new Error("Spotify non ha restituito una classifica brani verificabile.");
+  }
+  return response.items;
+}
+
+async function findSpotifySimilarArtists(seeds, excludedNames, customExcluded, filters, accessToken) {
+  const seedIds = new Set(seeds.map((artist) => artist.id));
+  const seedNames = new Set(seeds.map((artist) => artist.name.trim().toLocaleLowerCase()));
+  const genres = [...new Set(seeds.flatMap((artist) =>
+    (Array.isArray(artist.genres) ? artist.genres : [])
+      .filter((genre) => typeof genre === "string" && genre.trim())
+      .map((genre) => genre.trim())))].slice(0, 6);
+  if (!genres.length) {
+    throw new Error("Spotify non fornisce generi per gli artisti ascoltati; non è possibile trovare proposte affidabili.");
+  }
+  const excluded = new Set([...excludedNames, ...customExcluded]
+    .map((name) => name.trim().replace(/\s+/g, " ").toLocaleLowerCase()).filter(Boolean));
+  const candidates = new Map();
+  for (const genre of genres) {
+    const parameters = new URLSearchParams({
+      q: `genre:${JSON.stringify(genre)}`,
+      type: "artist",
+      limit: "50",
+    });
+    const response = await spotifyRequest(`search?${parameters}`, accessToken);
+    if (!Array.isArray(response?.artists?.items)) {
+      throw new Error("Spotify non ha restituito artisti verificabili per un genere.");
+    }
+    for (const artist of response.artists.items) {
+      if (!/^[A-Za-z0-9]{22}$/.test(artist?.id || "")
+          || typeof artist.name !== "string" || !artist.name.trim()) continue;
+      const name = artist.name.trim();
+      const normalizedName = name.replace(/\s+/g, " ").toLocaleLowerCase();
+      if (seedIds.has(artist.id) || seedNames.has(normalizedName) || excluded.has(normalizedName)) continue;
+      const candidate = candidates.get(artist.id) || {
+        id: artist.id,
+        name,
+        popularity: Number.isInteger(artist.popularity) ? artist.popularity : 0,
+        genres: [],
+        sharedGenres: new Set(),
+      };
+      for (const value of [...(Array.isArray(artist.genres) ? artist.genres : []), genre]) {
+        if (typeof value === "string" && value.trim()
+            && !candidate.genres.some((entry) => entry.toLocaleLowerCase() === value.trim().toLocaleLowerCase())) {
+          candidate.genres.push(value.trim());
+        }
+      }
+      candidate.sharedGenres.add(genre);
+      candidates.set(artist.id, candidate);
+    }
+  }
+  const include = filters.includedGenres.map((value) => value.toLocaleLowerCase());
+  const exclude = filters.excludedGenres.map((value) => value.toLocaleLowerCase());
+  const matches = (genre, terms, mode) => mode === "contains"
+    ? terms.some((term) => genre.toLocaleLowerCase().includes(term))
+    : terms.includes(genre.toLocaleLowerCase());
+  return [...candidates.values()]
+    .filter((artist) => (!include.length || artist.genres.some((genre) =>
+      matches(genre, include, filters.includedGenresMatch)))
+      && !artist.genres.some((genre) => matches(genre, exclude, filters.excludedGenresMatch)))
+    .sort((left, right) => right.sharedGenres.size - left.sharedGenres.size
+      || right.popularity - left.popularity || left.name.localeCompare(right.name))
+    .slice(0, 10)
+    .map((artist) => ({ ...artist, sharedGenres: [...artist.sharedGenres] }));
+}
+
+async function spotifyAlbumsForArtist(artist, accessToken) {
+  const parameters = new URLSearchParams({
+    q: `artist:${JSON.stringify(artist.name)}`,
+    type: "track",
+    limit: "50",
+  });
+  const response = await spotifyRequest(`search?${parameters}`, accessToken);
+  if (!Array.isArray(response?.tracks?.items)) {
+    throw new Error(`Spotify non ha restituito i brani per ${artist.name}.`);
+  }
+  const albums = new Map();
+  for (const track of response.tracks.items) {
+    if (!Array.isArray(track?.artists) || !track.artists.some((entry) => entry?.id === artist.id)
+        || !track.album || track.album.album_type !== "album") continue;
+    if (track.popularity !== undefined && track.popularity !== null
+        && (!Number.isInteger(track.popularity) || track.popularity < 0 || track.popularity > 100)) {
+      throw new Error(`Spotify ha restituito una popolarità non valida per ${artist.name}.`);
+    }
+    const album = track.album;
+    const current = albums.get(album.id) || { album, score: 0, count: 0 };
+    current.score += track.popularity || 0;
+    current.count += 1;
+    albums.set(album.id, current);
+  }
+  const ranked = [...albums.values()]
+    .sort((left, right) => right.score / right.count - left.score / left.count
+      || right.count - left.count || String(right.album.release_date || "").localeCompare(left.album.release_date || ""))
+    .slice(0, 2);
+  return ranked.flatMap(({ album, score, count }) => {
+    const [record] = playlistAlbumRecords([{ item: { type: "track", album } }]);
+    if (!record) return [];
+    const artistNames = (Array.isArray(album.artists) ? album.artists : [])
+      .map((entry) => entry.name).filter((name) => typeof name === "string" && name.trim());
+    return [{
+      ...record,
+      artist_names: artistNames,
+      genres: artist.genres,
+      spotifyPopularity: Math.round(score / count),
+      spotifyTrackSample: count,
+      spotifyRelatedArtist: artist.name,
+      coverUrl: album.images?.[0]?.url || "",
+    }];
+  });
+}
+
+async function buildSpotifyAlbumSuggestions(request, accessToken, status) {
+  if (!request || !spotifyTimeRanges.has(request.period)
+      || !["none", ...spotifyTimeRanges].includes(request.exclusion)) {
+    throw new Error("Periodo Spotify non valido.");
+  }
+  const topArtists = await readSpotifyTopArtists(request.period, accessToken);
+  const excludedNames = request.exclusion === "none" ? []
+    : request.exclusion === request.period ? topArtists.map((artist) => artist.name)
+      : (await readSpotifyTopArtists(request.exclusion, accessToken)).map((artist) => artist.name);
+  const topTracks = await readSpotifyTopTracks(request.period, accessToken);
+  const filters = {
+    excludedArtists: suggestionFilterValues("#spotifyExcludeArtists"),
+    includedGenres: suggestionFilterValues("#spotifyIncludeGenres"),
+    excludedGenres: suggestionFilterValues("#spotifyExcludeGenres"),
+    includedGenresMatch: $("#spotifyIncludeGenresMatch").value,
+    excludedGenresMatch: $("#spotifyExcludeGenresMatch").value,
+  };
+  const customExcluded = new Set(filters.excludedArtists.map((value) => value.toLocaleLowerCase()));
+  const seeds = topArtists.filter((artist) => !customExcluded.has(artist.name.toLocaleLowerCase())).slice(0, 5);
+  if (!seeds.length) throw new Error("Nessun artista Spotify di partenza corrisponde ai filtri.");
+  const similarArtists = await findSpotifySimilarArtists(
+    seeds, excludedNames, filters.excludedArtists, filters, accessToken);
+  if (!similarArtists.length) throw new Error("Spotify non ha trovato artisti compatibili con i filtri di esclusione.");
+
+  const albums = [];
+  for (let index = 0; index < similarArtists.length; index += 1) {
+    status.textContent = `Spotify · artista ${index + 1}/${similarArtists.length} · ${similarArtists[index].name}…`;
+    albums.push(...await spotifyAlbumsForArtist(similarArtists[index], accessToken));
+  }
+  const knownAlbums = new Set();
+  for (const track of topTracks) {
+    const albumArtists = (Array.isArray(track.album.artists) ? track.album.artists : [])
+      .map((artist) => artist?.name).filter((name) => typeof name === "string" && name.trim());
+    for (const artist of albumArtists) {
+      knownAlbums.add(spotifySuggestionAlbumKey(artist, track.album.name));
+    }
+  }
+  const eligible = filterListeningAlbumSuggestions(albums, {
+    knownAlbums,
+    collection: state.albums,
+    heardArtists: excludedNames,
+    excludedArtists: filters.excludedArtists,
+    includedGenres: filters.includedGenres,
+    excludedGenres: filters.excludedGenres,
+    includedGenresMatch: filters.includedGenresMatch,
+    excludedGenresMatch: filters.excludedGenresMatch,
+  });
+  const discogs = await rateDiscogsSuggestionCandidates(eligible, status);
+  return {
+    albums: rankDiscogsSuggestionAlbums(discogs.albums),
+    seedCount: seeds.length,
+    similarArtistCount: similarArtists.length,
+    candidateCount: albums.length,
+    trackCount: topTracks.length,
+    exclusionCount: excludedNames.length,
+    discogs,
+  };
+}
+
+function renderSpotifyAlbumSuggestions(albums) {
+  const container = $("#spotifySuggestionAlbums");
+  container.replaceChildren();
+  for (const album of albums) {
+    const card = document.createElement("article");
+    card.className = "suggestion-album";
+    if (typeof album.coverUrl === "string" && album.coverUrl.startsWith("https://i.scdn.co/image/")) {
+      const cover = createAlbumCoverFrame(album.name);
+      setAlbumCover(cover, album.coverUrl);
+      card.append(cover.frame);
+    }
+    const info = document.createElement("p");
+    const name = document.createElement("strong");
+    name.textContent = album.name;
+    const detail = document.createElement("span");
+    detail.className = "suggestion-detail";
+    detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`;
+    const genres = document.createElement("span");
+    genres.className = "suggestion-detail suggestion-genres";
+    genres.textContent = `Generi Spotify: ${primaryAlbumGenres(album.genres).join(", ") || "non disponibili"}`;
+    const popularity = document.createElement("span");
+    popularity.className = "suggestion-detail";
+    popularity.textContent = `Popolarità brani Spotify ${album.spotifyPopularity}/100 · ${album.spotifyTrackSample} brani campionati`;
+    info.append(name, detail, genres, popularity);
+    if (album.discogs !== null && album.discogs_votes >= 2) {
+      const rating = document.createElement("span");
+      rating.className = "suggestion-detail suggestion-genres";
+      rating.textContent = `Discogs ${album.discogs}/5 · ${album.discogs_votes} voti`;
+      info.append(rating);
+    }
+    const button = document.createElement("button");
+    button.className = "secondary";
+    button.type = "button";
+    button.textContent = "Aggiungi alla raccolta";
+    button.addEventListener("click", () => {
+      try {
+        button.textContent = addAlbumToCollection(album) ? "Aggiunto" : "Già in raccolta";
+        button.disabled = true;
+      } catch (error) {
+        $("#spotifySuggestionStatus").textContent = `Album non aggiunto: ${error.message}`;
+      }
+    });
+    card.append(info, button);
+    container.append(card);
+  }
+  if (!albums.length) {
+    const empty = document.createElement("p");
+    empty.className = "suggestion-detail";
+    empty.textContent = "Nessun album nuovo corrisponde a cronologia e filtri. I generi non disponibili non possono soddisfare un filtro incluso.";
+    container.append(empty);
+  }
+}
+
+async function loadSpotifyAlbumSuggestions(request, accessToken) {
+  const status = $("#spotifySuggestionStatus");
+  const container = $("#spotifySuggestionAlbums");
+  container.replaceChildren();
+  status.textContent = "Leggo le classifiche Spotify e preparo i suggerimenti…";
+  const result = await buildSpotifyAlbumSuggestions(request, accessToken, status);
+  renderSpotifyAlbumSuggestions(result.albums);
+  const { discogs } = result;
+  status.textContent = `Spotify · ${result.trackCount} brani campionati · ${result.seedCount} artisti di partenza · `
+    + `${result.similarArtistCount} artisti simili · ${result.albums.length}/${result.candidateCount} album nuovi`
+    + (result.exclusionCount ? ` · ${result.exclusionCount} artisti esclusi` : "")
+    + ` · Discogs ${discogs.rated}/${discogs.attempted} album valutati`
+    + (discogs.limited ? " · budget Discogs raggiunto" : "")
+    + (discogs.unavailable ? ` · ${discogs.unavailable}` : "");
+}
+
+async function suggestSpotifyAlbums(button) {
+  button.disabled = true;
+  const request = {
+    period: $("#spotifySuggestionPeriod").value,
+    exclusion: $("#spotifySuggestionExclusion").value,
+  };
+  $("#spotifySuggestionStatus").textContent = "Preparo i suggerimenti Spotify…";
+  $("#spotifySuggestionAlbums").replaceChildren();
+  localStorage.setItem("accord-spotify-suggestion-period", request.period);
+  localStorage.setItem("accord-spotify-suggestion-exclusion", request.exclusion);
+  for (const [selector, key] of Object.entries(spotifySuggestionPreferences)) {
+    localStorage.setItem(key, $(selector).value.trim());
+  }
+  try {
+    const token = await spotifyAccessToken();
+    if (!token || sessionStorage.getItem("accord-spotify-top-artists-authorized") !== "1") {
+      const { clientId, redirectUri } = spotifySettings();
+      if (!clientId || !redirectUri) {
+        openSettings();
+        showMessage("Configura Spotify", "Per suggerire album, configura il Client ID e il Redirect URI Spotify.");
+        return;
+      }
+      await startSpotifyAuthorization(JSON.stringify(request), "spotify-album-suggestions");
+      return;
+    }
+    await loadSpotifyAlbumSuggestions(request, token);
+  } catch (error) {
+    $("#spotifySuggestionStatus").textContent = `Suggerimenti Spotify non riusciti: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function loadTopArtistPlaylistPreview(request, accessToken) {
   const { artistCount, tracksPerArtist, timeRange } = request;
   if (!Number.isInteger(artistCount) || artistCount < 1 || artistCount > 20
@@ -2198,13 +2744,29 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
     if (!/^[A-Za-z0-9]{22}$/.test(artist?.id || "") || !artist.name?.trim()) {
       throw new Error("La classifica Spotify contiene un artista non verificabile.");
     }
-    const topTracks = await spotifyRequest(
-      `artists/${encodeURIComponent(artist.id)}/top-tracks?market=from_token`, accessToken);
-    if (!Array.isArray(topTracks?.tracks)) {
-      throw new Error(`Spotify non ha restituito i brani di ${artist.name}.`);
+    const query = new URLSearchParams({
+      q: `artist:${JSON.stringify(artist.name)}`,
+      type: "track",
+      limit: "50",
+    });
+    const search = await spotifyRequest(`search?${query}`, accessToken);
+    if (!Array.isArray(search?.tracks?.items)) {
+      throw new Error(`Spotify non ha restituito i risultati di ricerca per ${artist.name}.`);
     }
+    const matchingTracks = search.tracks.items
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) => Array.isArray(track?.artists)
+        && track.artists.some((entry) => entry?.id === artist.id))
+      .map((entry) => {
+        const score = entry.track.popularity;
+        if (score !== undefined && score !== null && (!Number.isInteger(score) || score < 0 || score > 100)) {
+          throw new Error(`Spotify ha restituito una popolarità non valida per ${artist.name}.`);
+        }
+        return { ...entry, score: score || 0 };
+      })
+      .sort((left, right) => right.score - left.score || left.index - right.index);
     let artistTrackCount = 0;
-    for (const track of topTracks.tracks) {
+    for (const { track } of matchingTracks) {
       if (artistTrackCount >= tracksPerArtist) break;
       if (!track || track.is_playable === false || track.restrictions) continue;
       if (!/^[A-Za-z0-9]{22}$/.test(track.id || "") || track.uri !== `spotify:track:${track.id}`
@@ -2617,15 +3179,22 @@ $("#sortOrder").addEventListener("change", () => {
 function clearSpotifySession() {
   for (const key of ["accord-spotify-access-token", "accord-spotify-refresh-token",
     "accord-spotify-token-expires", "accord-spotify-playlist-write-authorized",
-    "accord-spotify-playlist-builder-authorized"]) sessionStorage.removeItem(key);
+    "accord-spotify-playlist-builder-authorized", "accord-spotify-top-artists-authorized"]) {
+    sessionStorage.removeItem(key);
+  }
+  spotifyReadCache.clear();
 }
 
 function storeSpotifyTokens(tokens) {
   if (typeof tokens.access_token !== "string" || !Number.isFinite(tokens.expires_in) || tokens.expires_in <= 0) {
     throw new Error("Spotify ha restituito una risposta token non valida.");
   }
+  spotifyReadCache.clear();
   sessionStorage.setItem("accord-spotify-access-token", tokens.access_token);
   sessionStorage.setItem("accord-spotify-token-expires", String(Date.now() + tokens.expires_in * 1000));
+  if (String(tokens.scope || "").split(/\s+/).includes("user-top-read")) {
+    sessionStorage.setItem("accord-spotify-top-artists-authorized", "1");
+  }
   if (typeof tokens.refresh_token === "string") {
     sessionStorage.setItem("accord-spotify-refresh-token", tokens.refresh_token);
   }
@@ -2756,11 +3325,15 @@ async function spotifyApiFetch(url, options, retryRead) {
       if (response.status === 429) {
         const delay = spotifyRetryAfterMs(response);
         saveSpotifyCooldown(Date.now() + delay);
+        const quotaExceeded = await spotifyQuotaExceeded(response);
         if (retryRead && rateRetries < SPOTIFY_MAX_READ_RETRIES
-            && delay <= SPOTIFY_MAX_AUTOMATIC_WAIT_MS && !await spotifyQuotaExceeded(response)) {
+            && delay <= SPOTIFY_MAX_AUTOMATIC_WAIT_MS && !quotaExceeded) {
           rateRetries += 1;
           await spotifyDelay(delay);
           continue;
+        }
+        if (quotaExceeded) {
+          throw new Error(`Quota API dell'app Spotify esaurita; riprova tra ${Math.ceil(delay / 1000)} secondi e controlla uso e quota nella Spotify Developer Dashboard.`);
         }
         throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(delay / 1000)} secondi.`);
       }
@@ -2781,18 +3354,34 @@ async function spotifyRequest(path, accessToken) {
   if (url.origin !== "https://api.spotify.com" || !url.pathname.startsWith("/v1/")) {
     throw new Error("Indirizzo API Spotify non valido.");
   }
+  const cacheKey = url.href;
+  const cacheable = spotifyCacheableRead(url);
+  const cached = cacheable ? spotifyReadCache.get(cacheKey) : undefined;
+  if (cached !== undefined) return cached;
+  const stale = cacheable ? spotifyReadCache.stale(cacheKey) : null;
+  const headers = { Accept: "application/json", Authorization: `Bearer ${accessToken}` };
+  if (stale?.etag) headers["If-None-Match"] = stale.etag;
   const response = await spotifyApiFetch(url, {
-    headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+    headers,
     credentials: "omit",
     referrerPolicy: "no-referrer",
+    cache: "no-store",
   }, true);
   if (response.status === 401) {
     clearSpotifySession();
     throw new Error("Sessione Spotify scaduta. Avvia di nuovo l’importazione per autorizzarti.");
   }
   if (response.status === 403) throw new Error("Spotify non consente questa richiesta. Verifica accesso e autorizzazioni.");
+  if (response.status === 304) {
+    if (!cacheable) throw new Error("Spotify ha restituito una risposta 304 senza una cache consentita.");
+    const result = spotifyReadCache.revalidate(cacheKey, response.headers);
+    if (result === undefined) throw new Error("Spotify ha restituito una risposta 304 senza una copia verificabile.");
+    return result;
+  }
   if (!response.ok) throw new Error(`Richiesta Spotify non riuscita (HTTP ${response.status}).`);
-  return response.json();
+  const result = await response.json();
+  if (cacheable) spotifyReadCache.set(cacheKey, result, response.headers);
+  return result;
 }
 
 async function spotifyWriteRequest(path, accessToken, body) {
@@ -2934,7 +3523,7 @@ async function runPlaylistImport(input, accessToken) {
     setSyncState("Playlist importata · nessun album nuovo");
   }
   showMessage("Importazione playlist completata",
-    `${playlist.name}: ${entries.length} brani letti, ${additions.length} album trovati, ${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato a GitHub.`);
+    `${playlist.name}: ${entries.length} brani letti, ${additions.length} album trovati, ${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato automaticamente a GitHub; usa Sincronizza per inviare la raccolta.`);
 }
 
 async function importSpotifyPlaylist(input, accessToken = null) {
@@ -2982,6 +3571,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
     "playlist-builder": "accord-spotify-pending-playlist-builder",
     albums: "accord-spotify-pending-albums",
     "manual-search": "accord-spotify-pending-manual-search",
+    "spotify-album-suggestions": "accord-spotify-pending-album-suggestions",
   };
   const pendingKey = pendingKeys[task];
   if (!pendingKey) throw new Error("Operazione Spotify non valida.");
@@ -3013,6 +3603,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
   if (task === "playlist-create" || task === "playlist-builder") {
     authorizationParameters.scope = "user-top-read playlist-modify-private";
   }
+  if (task === "spotify-album-suggestions") authorizationParameters.scope = "user-top-read";
   authorization.search = new URLSearchParams(authorizationParameters);
   location.assign(authorization);
 }
@@ -3031,11 +3622,13 @@ async function finishSpotifyAuthorization() {
   const pendingPlaylistBuilder = sessionStorage.getItem("accord-spotify-pending-playlist-builder");
   const pendingAlbums = sessionStorage.getItem("accord-spotify-pending-albums");
   const pendingManualSearch = sessionStorage.getItem("accord-spotify-pending-manual-search");
+  const pendingSpotifyAlbumSuggestions = sessionStorage.getItem("accord-spotify-pending-album-suggestions");
   for (const key of ["accord-spotify-oauth-state", "accord-spotify-code-verifier",
     "accord-spotify-oauth-redirect", "accord-spotify-pending-playlist",
     "accord-spotify-pending-playlist-create",
     "accord-spotify-pending-playlist-builder",
     "accord-spotify-pending-albums", "accord-spotify-pending-manual-search",
+    "accord-spotify-pending-album-suggestions",
     ]) sessionStorage.removeItem(key);
   if (error) {
     showMessage("Autorizzazione Spotify annullata", "Autorizzazione non completata; nessun dato è stato aggiunto.");
@@ -3056,7 +3649,23 @@ async function finishSpotifyAuthorization() {
       code_verifier: verifier,
     });
     storeSpotifyTokens(tokens);
-    if (pendingPlaylistBuilder) {
+    if (pendingSpotifyAlbumSuggestions) {
+      if (!String(tokens.scope || "").split(/\s+/).includes("user-top-read")) {
+        throw new Error("Spotify non ha concesso user-top-read; nessun album è stato cercato.");
+      }
+      let request;
+      try {
+        request = JSON.parse(pendingSpotifyAlbumSuggestions);
+      } catch {
+        throw new Error("Richiesta di suggerimenti album Spotify non valida.");
+      }
+      if (!spotifyTimeRanges.has(request.period)
+          || !["none", ...spotifyTimeRanges].includes(request.exclusion)) {
+        throw new Error("Periodo Spotify della richiesta non valido.");
+      }
+      await loadSpotifyAlbumSuggestions(request, tokens.access_token);
+    }
+    else if (pendingPlaylistBuilder) {
       const grants = String(tokens.scope || "").split(/\s+/);
       if (!grants.includes("user-top-read") || !grants.includes("playlist-modify-private")) {
         throw new Error("Spotify non ha concesso user-top-read e playlist-modify-private; nessuna playlist è stata creata.");
@@ -3214,12 +3823,18 @@ async function readRemote(owner) {
       throw new Error(`Il contenuto remoto non e' valido: ${error.message}`);
     }
   }
+  const lastFmHistory = credentials().useSyncedLastFmHistory
+    ? await readRemoteLastFmHistory(repoUrl, branch) : null;
   const coverUrl = `${repoUrl}/contents/covers.bin?ref=${encodeURIComponent(branch)}`;
   const metadataResponse = await fetch(coverUrl, {
     headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
   });
   if (metadataResponse.status === 404) {
-    return { albums, sha, branch, covers: new Map(), coversSha: null, coverArchive: new Uint8Array(), legacyStatusesFound };
+    return {
+      albums, sha, branch, covers: new Map(), coversSha: null,
+      coverArchive: new Uint8Array(), legacyStatusesFound, lastFmHistory,
+      lastFmHistoryMissing: credentials().useSyncedLastFmHistory && !lastFmHistory,
+    };
   }
   if (!metadataResponse.ok) {
     if ([401, 403].includes(metadataResponse.status)) throw new Error(`Accesso a covers.bin rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
@@ -3235,7 +3850,84 @@ async function readRemote(owner) {
   if (!rawResponse.ok) throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download di covers.bin.`);
   const coverArchive = new Uint8Array(await rawResponse.arrayBuffer());
   const covers = await decodeCoverArchive(coverArchive);
-  return { albums, sha, branch, covers, coversSha: metadata.sha, coverArchive, legacyStatusesFound };
+  return {
+    albums, sha, branch, covers, coversSha: metadata.sha, coverArchive, legacyStatusesFound,
+    lastFmHistory,
+    lastFmHistoryMissing: credentials().useSyncedLastFmHistory && !lastFmHistory,
+  };
+}
+
+async function readRemoteLastFmHistory(repoUrl, branch) {
+  const url = `${repoUrl}/contents/lastfm-history.json.gz?ref=${encodeURIComponent(branch)}`;
+  const metadataResponse = await fetch(url, {
+    headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
+  });
+  if (metadataResponse.status === 404) return null;
+  if (!metadataResponse.ok) {
+    if ([401, 403].includes(metadataResponse.status)) {
+      throw new Error(`Accesso alla cronologia Last.fm rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
+    }
+    throw new Error(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura della cronologia Last.fm.`);
+  }
+  const metadata = await metadataResponse.json();
+  if (metadata.type !== "file" || typeof metadata.sha !== "string") {
+    throw new Error("L'archivio della cronologia Last.fm su GitHub non e' un file valido.");
+  }
+  if (Number.isFinite(metadata.size) && metadata.size > MAX_LASTFM_HISTORY_ARCHIVE_BYTES) {
+    throw new Error("La cronologia Last.fm supera il limite di 50 MB compresso.");
+  }
+  const rawResponse = await fetch(url, {
+    headers: { ...authHeaders(), Accept: "application/vnd.github.raw+json" },
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (!rawResponse.ok) {
+    throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download della cronologia Last.fm.`);
+  }
+  const archive = new Uint8Array(await rawResponse.arrayBuffer());
+  if (!archive.length || archive.length > MAX_LASTFM_HISTORY_ARCHIVE_BYTES) {
+    throw new Error("Archivio Last.fm vuoto o superiore a 50 MB.");
+  }
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("Questo browser non supporta l'archivio Last.fm compresso. Aggiorna il browser.");
+  }
+  let stream;
+  try {
+    stream = new Blob([archive]).stream().pipeThrough(new DecompressionStream("gzip"));
+  } catch (error) {
+    throw new Error(`Impossibile decomprimere la cronologia Last.fm: ${error.message}`);
+  }
+  const reader = stream.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_LASTFM_HISTORY_JSON_BYTES) {
+        await reader.cancel();
+        throw new Error("La cronologia Last.fm supera il limite di 200 MB non compresso.");
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("supera il limite")) throw error;
+    throw new Error(`Archivio Last.fm gzip danneggiato: ${error.message}`);
+  }
+  const raw = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    raw.set(chunk, offset);
+    offset += chunk.length;
+  }
+  let document;
+  try {
+    document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw));
+  } catch (error) {
+    throw new Error(`La cronologia Last.fm non è JSON UTF-8 valido: ${error.message}`);
+  }
+  return validateLastFmHistoryDocument(document);
 }
 
 function encodeBase64(bytes) {
@@ -3338,6 +4030,13 @@ async function sync(choices = {}) {
   try {
     if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
     const remote = await readRemote(owner);
+    let historySyncNote = "";
+    if (remote.lastFmHistory) {
+      const history = await cacheLastFmHistory(remote.lastFmHistory);
+      historySyncNote = ` · Last.fm ${history.scrobbles.length.toLocaleString()} ascolti fino al ${new Date(history.coverage[0][1] * 1000).toLocaleDateString()}`;
+    } else if (remote.lastFmHistoryMissing) {
+      historySyncNote = " · esportazione Last.fm Desktop non trovata";
+    }
     const merged = threeWayMerge(state.base, state.albums, remote.albums, choices);
     if (merged.conflicts.length) {
       setSyncState(`${merged.conflicts.length} conflitto${merged.conflicts.length === 1 ? "" : "i"}`);
@@ -3379,7 +4078,7 @@ async function sync(choices = {}) {
     state.base = merged.albums;
     saveState();
     render();
-    setSyncState(`Sincronizzati ${merged.albums.length} album · aggiornato ${new Date().toLocaleTimeString()}`);
+    setSyncState(`Sincronizzati ${merged.albums.length} album${historySyncNote} · aggiornato ${new Date().toLocaleTimeString()}`);
   } catch (error) {
     setSyncState("Sincronizzazione non riuscita");
     showMessage("Errore di sincronizzazione", error.message);
@@ -3399,6 +4098,30 @@ $("#conflictForm").addEventListener("submit", (event) => {
     if (missing) event.preventDefault();
   }
 });
+
+const spotifySuggestionPreferences = {
+  "#spotifyExcludeArtists": "accord-spotify-suggestion-exclude-artists",
+  "#spotifyIncludeGenres": "accord-spotify-suggestion-include-genres",
+  "#spotifyExcludeGenres": "accord-spotify-suggestion-exclude-genres",
+  "#spotifyIncludeGenresMatch": "accord-spotify-suggestion-include-genres-match",
+  "#spotifyExcludeGenresMatch": "accord-spotify-suggestion-exclude-genres-match",
+};
+const savedSpotifyPeriod = localStorage.getItem("accord-spotify-suggestion-period") || "medium_term";
+const savedSpotifyExclusion = localStorage.getItem("accord-spotify-suggestion-exclusion") || "medium_term";
+$("#spotifySuggestionPeriod").value = spotifyTimeRanges.has(savedSpotifyPeriod) ? savedSpotifyPeriod : "medium_term";
+$("#spotifySuggestionExclusion").value = ["none", ...spotifyTimeRanges].includes(savedSpotifyExclusion)
+  ? savedSpotifyExclusion : "medium_term";
+for (const [selector, key] of Object.entries(spotifySuggestionPreferences)) {
+  const input = $(selector);
+  const saved = localStorage.getItem(key) || "";
+  const matchingMode = selector.endsWith("Match");
+  input.value = matchingMode ? saved === "contains" ? "contains" : "exact" : saved;
+  input.addEventListener("change", () => localStorage.setItem(key, input.value.trim()));
+}
+$("#spotifySuggestionPeriod").addEventListener("change", (event) =>
+  localStorage.setItem("accord-spotify-suggestion-period", event.currentTarget.value));
+$("#spotifySuggestionExclusion").addEventListener("change", (event) =>
+  localStorage.setItem("accord-spotify-suggestion-exclusion", event.currentTarget.value));
 
 const lastFmSuggestionPreferences = {
   "#lastfmSuggestionUser": "accord-lastfm-suggestion-user",
@@ -3457,9 +4180,38 @@ suggestionPeriodControl.addEventListener("change", () => {
 suggestionExclusionControl.addEventListener("change", () => {
   localStorage.setItem("accord-lastfm-suggestion-exclusion", suggestionExclusionControl.value);
 });
-$("#lastfmSuggestionButton").addEventListener("click", (event) => {
-  void suggestListeningAlbums(event.currentTarget);
+const suggestionToolControl = $("#suggestionTool");
+const savedSuggestionTool = localStorage.getItem("accord-music-suggestion-tool") || "spotify";
+suggestionToolControl.value = ["spotify", "lastfm"].includes(savedSuggestionTool) ? savedSuggestionTool : "spotify";
+
+function updateSuggestionToolUi() {
+  const spotify = suggestionToolControl.value === "spotify";
+  $(".spotify-suggestions").hidden = !spotify;
+  $(".lastfm-suggestions").hidden = spotify;
+  $("#suggestionToolHelp").textContent = spotify
+    ? "Spotify parte dai tuoi artisti piu' ascoltati nel periodo selezionato, cerca affinità tramite i generi disponibili e propone i loro album. I periodi sono indicativi (circa 1, 6 o 12 mesi)."
+    : credentials().useSyncedLastFmHistory
+      ? "Last.fm usa l’archivio completo esportato da Accord Desktop nel repository privato e scaricato con Sincronizza; gli ascolti più recenti vengono aggiunti da Last.fm."
+      : "Last.fm parte dagli ascolti registrati nel periodo selezionato, cerca artisti affini e propone album del catalogo. Puoi scegliere anche un intervallo personalizzato; senza archivio sincronizzato, la PWA legge fino a 1.000 ascolti per campione.";
+}
+
+suggestionToolControl.addEventListener("change", () => {
+  localStorage.setItem("accord-music-suggestion-tool", suggestionToolControl.value);
+  updateSuggestionToolUi();
 });
+$("#suggestionSearchButton").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  suggestionToolControl.disabled = true;
+  try {
+    if (suggestionToolControl.value === "spotify") await suggestSpotifyAlbums(button);
+    else await suggestListeningAlbums(button);
+  } finally {
+    button.disabled = false;
+    suggestionToolControl.disabled = false;
+  }
+});
+updateSuggestionToolUi();
 
 render();
 restoreListeningSuggestionsForSpotifyReturn();

@@ -6,8 +6,10 @@ import {
   addPlaylistAlbums,
   aggregateDiscogsEditionRatings,
   bestSpotifyAlbumSuggestionMatch,
+  createTimedJsonCache,
   decodeCoverArchive,
   encodeCoverArchive,
+  createConditionalJsonCache,
   expandSimilarArtists,
   filterAlbums,
   filterUnheardArtists,
@@ -30,6 +32,7 @@ import {
   retryMusicBrainzRequest,
   sortAlbumsByManualOrder,
   spotifyAlbumId,
+  spotifyCacheableRead,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
   shouldStopDiscogsSuggestionQueue,
@@ -39,7 +42,71 @@ import {
   threeWayMerge,
   validateAlbum,
   validateDocument,
+  validateLastFmHistoryDocument,
 } from "./core.mjs";
+
+test("Spotify cache honors Cache-Control, ETag, 304 revalidation and no-store", () => {
+  let now = 100;
+  const cache = createConditionalJsonCache({ now: () => now });
+  cache.set("catalog", { items: [{ name: "Original" }] }, {
+    "Cache-Control": "public, max-age=2",
+    ETag: '"v1"',
+  });
+  assert.deepEqual(cache.get("catalog"), { items: [{ name: "Original" }] });
+  now += 2_000;
+  assert.equal(cache.get("catalog"), undefined);
+  assert.deepEqual(cache.stale("catalog"), {
+    value: { items: [{ name: "Original" }] },
+    etag: '"v1"',
+  });
+  assert.deepEqual(cache.revalidate("catalog", { ETag: '"v2"', "Cache-Control": "max-age=3" }), {
+    items: [{ name: "Original" }],
+  });
+  assert.deepEqual(cache.get("catalog"), { items: [{ name: "Original" }] });
+
+  cache.set("live", { playing: true }, { "Cache-Control": "no-store", ETag: '"live"' });
+  assert.equal(cache.get("live"), undefined);
+  assert.equal(cache.stale("live"), null);
+});
+
+test("Spotify cache revalidates no-cache responses and returns defensive copies", () => {
+  const cache = createConditionalJsonCache({ now: () => 100 });
+  cache.set("search", { items: [{ name: "Original" }] }, {
+    "Cache-Control": "no-cache",
+    ETag: '"search-v1"',
+  });
+  const stale = cache.stale("search");
+  stale.value.items[0].name = "Changed";
+  assert.equal(cache.get("search"), undefined);
+  assert.deepEqual(cache.revalidate("search", {}), { items: [{ name: "Original" }] });
+  assert.equal(cache.get("search"), undefined);
+  cache.set("uncacheable", { value: 1 }, {});
+  assert.equal(cache.stale("uncacheable"), null);
+});
+
+test("Spotify cache excludes live playback and mutable playlist reads", () => {
+  assert.equal(spotifyCacheableRead(new URL("https://api.spotify.com/v1/search?q=artist")), true);
+  assert.equal(spotifyCacheableRead(new URL("https://api.spotify.com/v1/albums/album")), true);
+  assert.equal(spotifyCacheableRead(new URL("https://api.spotify.com/v1/me/player")), false);
+  assert.equal(spotifyCacheableRead(new URL("https://api.spotify.com/v1/playlists/playlist/items")), false);
+});
+
+test("Spotify response cache expires entries, bounds memory and returns defensive copies", () => {
+  let now = 100;
+  const cache = createTimedJsonCache({ maxEntries: 2, now: () => now });
+  cache.set("first", { items: [{ name: "Original" }] }, 10);
+  const copy = cache.get("first");
+  copy.items[0].name = "Changed";
+  assert.equal(cache.get("first").items[0].name, "Original");
+
+  cache.set("second", { value: 2 }, 100);
+  cache.set("third", { value: 3 }, 100);
+  assert.equal(cache.get("first"), undefined);
+  assert.deepEqual(cache.get("second"), { value: 2 });
+  assert.deepEqual(cache.get("third"), { value: 3 });
+  now += 100;
+  assert.equal(cache.get("third"), undefined);
+});
 
 const album = (id, overrides = {}) => ({
   id,
@@ -453,6 +520,32 @@ test("excludes suggested albums already scrobbled by any credited artist", () =>
       artist_names: ["Lead Artist"], genres: [] },
   ];
   assert.deepEqual(filterListeningAlbumSuggestions(albums, { knownAlbums: history.knownAlbums }), [albums[1]]);
+});
+
+test("validates complete minimal Last.fm archives and deduplicates scrobbles", () => {
+  const document = {
+    format: "accord-lastfm-history",
+    version: 1,
+    account: "HistoryUser",
+    complete: true,
+    updated_at: "2026-10-28T10:00:00+00:00",
+    coverage: [[0, 100], [101, 200]],
+    scrobbles: [
+      { stamp: 120, artist: "Artist", name: "Track", album: "" },
+      { stamp: 120, artist: "Artist", name: "Track", album: "Album" },
+    ],
+  };
+  assert.deepEqual(validateLastFmHistoryDocument(document), {
+    ...document,
+    coverage: [[0, 200]],
+    scrobbles: [{ stamp: 120, artist: "Artist", name: "Track", album: "Album" }],
+  });
+  assert.throws(() => validateLastFmHistoryDocument({ ...document, api_key: "secret" }), /Archivio Last.fm/);
+  assert.throws(() => validateLastFmHistoryDocument({ ...document, coverage: [[50, 200]] }), /tutto lo storico/);
+  assert.throws(() => validateLastFmHistoryDocument({
+    ...document,
+    scrobbles: [{ ...document.scrobbles[0], spotify_token: "secret" }],
+  }), /Record dell’archivio/);
 });
 
 test("matches included and excluded genres by exact value or contained text", () => {

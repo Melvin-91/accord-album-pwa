@@ -1,6 +1,6 @@
 # Accord · Raccolta album PWA
 
-La raccolta album e i suggerimenti sono organizzati in due schede separate.
+La raccolta album, i suggerimenti e la creazione di playlist sono organizzati in tre schede.
 La versione attiva dell'app è visibile nell'intestazione della PWA e nella
 barra del titolo dell'app desktop; la build iniziale è `1.0.0`.
 
@@ -23,32 +23,62 @@ principale quando il record non ne specifica uno. La versione corrente
 sincronizza il genere principale insieme agli altri campi della raccolta.
 Le miniature JPEG sincronizzate sono conservate in `covers.bin` nel repository
 privato, verificate con SHA-256 e salvate in IndexedDB per l'uso offline. Se
-una miniatura manca, la PWA prova a recuperarla da Spotify e poi dal Cover Art
+una miniatura manca, la PWA prova a recuperarla dal singolo album Spotify e poi dal Cover Art
 Archive; queste copertine online non vengono aggiunte al repository e per
 averle offline serve sincronizzare Accord desktop. La
-sincronizzazione trasferisce solo i campi musicali previsti: non include
+sincronizzazione album trasferisce solo i campi musicali previsti: non include
 database, feedback o note di lavoro, task, token o configurazioni personali.
+La cronologia Last.fm è un'esportazione distinta e facoltativa, inviata solo
+quando l'utente preme **Esporta Last.fm** in Accord Desktop dopo la conferma.
+Il file compresso contiene soltanto timestamp, artista, brano e album quando
+disponibile; non contiene chiavi API né altri dati del database.
 L'ordinamento automatico supporta artista, album, anno, voto, genere e
 collezione. Il riordino manuale è locale al dispositivo PWA, si può fare con
 le frecce o trascinando e non viene sincronizzato con GitHub.
 Per caricare le miniature offline dopo un aggiornamento desktop, esegui una
 sincronizzazione in Accord sul PC e poi sincronizza la PWA sul telefono.
-La sezione Suggerimenti permette di esplorare artisti affini con ListenBrainz
-oppure, su richiesta, di usare Last.fm per derivare artisti di partenza dagli
-ascolti. MusicBrainz fornisce catalogo e generi; Discogs è la fonte primaria
-per scegliere gli album tramite i voti della community, con Last.fm come
-ripiego quando il master o i voti non sono disponibili; non importa file di
-cronologia Spotify. La ricerca propone un solo album per artista. Se non trova almeno dieci artisti,
-amplia la ricerca fino a 30
-artisti seed e 30 candidati e segnala se esaurisce il limite. Quando mancano
-corrispondenze dirette nel catalogo, propone al massimo un'alternativa
-correlata per artista, etichettata come tale e non come corrispondenza diretta.
-Username e filtri restano nel profilo browser; la cronologia non viene salvata
-o sincronizzata. I risultati vengono abbinati a Spotify con una singola
-ricerca solo dopo la scelta dell'utente.
+La sezione Suggerimenti usa un selettore unico per scegliere Spotify o Last.fm,
+con filtri artisti/genere espandibili e un pulsante esplicito di ricerca.
+Spotify usa classifiche limitate a 50 artisti e 50 brani per periodi indicativi
+di circa 1, 6 o 12 mesi, trova artisti tramite generi condivisi e propone i
+loro album; la popolarità dei brani non è un voto dell'album. Last.fm usa
+ascolti e intervalli scelti dall'utente; senza archivio sincronizzato considera
+al massimo 1.000 ascolti per campione. Per la cronologia completa, importa
+tutto lo storico Last.fm in Desktop, premi **Esporta Last.fm**, poi abilita
+**Usa la cronologia Last.fm esportata da Accord Desktop** nelle impostazioni
+della PWA e premi **Sincronizza**. L'archivio viene conservato offline in
+IndexedDB; la PWA non lo scrive nel repository. Gli ascolti successivi
+all'esportazione vengono letti direttamente da Last.fm; se superano 1.000,
+la ricerca chiede di aggiornare l'esportazione desktop. Entrambi i flussi
+possono espandere la ricerca fino a 30 artisti seed e 30 candidati.
+MusicBrainz fornisce catalogo e generi; Discogs ordina le proposte quando trova
+voti affidabili, con Last.fm come ripiego quando mancano. Non viene importata
+la cronologia Spotify.
+
+Le chiamate Last.fm sono distanziate di almeno un secondo; i risultati stabili
+di catalogo sono memorizzati solo in memoria per sei ore, mentre la cronologia
+personale non viene memorizzata nella cache delle risposte. Le richieste
+Discogs usano l'API v2 e rispettano il limite anonimo prudenziale di 25
+richieste al minuto, adattandosi ai limiti esposti dal servizio quando il
+browser li rende leggibili. La PWA usa il normale User-Agent del browser e
+non salva credenziali Discogs; i risultati dei suggerimenti Discogs hanno una
+cache locale di 14 giorni.
+Username e filtri restano nel profilo browser. La cronologia non viene inviata
+dalla PWA; l'eventuale archivio esportato dal Desktop viene scaricato e salvato
+solo dopo l'attivazione esplicita dell'opzione GitHub. Gli album aggiunti dalla raccolta o dai suggerimenti restano
+locali fino a una sincronizzazione esplicita.
 Dalla scheda Raccolta si
 possono anche cercare album su Spotify per titolo, artista, ID o link e
 aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.
+Le risposte Spotify rispettano gli header `Cache-Control`: `max-age` limita
+la durata in memoria, gli ETag vengono rivalidati con `If-None-Match`/`304` e
+`no-store` non viene conservato; player e contenuto playlist restano fuori
+dalla cache. La playlist per artista usa la ricerca e
+ordina i risultati disponibili per popolarità, senza replicare la classifica
+completa dell'endpoint deprecato.
+Le richieste Spotify sono serializzate e rispettano il cooldown `Retry-After`.
+Se Spotify segnala la quota dell'app esaurita, la PWA indica di controllare
+uso e quota nella Developer Dashboard: non e' un permesso OAuth mancante.
 
 ## Pubblicazione
 
@@ -98,9 +128,12 @@ localmente; le chiavi non vengono trasferite tra dispositivi.
 
 Nella scheda **Suggerimenti**, inserisci il nome utente e scegli dal menu gli
 ultimi 7, 30, 90 o 365 giorni, tutto lo storico oppure un intervallo di date
-personalizzato. La PWA legge al massimo 1000 scrobble per richiesta (cinque
-pagine); se la cronologia è più ampia, il risultato indica che il campione è
-parziale. Last.fm fornisce artisti affini e le classifiche dei loro
+personalizzato. Senza archivio sincronizzato la PWA legge al massimo 1000
+scrobble per campione (cinque pagine); se la cronologia è più ampia, indica che
+il campione è parziale. Con l'archivio completo esportato da Desktop, usa tutti
+gli ascolti fino alla copertura esportata e aggiunge quelli successivi da
+Last.fm; se il delta supera 1000 ascolti, chiede di aggiornare l'esportazione.
+Last.fm fornisce artisti affini e le classifiche dei loro
 album più ascoltati; MusicBrainz fornisce catalogo e generi. Per ogni artista
 confronta al massimo i due candidati più ascoltati da Last.fm e sceglie in base
 al punteggio Discogs: media ponderata per il numero di voti e corretta verso
@@ -149,5 +182,6 @@ creare una playlist privata Spotify dai loro brani scegliendone il nome.
 La playlist include fino a tre brani più popolari di ciascun album abbinato,
 non album interi. La funzione richiede il permesso Spotify
 `playlist-modify-private` e crea la playlist solo dopo aver verificato i brani.
-Chiave Last.fm,
-username, filtri e ascolti non vengono trasferiti a GitHub.
+La chiave API Last.fm, l'username e i filtri non vengono trasferiti a GitHub.
+Gli ascolti vengono esportati soltanto con l'azione esplicita **Esporta Last.fm**
+in Desktop; la PWA li legge e li conserva offline, ma non li scrive nel repository.
