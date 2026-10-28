@@ -529,7 +529,7 @@ test("validates complete minimal Last.fm archives and deduplicates scrobbles", (
     account: "HistoryUser",
     complete: true,
     updated_at: "2026-10-28T10:00:00+00:00",
-    coverage: [[0, 100], [101, 200]],
+    coverage: [[100, 150], [151, 200]],
     scrobbles: [
       { stamp: 120, artist: "Artist", name: "Track", album: "" },
       { stamp: 120, artist: "Artist", name: "Track", album: "Album" },
@@ -537,11 +537,19 @@ test("validates complete minimal Last.fm archives and deduplicates scrobbles", (
   };
   assert.deepEqual(validateLastFmHistoryDocument(document), {
     ...document,
-    coverage: [[0, 200]],
+    coverage: [[100, 200]],
     scrobbles: [{ stamp: 120, artist: "Artist", name: "Track", album: "Album" }],
   });
   assert.throws(() => validateLastFmHistoryDocument({ ...document, api_key: "secret" }), /Archivio Last.fm/);
-  assert.throws(() => validateLastFmHistoryDocument({ ...document, coverage: [[50, 200]] }), /tutto lo storico/);
+  assert.throws(() => validateLastFmHistoryDocument({
+    ...document,
+    coverage: [[100, 150], [152, 200]],
+  }), /non è continua/);
+  assert.throws(() => validateLastFmHistoryDocument({
+    ...document,
+    coverage: [[100, 200]],
+    scrobbles: [{ ...document.scrobbles[0], stamp: 50 }],
+  }), /Record dell’archivio/);
   assert.throws(() => validateLastFmHistoryDocument({
     ...document,
     scrobbles: [{ ...document.scrobbles[0], spotify_token: "secret" }],

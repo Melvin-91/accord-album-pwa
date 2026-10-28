@@ -498,14 +498,14 @@ export function validateLastFmHistoryDocument(document) {
     if (previous && first <= previous[1] + 1) previous[1] = Math.max(previous[1], last);
     else mergedCoverage.push([first, last]);
   }
-  if (mergedCoverage.length !== 1 || mergedCoverage[0][0] !== 0) {
-    throw new Error("L’archivio Last.fm non copre tutto lo storico dall’inizio.");
+  if (mergedCoverage.length !== 1) {
+    throw new Error("La copertura dell’archivio Last.fm non è continua.");
   }
   const scrobbles = new Map();
   for (const row of document.scrobbles) {
     if (!row || typeof row !== "object" || Array.isArray(row)
         || Object.keys(row).sort().join("|") !== ["stamp", "artist", "name", "album"].sort().join("|")
-        || !Number.isSafeInteger(row.stamp) || row.stamp < 0 || row.stamp > mergedCoverage[0][1]
+        || !Number.isSafeInteger(row.stamp) || row.stamp < mergedCoverage[0][0] || row.stamp > mergedCoverage[0][1]
         || typeof row.artist !== "string" || !row.artist.trim() || row.artist.length > 500
         || typeof row.name !== "string" || !row.name.trim() || row.name.length > 500
         || typeof row.album !== "string" || row.album.length > 500) {
