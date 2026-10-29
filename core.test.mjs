@@ -10,6 +10,8 @@ import {
   decodeCoverArchive,
   encodeCoverArchive,
   createConditionalJsonCache,
+  createSpotifyJsonReader,
+  createSpotifyTransport,
   expandSimilarArtists,
   filterAlbums,
   filterUnheardArtists,
@@ -28,6 +30,8 @@ import {
   primaryAlbumGenres,
   readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
+  readSpotifyPlaylistItems,
+  readSpotifySearchPages,
   rankDiscogsSuggestionAlbums,
   retryMusicBrainzRequest,
   sortAlbumsByManualOrder,
@@ -43,7 +47,424 @@ import {
   validateAlbum,
   validateDocument,
   validateLastFmHistoryDocument,
+  writeSpotifyPlaylistItems,
 } from "./core.mjs";
+
+const spotifyResponse = (value, headers = {}, status = 200) => ({
+  status, headers, json: async () => value,
+});
+
+const spotifyCooldownKey = "accord-spotify-rate-limit-until-v1";
+function spotifyTransportFixture(handler, overrides = {}) {
+  let time = Date.UTC(2026, 9, 28);
+  const values = new Map();
+  const calls = [];
+  const waits = [];
+  const options = {
+    storage: { getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => values.set(key, value) },
+    now: () => time,
+    wait: async (delay) => { waits.push(delay); time += delay; },
+    random: () => 0,
+    fetch: async (url, init) => {
+      calls.push({ url, init, time });
+      return handler(url, init, calls.length);
+    },
+    ...overrides,
+  };
+  return { transport: createSpotifyTransport(options), options, values, calls, waits,
+    now: () => time };
+}
+const spotifyHttpResponse = (status, retryAfter, error = {}) => ({
+  status,
+  headers: new Headers(retryAfter === undefined ? {} : { "Retry-After": retryAfter }),
+  clone: () => ({ json: async () => ({ error }) }),
+});
+
+test("Spotify OAuth 429 publishes a cooldown consumed by catalog reads and token exchanges", async () => {
+  const tokenUrl = "https://accounts.spotify.com/api/token";
+  const fixture = spotifyTransportFixture((_url, _init, count) =>
+    spotifyHttpResponse(count === 1 ? 429 : 200, "3"));
+  await assert.rejects(fixture.transport.fetch(tokenUrl, { method: "POST" }), /Limite richieste/);
+  assert.equal(fixture.calls.length, 1, "token grants must not be replayed automatically");
+  await assert.rejects(fixture.transport.fetch(tokenUrl, { method: "POST" }), /Limite richieste/);
+  assert.equal(fixture.calls.length, 1, "refresh and authorization-code exchange obey the cooldown");
+  await fixture.transport.fetch("https://api.spotify.com/v1/search", {}, true);
+  assert.deepEqual(fixture.waits, [3000]);
+  assert.equal(fixture.calls[1].time - fixture.calls[0].time, 3000);
+});
+
+test("Spotify Web API 429 blocks refresh and playlist writes without sending them", async () => {
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(429, "31"));
+  await assert.rejects(fixture.transport.fetch("catalog", {}, true), /31 secondi/);
+  for (const url of ["https://accounts.spotify.com/api/token", "playlist"]) {
+    await assert.rejects(fixture.transport.fetch(url, { method: "POST" }), /31 secondi/);
+  }
+  assert.equal(fixture.calls.length, 1);
+  assert.deepEqual(fixture.waits, []);
+});
+
+test("Spotify Retry-After accepts seconds, HTTP dates and a conservative missing-header fallback", async () => {
+  for (const [value, delay] of [["2.5", 2500], ["0", 1000], [undefined, 5000],
+    ["invalid", 5000], ["Wed, 28 Oct 2026 00:00:07 GMT", 7000]]) {
+    const fixture = spotifyTransportFixture((_url, _init, count) =>
+      spotifyHttpResponse(count === 1 ? 429 : 200, value));
+    await fixture.transport.fetch("catalog", {}, true);
+    assert.deepEqual(fixture.waits, [delay]);
+    assert.equal(fixture.calls.length, 2);
+  }
+});
+
+test("Spotify read retries are bounded, quota errors are not retried, and cooldown survives exhaustion", async () => {
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(429, "1"));
+  await assert.rejects(fixture.transport.fetch("catalog", {}, true), /Limite richieste/);
+  assert.equal(fixture.calls.length, 3);
+  assert.deepEqual(fixture.waits, [1000, 1000]);
+  assert.equal(Number(fixture.values.get(spotifyCooldownKey)), fixture.now() + 1000);
+  const quota = spotifyTransportFixture(() =>
+    spotifyHttpResponse(429, "2", { reason: "quota_exceeded" }));
+  await assert.rejects(quota.transport.fetch("catalog", {}, true), /Developer Dashboard/);
+  assert.equal(quota.calls.length, 1);
+  assert.deepEqual(quota.waits, []);
+});
+
+test("Spotify 429 never shortens a cooldown extended by another client while its request was in flight", async () => {
+  let fixture;
+  fixture = spotifyTransportFixture(() => {
+    fixture.values.set(spotifyCooldownKey, String(fixture.now() + 60_000));
+    return spotifyHttpResponse(429, "1");
+  });
+  const started = fixture.now();
+  await assert.rejects(fixture.transport.fetch("catalog", {}, true), /59 secondi/);
+  assert.equal(Number(fixture.values.get(spotifyCooldownKey)), started + 60_000);
+  assert.equal(fixture.calls.length, 1);
+});
+
+test("Spotify 429 without a JSON error body still persists and enforces Retry-After", async () => {
+  const fixture = spotifyTransportFixture(() => ({
+    status: 429,
+    headers: new Headers({ "Retry-After": "9" }),
+    clone: () => ({ json: async () => { throw new SyntaxError("not JSON"); } }),
+  }));
+  await assert.rejects(fixture.transport.fetch("token", { method: "POST" }), /9 secondi/);
+  await assert.rejects(fixture.transport.fetch("playlist", { method: "POST" }), /9 secondi/);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(Number(fixture.values.get(spotifyCooldownKey)), fixture.now() + 9000);
+});
+
+test("Spotify aborted 429 body preserves cooldown and blocks the next POST without fetching", async () => {
+  const fixture = spotifyTransportFixture(() => ({
+    status: 429,
+    headers: new Headers({ "Retry-After": "9" }),
+    clone: () => ({ json: async () => {
+      throw new DOMException("Body reading aborted", "AbortError");
+    } }),
+  }));
+  await assert.rejects(fixture.transport.fetch("token", { method: "POST" }), /9 secondi/);
+  assert.equal(Number(fixture.values.get(spotifyCooldownKey)), fixture.now() + 9000);
+  await assert.rejects(fixture.transport.fetch("playlist", { method: "POST" }), /9 secondi/);
+  assert.equal(fixture.calls.length, 1);
+  assert.equal(Number(fixture.values.get(spotifyCooldownKey)), fixture.now() + 9000);
+});
+
+test("Spotify uncertain OAuth/playlist writes are never retried for network errors or 5xx", async () => {
+  for (const url of ["https://accounts.spotify.com/api/token", "playlist"]) {
+    for (const status of [0, 500, 503]) {
+      const fixture = spotifyTransportFixture(() => {
+        if (!status) throw new TypeError("offline");
+        return spotifyHttpResponse(status);
+      });
+      if (!status) await assert.rejects(fixture.transport.fetch(url, { method: "POST" }), /offline/);
+      else assert.equal((await fixture.transport.fetch(url, { method: "POST" })).status, status);
+      assert.equal(fixture.calls.length, 1);
+      assert.deepEqual(fixture.waits, []);
+    }
+  }
+});
+
+test("Spotify transient GET retries back off and recheck a newly extended shared cooldown", async () => {
+  let fixture;
+  fixture = spotifyTransportFixture((_url, _init, count) => {
+    if (count === 1) {
+      fixture.values.set(spotifyCooldownKey, String(fixture.now() + 2000));
+      throw new TypeError("offline");
+    }
+    return spotifyHttpResponse(count === 2 ? 503 : 200);
+  });
+  await fixture.transport.fetch("catalog", {}, true);
+  assert.deepEqual(fixture.waits, [500, 1500, 1000]);
+  assert.equal(fixture.calls.length, 3);
+  assert.equal(fixture.calls[1].time - fixture.calls[0].time, 2000);
+});
+
+test("Spotify transports in separate tabs serialize through the same Web Lock and share OAuth cooldown", async () => {
+  let sharedQueue = Promise.resolve();
+  const lockNames = [];
+  const lock = (name, task) => {
+    lockNames.push(name);
+    const result = sharedQueue.then(task);
+    sharedQueue = result.catch(() => {});
+    return result;
+  };
+  const fixture = spotifyTransportFixture((_url, _init, count) =>
+    spotifyHttpResponse(count === 1 ? 429 : 200, "4"), { lock });
+  const secondTab = createSpotifyTransport(fixture.options);
+  const results = await Promise.allSettled([
+    fixture.transport.fetch("https://accounts.spotify.com/api/token", { method: "POST" }),
+    secondTab.fetch("playlist", { method: "POST" }),
+  ]);
+  assert.ok(results.every((result) => result.status === "rejected"));
+  assert.equal(fixture.calls.length, 1);
+  assert.deepEqual(lockNames, ["accord-spotify-api", "accord-spotify-api"]);
+  await secondTab.fetch("catalog", {}, true);
+  assert.equal(fixture.calls.length, 2);
+  assert.equal(fixture.calls[1].time - fixture.calls[0].time, 4000);
+});
+
+test("Spotify one-tab queue serializes different endpoints even without Web Locks", async () => {
+  let release;
+  const fixture = spotifyTransportFixture((_url, _init, count) => count === 1
+    ? new Promise((resolve) => { release = resolve; }) : spotifyHttpResponse(200));
+  const first = fixture.transport.fetch("catalog", {}, true);
+  const second = fixture.transport.fetch("https://accounts.spotify.com/api/token", { method: "POST" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof release, "function");
+  assert.equal(fixture.calls.length, 1);
+  release(spotifyHttpResponse(200));
+  await Promise.all([first, second]);
+  assert.equal(fixture.calls.length, 2);
+});
+
+test("Spotify cache subtracts intermediary Age and apparent Date age, including revalidation", () => {
+  const now = Date.UTC(2026, 9, 28);
+  const cache = createConditionalJsonCache({ now: () => now });
+  for (const headers of [{ Age: "60" }, { Date: new Date(now - 60_000).toUTCString() }]) {
+    cache.set("old", { value: 1 }, { "Cache-Control": "max-age=60", ETag: '"v1"', ...headers });
+    assert.equal(cache.get("old"), undefined);
+    assert.equal(cache.stale("old").etag, '"v1"');
+  }
+  cache.revalidate("old", { Age: "61", "Cache-Control": "max-age=60" });
+  assert.equal(cache.get("old"), undefined);
+  cache.revalidate("old", { Date: new Date(now).toUTCString(), "Cache-Control": "max-age=60" });
+  assert.deepEqual(cache.get("old"), { value: 1 });
+});
+
+test("Spotify concurrent equivalent GETs use one request and independent JSON copies", async () => {
+  const reader = createSpotifyJsonReader();
+  let requests = 0;
+  const request = async () => {
+    requests += 1;
+    return spotifyResponse({ items: [{ name: "Original" }] });
+  };
+  const [first, second] = await Promise.all([
+    reader.read("https://api.spotify.com/v1/search?q=test&type=album", "token", request),
+    reader.read("https://api.spotify.com/v1/search?type=album&q=test", "token", request),
+  ]);
+  assert.equal(requests, 1);
+  first.items[0].name = "Changed";
+  assert.equal(second.items[0].name, "Original");
+  await reader.read("https://api.spotify.com/v1/search?q=test&type=album", "token", request);
+  assert.equal(requests, 2, "responses without cache headers must not become a TTL cache");
+});
+
+test("Spotify GET coalescing is token scoped and failures can be retried", async () => {
+  const reader = createSpotifyJsonReader();
+  const url = "https://api.spotify.com/v1/albums/album";
+  let requests = 0;
+  const request = async () => {
+    requests += 1;
+    throw new Error("offline");
+  };
+  const results = await Promise.allSettled([
+    reader.read(url, "first", request), reader.read(url, "first", request),
+    reader.read(url, "second", request),
+  ]);
+  assert.ok(results.every((result) => result.status === "rejected"));
+  assert.equal(requests, 2);
+  await assert.rejects(reader.read(url, "first", request), /offline/);
+  assert.equal(requests, 3);
+});
+
+test("Spotify reader caches and revalidates once per concurrent read, never across tokens", async () => {
+  let now = 0;
+  const reader = createSpotifyJsonReader({ cache: createConditionalJsonCache({ now: () => now }) });
+  const url = "https://api.spotify.com/v1/me/top/artists";
+  let requests = 0;
+  const request = async (etag) => {
+    requests += 1;
+    assert.equal(etag, requests === 2 ? '"v1"' : "");
+    return spotifyResponse({ items: [requests] },
+      { "Cache-Control": "max-age=1", ETag: '"v1"' }, requests === 2 ? 304 : 200);
+  };
+  assert.deepEqual(await reader.read(url, "first", request), { items: [1] });
+  await reader.read(url, "first", request);
+  assert.equal(requests, 1);
+  now = 1001;
+  assert.deepEqual(await Promise.all([
+    reader.read(url, "first", request), reader.read(url, "first", request),
+  ]), [{ items: [1] }, { items: [1] }]);
+  assert.equal(requests, 2);
+  assert.deepEqual(await reader.read(url, "second", request), { items: [3] });
+  reader.clear();
+  await reader.read(url, "second", request);
+  assert.equal(requests, 4);
+});
+
+test("Spotify clear prevents an old in-flight read from repopulating the new session cache", async () => {
+  const reader = createSpotifyJsonReader();
+  const url = "https://api.spotify.com/v1/albums/album";
+  let finish;
+  let requests = 0;
+  const old = reader.read(url, "token", () => {
+    requests += 1;
+    return new Promise((resolve) => { finish = resolve; });
+  });
+  await Promise.resolve();
+  reader.clear();
+  const request = async () => {
+    requests += 1;
+    return spotifyResponse({ value: "new" }, { "Cache-Control": "max-age=60" });
+  };
+  await reader.read(url, "token", request);
+  finish(spotifyResponse({ value: "old" }, { "Cache-Control": "max-age=60" }));
+  await old;
+  assert.deepEqual(await reader.read(url, "token", request), { value: "new" });
+  assert.equal(requests, 2);
+});
+
+test("Spotify write invalidation detaches stale playlist reads without deleting new pending reads", async () => {
+  const reader = createSpotifyJsonReader();
+  const url = "https://api.spotify.com/v1/playlists/playlist/items";
+  let finishOld;
+  let finishFresh;
+  let requests = 0;
+  const old = reader.read(url, "token", () => {
+    requests += 1;
+    return new Promise((resolve) => { finishOld = resolve; });
+  });
+  await Promise.resolve();
+  reader.clear();
+  const request = () => {
+    requests += 1;
+    return new Promise((resolve) => { finishFresh = resolve; });
+  };
+  const fresh = reader.read(url, "token", request);
+  await Promise.resolve();
+  finishOld(spotifyResponse({ version: "old" }));
+  await old;
+  const concurrent = reader.read(url, "token", request);
+  finishFresh(spotifyResponse({ version: "fresh" }));
+  assert.deepEqual(await Promise.all([fresh, concurrent]),
+    [{ version: "fresh" }, { version: "fresh" }]);
+  assert.equal(requests, 2);
+});
+
+test("Spotify mutable reads coalesce only while pending and are never cached", async () => {
+  for (const path of ["me/player", "playlists/playlist/items", "playlists/playlist"]) {
+    const reader = createSpotifyJsonReader();
+    const url = `https://api.spotify.com/v1/${path}`;
+    let requests = 0;
+    const request = async () => spotifyResponse({ version: ++requests }, { "Cache-Control": "max-age=600" });
+    await Promise.all([reader.read(url, "token", request), reader.read(url, "token", request)]);
+    assert.equal(requests, 1);
+    await reader.read(url, "token", request);
+    assert.equal(requests, 2);
+  }
+});
+
+test("Spotify no-store and no-cache reads do not become a fresh response cache", async () => {
+  for (const directive of ["no-store", "no-cache"]) {
+    const reader = createSpotifyJsonReader();
+    const url = "https://api.spotify.com/v1/search?q=test&type=album";
+    let requests = 0;
+    const request = async (etag) => {
+      requests += 1;
+      assert.equal(etag, directive === "no-cache" && requests > 1 ? '"v1"' : "");
+      return spotifyResponse({ items: [requests] },
+        { "Cache-Control": directive, ETag: '"v1"' });
+    };
+    await Promise.all([reader.read(url, "token", request), reader.read(url, "token", request)]);
+    await reader.read(url, "token", request);
+    assert.equal(requests, 2);
+  }
+});
+
+test("Spotify search uses ten-item pages without reducing the original fifty-result sample", async () => {
+  const offsets = [];
+  const result = await readSpotifySearchPages({ q: "artist:test", type: "track", limit: "50" }, async (path) => {
+    const url = new URL(path, "https://api.spotify.com/v1/");
+    assert.equal(url.searchParams.get("limit"), "10");
+    const offset = Number(url.searchParams.get("offset"));
+    offsets.push(offset);
+    return { tracks: { offset, next: "next", items: Array.from({ length: 10 }, (_, index) => offset + index) } };
+  });
+  assert.deepEqual(offsets, [0, 10, 20, 30, 40]);
+  assert.deepEqual(result.tracks.items, Array.from({ length: 50 }, (_, index) => index));
+});
+
+test("Spotify search stops at the last page and coalesces shared suggestion/playlist searches", async () => {
+  const reader = createSpotifyJsonReader();
+  let requests = 0;
+  const parameters = { q: "artist:test", type: "track", limit: "50" };
+  const request = (path) => reader.read(new URL(path, "https://api.spotify.com/v1/"), "token", async () => {
+    requests += 1;
+    return spotifyResponse({ tracks: { items: [1, 2], next: null } });
+  });
+  const results = await Promise.all([
+    readSpotifySearchPages(parameters, request), readSpotifySearchPages(parameters, request),
+  ]);
+  assert.equal(requests, 1);
+  assert.deepEqual(results[0].tracks.items, [1, 2]);
+});
+
+test("Spotify playlist imports read fifty-item pages and stop without a terminal empty request", async () => {
+  const base = "https://api.spotify.com/v1/playlists/0123456789012345678901/items";
+  const offsets = [];
+  const result = await readSpotifyPlaylistItems(`${base}?limit=50&offset=0`, async (path) => {
+    const offset = Number(new URL(path).searchParams.get("offset"));
+    offsets.push(offset);
+    return { offset, total: 51, items: Array(offset === 0 ? 50 : 1).fill({ item: {} }),
+      next: offset === 0 ? `${base}?limit=50&offset=50` : null };
+  });
+  assert.equal(result.length, 51);
+  assert.deepEqual(offsets, [0, 50]);
+});
+
+test("Spotify playlist imports reject repeated or unrelated next pages before another request", async () => {
+  const base = "https://api.spotify.com/v1/playlists/0123456789012345678901/items";
+  for (const next of [`${base}?limit=50&offset=0`,
+    `${base.replace("0123456789012345678901", "1123456789012345678901")}?limit=50&offset=1`,
+    "https://example.test/items?limit=50&offset=1"]) {
+    let requests = 0;
+    await assert.rejects(readSpotifyPlaylistItems(`${base}?limit=50&offset=0`, async () => {
+      requests += 1;
+      return { items: [{}], next };
+    }), /paginazione non valido/);
+    assert.equal(requests, 1);
+  }
+});
+
+test("Spotify playlist writes batch at most 100 URIs, retain order, and never retry failed writes", async () => {
+  const uris = Array.from({ length: 200 }, (_, index) => `spotify:track:${index}`);
+  const batches = [];
+  await writeSpotifyPlaylistItems("playlist", uris, async (path, body) => {
+    assert.equal(path, "playlists/playlist/items");
+    batches.push(body.uris);
+  });
+  assert.deepEqual(batches.map((batch) => batch.length), [100, 100]);
+  assert.deepEqual(batches.flat(), uris);
+  const partial = [];
+  await writeSpotifyPlaylistItems("playlist", uris.slice(0, 101), async (_path, body) => {
+    partial.push(body.uris.length);
+  });
+  assert.deepEqual(partial, [100, 1]);
+  let requests = 0;
+  await assert.rejects(writeSpotifyPlaylistItems("playlist", uris, async () => {
+    requests += 1;
+    throw new Error("429");
+  }), /429/);
+  assert.equal(requests, 1);
+});
 
 test("Spotify cache honors Cache-Control, ETag, 304 revalidation and no-store", () => {
   let now = 100;

@@ -70,21 +70,97 @@ locali fino a una sincronizzazione esplicita.
 Dalla scheda Raccolta si
 possono anche cercare album su Spotify per titolo, artista, ID o link e
 aggiungerli singolarmente; la ricerca non avvia la sincronizzazione GitHub.
-Le risposte Spotify rispettano gli header `Cache-Control`: `max-age` limita
+Le risposte Spotify rispettano gli header `Cache-Control`: `max-age`, ridotto
+dall'età indicata da `Age` o `Date`, limita
 la durata in memoria, gli ETag vengono rivalidati con `If-None-Match`/`304` e
 `no-store` non viene conservato; player e contenuto playlist restano fuori
 dalla cache. La playlist per artista usa la ricerca e
 ordina i risultati disponibili per popolarità, senza replicare la classifica
 completa dell'endpoint deprecato.
-Le richieste Spotify sono serializzate e rispettano il cooldown `Retry-After`.
+Le GET identiche in corso (anche fra suggerimenti e creazione playlist)
+condividono una sola richiesta, con copie JSON indipendenti e separazione per
+token; errori e risposte senza header di cache non vengono memorizzati.
+Ogni tentativo di scrittura invalida cache e GET condivise al completamento,
+anche se l'esito è incerto; una lettura precedente non ripopola la cache.
+Anche i rinnovi concorrenti del token nella stessa scheda condividono una sola richiesta.
+Le ricerche usano pagine da massimo 10 risultati, mantenendo il campione
+complessivo richiesto fino a 50 e fermandosi all'ultima pagina disponibile.
+Non vengono usati endpoint batch di lettura né endpoint top-tracks deprecati.
+L'importazione legge pagine da 50 elementi e ricontrolla lo snapshot finale;
+la creazione invia fino a 100 URI per scrittura, senza ritentare le POST.
+La PWA non esegue polling del player: le letture partono dalle azioni utente
+o dal caricamento delle copertine visibili.
+Le richieste Spotify, inclusi scambio del codice OAuth e rinnovo del token,
+passano dallo stesso trasporto e rispettano il cooldown `Retry-After`.
+Le POST OAuth, come quelle delle playlist, non vengono ripetute automaticamente
+in caso di 429, errore di rete o errore server: il loro esito può essere incerto.
 Se Spotify segnala la quota dell'app esaurita, la PWA indica di controllare
 uso e quota nella Developer Dashboard: non e' un permesso OAuth mancante.
+
+### Riverifica Spotify PWA (28 ottobre 2026)
+
+Inventario dei flussi reali; i conteggi sono tentativi iniziali, esclusi i
+retry GET limitati e le risposte già disponibili in memoria:
+
+| Flusso | Chiamate e contenimento |
+| --- | --- |
+| Autorizzazione e refresh | PKCE e redirect canonico; `POST accounts.spotify.com/api/token`, token in `sessionStorage`, refresh concorrenti riuniti nella scheda. Nessun replay automatico della POST. |
+| Ricerca manuale, abbinamento Last.fm/MusicBrainz | Una `GET search` da 10 risultati oppure una `GET albums/{id}` per ID/link diretto. Copertina e selezione di un suggerimento riusano lo stesso abbinamento in memoria. |
+| Album di un artista | Ricerca album fino a 50 risultati, massimo cinque pagine da 10, arresto quando la pagina è esaurita; nessuna ricerca alternativa illimitata. |
+| Suggerimenti Spotify | Una classifica artisti e una brani, più eventuale classifica di esclusione diversa; fino a sei ricerche genere e dieci artisti, ciascuna fino a cinque pagine. Nessun caricamento automatico della cronologia completa, endpoint related-artists, recommendations o top-tracks rimosso. I risultati possono essere limitati o vuoti se Spotify omette generi/popolarità. |
+| Anteprima playlist | Una classifica di 1–20 artisti e fino a cinque pagine di ricerca brani per artista; anteprima riusata per la creazione, non ricalcolata. |
+| Creazione playlist | `POST me/playlists`, poi `POST playlists/{id}/items` a blocchi di massimo 100 URI (massimo 200 brani). Fallimento interrompe i blocchi successivi; playlist parziale esplicitamente segnalata. Nessun retry automatico di scritture incerte. |
+| Import playlist | Risoluzione ID/link o scansione nomi da 50, limite 2000 playlist; contenuti `/items` da 50, limite 5000 brani, verifica offset/totali/next e snapshot finale. Nessuna aggiunta locale se la lettura è incompleta o lo snapshot cambia. |
+| Copertine raccolta e suggerimenti | Caricamento lazy delle schede visibili, code limitate, GET singolo album o ricerca già condivisa; fallback Cover Art Archive/MusicBrainz senza aggirare Spotify. Nessuna lettura batch rimossa. |
+| Player, export e sync | Nessun polling/player Web API PWA. Export, persistenza e sincronizzazione GitHub della raccolta non chiamano Spotify; l'apertura dei link Spotify è una navigazione esplicita, non un fallback API. |
+
+Il singleton della pagina serializza tutte le sue richieste Spotify. Il lock
+`accord-spotify-api` serializza anche più schede e i percorsi radice/`pwa`
+della **stessa origine** quando Web Locks è disponibile. Senza Web Locks resta
+la coda per scheda e il cooldown in `localStorage`, ma non una mutua esclusione
+atomica fra schede. Origini diverse, profili/dispositivi diversi e Desktop non
+condividono questo storage; non esiste un coordinatore globale dell'app.
+Cache e deduplicazione delle GET sono per istanza/scheda e token, non globali.
+I dati già visualizzati/abbinati sono snapshot dell'operazione, non una cache
+persistente delle risposte HTTP. Il service worker intercetta solo la propria
+origine, mai API o token Spotify.
+
+Su 429 viene salvata la scadenza massima condivisa, senza cancellarla quando
+scade: si evita che una scheda cancelli una scadenza appena estesa da un'altra.
+`Retry-After` accetta secondi e data HTTP; se assente/non valido si usa un
+backoff prudenziale di 5 secondi, **non** una soglia di quota. Le GET possono
+attendere fino a 30 secondi e riprovare al massimo due volte per 429 e due per
+errori transitori con backoff; prima di ogni tentativo ricontrollano lo storage.
+Le POST durante il cooldown falliscono prima di inviare traffico.
+Le richieste già in volo non possono essere ritirate retroattivamente.
+
+L'audit ha corretto il bypass della coda/cooldown nelle due POST OAuth e la
+durata eccessiva della cache quando la risposta aveva già un'età `Age`/`Date`.
+I test riproducono questi casi con fetch, clock, attesa, storage e Web Locks
+simulati, oltre ai casi preesistenti di cache, paginazione, deduplicazione e
+scritture. Non richiedono account né richieste Spotify reali:
+`node --check app.mjs`, `node --check core.mjs`, `node --check sw.js`,
+`node --test core.test.mjs`.
+
+La [documentazione rate limit](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)
+descrive una finestra mobile di 30 secondi, ma **non pubblica una soglia
+numerica universale**. Serializzazione e retry disciplinati non garantiscono
+zero 429: conta il traffico complessivo dell'app.
+Gli endpoint sono stati confrontati con il
+[changelog febbraio 2026](https://developer.spotify.com/documentation/web-api/references/changes/february-2026);
+nessun endpoint rimosso viene usato come aggiramento.
 
 ## Pubblicazione
 
 Abilita GitHub Pages in **Settings → Pages**, scegliendo **GitHub Actions**
 come sorgente. Il workflow pubblica i file statici a ogni push al branch
 `main`. Dopo il deploy, apri `https://Melvin-91.github.io/accord-album-pwa/`.
+Il workflow del repository pubblico carica la sua radice: le copie dei file
+PWA nella radice e nella sottocartella `pwa` devono restare allineate,
+preservando i differenti percorsi relativi delle icone.
+Prima della pubblicazione esegui `node --check app.mjs`,
+`node --check core.mjs` e `node --test core.test.mjs` dalla cartella PWA;
+i test verificano anche il numero di richieste concorrenti, pagine e batch.
 
 ## Primo uso sul telefono
 

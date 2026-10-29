@@ -308,10 +308,16 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
     const maxAge = Number.isSafeInteger(parsedMaxAge) && parsedMaxAge >= 0 ? parsedMaxAge : null;
     const noCache = directives.has("no-cache");
     if (!etag && (maxAge === null || maxAge === 0 || noCache)) return null;
+    const ageValue = header(headers, "Age");
+    const age = /^\d+$/.test(String(ageValue)) ? Number(ageValue) * 1000 : 0;
+    const date = Date.parse(header(headers, "Date"));
+    const currentAge = Math.max(Number.isFinite(age) ? age : 0,
+      Number.isFinite(date) ? now() - date : 0, 0);
     return {
       etag: String(etag || ""),
       cacheControl: String(cacheControl || ""),
       maxAge: maxAge !== null && !noCache ? maxAge : 0,
+      currentAge,
     };
   };
   const put = (key, value, headers) => {
@@ -325,7 +331,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
       value: clone(value),
       etag: details.etag,
       cacheControl: details.cacheControl,
-      expiresAt: currentTime + details.maxAge * 1000,
+      expiresAt: currentTime + Math.max(0, details.maxAge * 1000 - details.currentAge),
     });
     for (const [cachedKey, entry] of entries) {
       if (entry.expiresAt <= currentTime && !entry.etag) entries.delete(cachedKey);
@@ -359,7 +365,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
         "Cache-Control": entry.cacheControl,
         ETag: entry.etag,
       };
-      for (const name of ["Cache-Control", "ETag"]) {
+      for (const name of ["Cache-Control", "ETag", "Age", "Date"]) {
         const value = header(headers, name);
         if (value) mergedHeaders[name] = value;
       }
@@ -372,6 +378,91 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
   };
 }
 
+export function createSpotifyTransport({
+  storage,
+  fetch: request = (...args) => globalThis.fetch(...args),
+  lock = (_name, task) => task(),
+  now = () => Date.now(),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  random = () => Math.random(),
+} = {}) {
+  const cooldownKey = "accord-spotify-rate-limit-until-v1";
+  const maxRetries = 2;
+  const maxWait = 30_000;
+  let queue = Promise.resolve();
+  const cooldown = () => {
+    const until = Number(storage.getItem(cooldownKey));
+    return Number.isFinite(until) && until > 0 ? until : 0;
+  };
+  const waitForCooldown = async (retryRead) => {
+    while (true) {
+      const remaining = cooldown() - now();
+      if (remaining <= 0) return;
+      if (!retryRead || remaining > maxWait) {
+        throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(remaining / 1000)} secondi.`);
+      }
+      await wait(remaining);
+    }
+  };
+  const retryAfter = (response) => {
+    const value = response.headers.get("Retry-After");
+    if (value && /^\d+(?:\.\d+)?$/.test(value.trim())) {
+      const milliseconds = Number(value) * 1000;
+      if (Number.isFinite(milliseconds)) return Math.max(1000, Math.ceil(milliseconds));
+    }
+    const date = value ? Date.parse(value) : NaN;
+    return Number.isFinite(date) ? Math.max(1000, date - now()) : 5000;
+  };
+  const transientDelay = (retry) => 500 * (2 ** retry) + Math.floor(random() * 250);
+  return {
+    async fetch(url, options, retryRead = false) {
+      const queued = queue.then(() => lock("accord-spotify-api", async () => {
+        let rateRetries = 0;
+        let transientRetries = 0;
+        while (true) {
+          await waitForCooldown(retryRead);
+          let response;
+          try {
+            response = await request(url, options);
+          } catch (error) {
+            if (!retryRead || transientRetries >= maxRetries) throw error;
+            await wait(transientDelay(transientRetries++));
+            continue;
+          }
+          if (response.status === 429) {
+            const delay = retryAfter(response);
+            storage.setItem(cooldownKey, String(Math.max(cooldown(), now() + delay)));
+            let quotaExceeded = false;
+            try {
+              const error = (await response.clone().json()).error || {};
+              quotaExceeded = String(error.reason || "").toLocaleLowerCase() === "quota_exceeded"
+                || String(error.message || "").toLocaleLowerCase().includes("quota exceeded");
+            } catch {
+              // Some Accounts responses have no JSON error body.
+            }
+            if (retryRead && rateRetries < maxRetries && delay <= maxWait && !quotaExceeded) {
+              rateRetries += 1;
+              await wait(delay);
+              continue;
+            }
+            if (quotaExceeded) {
+              throw new Error(`Quota API dell'app Spotify esaurita; riprova tra ${Math.ceil(delay / 1000)} secondi e controlla uso e quota nella Spotify Developer Dashboard.`);
+            }
+            throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(delay / 1000)} secondi.`);
+          }
+          if (retryRead && [500, 502, 503, 504].includes(response.status) && transientRetries < maxRetries) {
+            await wait(transientDelay(transientRetries++));
+            continue;
+          }
+          return response;
+        }
+      }));
+      queue = queued.then(() => undefined, () => undefined);
+      return queued;
+    },
+  };
+}
+
 export function spotifyCacheableRead(url) {
   const path = url.pathname.startsWith("/v1/") ? url.pathname.slice(4) : url.pathname.replace(/^\/+/, "");
   if (path === "search" || path === "me/top/artists" || path === "me/top/tracks") return true;
@@ -380,6 +471,130 @@ export function spotifyCacheableRead(url) {
   return parts.length === 3
     && (parts[0] === "artists" && parts[2] === "albums"
       || parts[0] === "albums" && parts[2] === "tracks");
+}
+
+export function createSpotifyJsonReader({ cache = createConditionalJsonCache() } = {}) {
+  const pending = new Map();
+  let generation = 0;
+  const clone = (value) => JSON.parse(JSON.stringify(value));
+  return {
+    async read(url, accessToken, request) {
+      const canonical = new URL(url);
+      canonical.searchParams.sort();
+      const key = JSON.stringify([accessToken, canonical.href]);
+      const cacheable = spotifyCacheableRead(canonical);
+      const cached = cacheable ? cache.get(key) : undefined;
+      if (cached !== undefined) return cached;
+      if (!pending.has(key)) {
+        const started = generation;
+        const task = Promise.resolve().then(async () => {
+          const stale = cacheable ? cache.stale(key) : null;
+          const response = await request(stale?.etag || "");
+          if (response.status === 304) {
+            if (!cacheable || started !== generation) {
+              throw new Error("Spotify ha restituito una risposta 304 senza una cache consentita.");
+            }
+            const result = cache.revalidate(key, response.headers);
+            if (result === undefined) throw new Error("Spotify ha restituito una risposta 304 senza una copia verificabile.");
+            return result;
+          }
+          const result = await response.json();
+          if (cacheable && started === generation) cache.set(key, result, response.headers);
+          return result;
+        });
+        pending.set(key, task);
+        const cleanup = () => {
+          if (pending.get(key) === task) pending.delete(key);
+        };
+        task.then(cleanup, cleanup);
+      }
+      return clone(await pending.get(key));
+    },
+    clear() {
+      generation += 1;
+      pending.clear();
+      cache.clear();
+    },
+  };
+}
+
+export async function readSpotifyPlaylistItems(path, fetchPage) {
+  let next = new URL(path, "https://api.spotify.com/v1/");
+  const pathname = next.pathname;
+  const entries = [];
+  let expectedOffset = 0;
+  let expectedTotal = null;
+  while (next) {
+    if (next.origin !== "https://api.spotify.com" || !/^\/v1\/playlists\/[A-Za-z0-9]{22}\/items$/.test(pathname)
+        || next.pathname !== pathname || next.username || next.password
+        || Number(next.searchParams.get("offset") || 0) !== expectedOffset
+        || Number(next.searchParams.get("limit")) !== 50) {
+      throw new Error("Spotify ha restituito un indirizzo di paginazione non valido.");
+    }
+    const page = await fetchPage(next.href);
+    if (!Array.isArray(page.items) || page.items.length > 50
+        || (page.offset !== undefined && Number(page.offset) !== expectedOffset)) {
+      throw new Error("Risposta Spotify incompleta; nessun album è stato aggiunto.");
+    }
+    if (page.total !== undefined && page.total !== null) {
+      const total = Number(page.total);
+      if (!Number.isSafeInteger(total) || total < 0 || entries.length + page.items.length > total
+          || (expectedTotal !== null && total !== expectedTotal)) {
+        throw new Error("Conteggio Spotify non valido; nessun album è stato aggiunto.");
+      }
+      expectedTotal = total;
+    }
+    entries.push(...page.items);
+    if (entries.length > 5000) throw new Error("Playlist troppo grande per essere importata in una sola volta.");
+    if (page.next === null || page.next === undefined) {
+      if (expectedTotal !== null && entries.length !== expectedTotal) {
+        throw new Error("Lettura playlist incompleta; nessun album è stato aggiunto.");
+      }
+      return entries;
+    }
+    if (typeof page.next !== "string" || !page.next || !page.items.length || entries.length >= 5000) {
+      throw new Error("Paginazione Spotify incompleta; nessun album è stato aggiunto.");
+    }
+    expectedOffset += page.items.length;
+    next = new URL(page.next);
+  }
+  return entries;
+}
+
+export async function writeSpotifyPlaylistItems(playlistId, uris, write) {
+  for (let offset = 0; offset < uris.length; offset += 100) {
+    await write(`playlists/${playlistId}/items`, { uris: uris.slice(offset, offset + 100) });
+  }
+}
+
+export async function readSpotifySearchPages(parameters, request) {
+  const query = new URLSearchParams(parameters);
+  const type = query.get("type");
+  const key = { album: "albums", artist: "artists", track: "tracks" }[type];
+  const wanted = Number(query.get("limit") || 10);
+  if (!key || !Number.isInteger(wanted) || wanted < 1 || wanted > 50) {
+    throw new Error("Ricerca Spotify non valida.");
+  }
+  const items = [];
+  let result;
+  let offset = Number(query.get("offset") || 0);
+  if (!Number.isInteger(offset) || offset < 0) throw new Error("Ricerca Spotify non valida.");
+  while (items.length < wanted) {
+    const limit = Math.min(10, wanted - items.length);
+    query.set("limit", String(limit));
+    query.set("offset", String(offset));
+    const response = await request(`search?${query}`);
+    const page = response?.[key];
+    if (!Array.isArray(page?.items) || page.items.length > limit
+        || (page.offset !== undefined && Number(page.offset) !== offset)) {
+      throw new Error("Risposta ricerca Spotify incompleta.");
+    }
+    if (!result) result = response;
+    items.push(...page.items);
+    if (!page.next || !page.items.length) return { ...result, [key]: { ...page, items } };
+    offset += page.items.length;
+  }
+  return { ...result, [key]: { ...result[key], items } };
 }
 
 export function playlistAlbumRecords(entries, playlistName = "") {
