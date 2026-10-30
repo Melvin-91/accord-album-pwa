@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import {
   albumPrimaryGenre,
   albumSecondaryGenres,
@@ -49,6 +51,222 @@ import {
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
 } from "./core.mjs";
+import {
+  localCommandResults,
+  normalizeCollectionPreferences,
+  prepareAlbumUpdates,
+  visibleSelection,
+} from "./ui.mjs";
+
+test("local view preferences reject malformed storage and never decorate album titles", () => {
+  for (const value of [null, [], 42, "bad", { layout: "invalid", pinnedIds: false }]) {
+    assert.deepEqual(normalizeCollectionPreferences(value), { layout: "comfortable", pinnedIds: [] });
+  }
+  assert.deepEqual(normalizeCollectionPreferences({
+    layout: "compact", pinnedIds: ["abc", "abc", null, "../bad", "xyz"],
+  }), { layout: "compact", pinnedIds: ["abc", "xyz"] });
+  const record = { id: "abc", name: "Original album" };
+  normalizeCollectionPreferences({ pinnedIds: [record.id] });
+  assert.equal(record.name, "Original album");
+});
+
+test("selection is limited to visible albums and cannot retain filtered or deleted records", () => {
+  const selected = new Set(["a", "b", "deleted"]);
+  assert.deepEqual([...visibleSelection(selected, [{ id: "b" }, { id: "c" }])], ["b"]);
+  assert.equal(selected.size, 3, "reconciliation does not mutate the caller");
+  assert.equal(visibleSelection(selected, []).size, 0);
+});
+
+test("bulk updates preserve unselected albums, metadata and manual order, and validate atomically", () => {
+  const records = [
+    { id: "b", name: "One", status: "queued", collections: ["Favorites"] },
+    { id: "a", name: "Two", status: "liked", collections: [] },
+  ];
+  const next = prepareAlbumUpdates(records, new Set(["b"]), { status: "listening" }, (value) => value);
+  assert.deepEqual(next.map((record) => record.id), ["b", "a"]);
+  assert.equal(next[0].status, "listening");
+  assert.deepEqual(next[0].collections, ["Favorites"]);
+  assert.equal(next[1], records[1]);
+  assert.equal(records[0].status, "queued");
+  assert.throws(() => prepareAlbumUpdates(records, new Set(["a", "b"]), {}, (value) => {
+    if (value.id === "a") throw new Error("invalid");
+    return value;
+  }), /invalid/);
+  assert.equal(records[0].status, "queued");
+});
+
+test("command search is local, bounded, multiword, and independent from collection filters", () => {
+  const commands = [{ id: "collection", label: "Vai alla raccolta" }];
+  const albums = [
+    { id: "a", name: "Kind of Blue", artist: "Miles Davis", genres: ["Jazz"], tags: ["Night"], collections: ["Classics"] },
+    { id: "b", name: "Blue Train", artist: "John Coltrane", genres: ["Jazz"] },
+  ];
+  assert.deepEqual(localCommandResults("", commands, albums), commands);
+  assert.equal(localCommandResults("miles blue", commands, albums)[0].albumId, "a");
+  assert.equal(localCommandResults("classics night", commands, albums)[0].albumId, "a");
+  assert.equal(localCommandResults("jazz", commands, albums).length, 2);
+  assert.equal(localCommandResults("raccolta", commands, albums)[0].id, "collection");
+  assert.equal(localCommandResults("not present", commands, albums).length, 0);
+  assert.equal(localCommandResults("jazz", commands, albums, 1).length, 1);
+  assert.equal(localCommandResults("jazz", [], Array.from({ length: 60 }, (_, id) => ({
+    id: String(id), name: "Jazz", artist: "Artist",
+  }))).length, 30);
+});
+
+const uiAppSource = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+function appFunction(start, end) {
+  const beginning = uiAppSource.indexOf(start);
+  const ending = uiAppSource.indexOf(end, beginning + start.length);
+  assert.ok(beginning >= 0 && ending > beginning, `${start} exists`);
+  return uiAppSource.slice(beginning, ending);
+}
+
+test("album persistence rolls back the collection on storage failure", () => {
+  const previous = [{ id: "a", status: "queued" }];
+  const state = { albums: previous };
+  const context = {
+    state, prepareAlbumUpdates, validateAlbum: (album) => album,
+    saveState: () => { throw new Error("storage full"); },
+    setSyncState: () => assert.fail("must not announce a failed save"),
+  };
+  const body = appFunction("function commitAlbumChanges(", "\nfunction openAlbumDetails(");
+  assert.throws(() => runInNewContext(`${body}\ncommitAlbumChanges(new Set(["a"]), {status: "liked"});`, context), /storage full/);
+  assert.equal(state.albums, previous);
+  assert.equal(state.albums[0].status, "queued");
+  state.loadError = "corrupted";
+  assert.throws(() => runInNewContext(`${body}\ncommitAlbumChanges(new Set(["a"]), {});`, context), /non leggibile/);
+});
+
+test("reset clears all local filters including pinned-only without changing saved sort or making requests", () => {
+  const elements = new Map(["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
+    "#statusFilter", "#collectionFilter", "#tagFilter"].map((id) => [id, { value: "active", focus() {} }]));
+  elements.set("#pinnedOnlyInput", { checked: true });
+  const state = { sortOrder: "manual", manualOrder: ["b", "a"] };
+  let renders = 0;
+  runInNewContext(`${appFunction("function resetCollectionFilters(", "\nfunction updateSelectionToolbar(")}\nresetCollectionFilters();`, {
+    $: (id) => elements.get(id), state, render: () => { renders += 1; },
+    fetch: () => assert.fail("filters must not fetch"),
+  });
+  assert.equal(renders, 1);
+  assert.equal(elements.get("#pinnedOnlyInput").checked, false);
+  assert.equal([...elements.values()].some((element) => element.value), false);
+  assert.deepEqual(state, { sortOrder: "manual", manualOrder: ["b", "a"] });
+});
+
+test("contextual selection actions are hidden until an album is selected", () => {
+  const elements = new Map(["#selectionToolbar", "#selectionCount", "#applyBulkStatus", "#bulkStatus"]
+    .map((id) => [id, { value: "" }]));
+  const context = { $: (id) => elements.get(id), selectedAlbumIds: new Set() };
+  const body = appFunction("function updateSelectionToolbar(", "\nfunction commitAlbumChanges(");
+  const update = () => runInNewContext(`${body}\nupdateSelectionToolbar();`, context);
+  update();
+  assert.equal(elements.get("#selectionToolbar").hidden, true);
+  context.selectedAlbumIds.add("a");
+  update();
+  assert.equal(elements.get("#selectionToolbar").hidden, false);
+  assert.equal(elements.get("#applyBulkStatus").disabled, true);
+  elements.get("#bulkStatus").value = "liked";
+  update();
+  assert.equal(elements.get("#applyBulkStatus").disabled, false);
+});
+
+test("local cover rendering never enqueues catalog work, while explicit loading retains the existing queue", async () => {
+  const albums = [{ id: "a", cover_sha256: null }, { id: "b", cover_sha256: "hash" }];
+  const cards = albums.map((album) => ({
+    dataset: { albumId: album.id }, classList: { contains: () => false },
+  }));
+  const queued = [];
+  const context = {
+    $: () => ({ children: cards }), getCachedCover: async () => null,
+    coverRenderGeneration: 1,
+    enqueueCollectionCover: (task) => queued.push(task.album.id),
+    collectionCoverFailures: new Map(), updateCollectionCoverNotice() {},
+    setSyncState() {}, showMessage: (_title, message) => assert.fail(message),
+  };
+  const body = appFunction("async function renderCovers(", "\nfunction collectionCoverTaskIsCurrent(");
+  context.albums = albums;
+  await runInNewContext(`${body}\nrenderCovers(albums, 1, false);`, context);
+  assert.deepEqual(queued, []);
+  await runInNewContext(`${body}\nrenderCovers(albums, 1, true);`, context);
+  assert.deepEqual(queued, ["a", "b"]);
+});
+
+test("offline shell versions include every local module and responsive dialogs keep native modality", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
+  const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+  for (const file of ["app.mjs?v=59", "style.css?v=22"]) {
+    assert.ok(html.includes(file));
+    assert.ok(sw.includes(file));
+  }
+  for (const file of ["core.mjs?v=34", "ui.mjs?v=1"]) {
+    assert.ok(uiAppSource.includes(file));
+    assert.ok(sw.includes(file));
+  }
+  assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
+  assert.match(html, /id="selectionToolbar"[^>]+hidden/);
+  assert.match(css, /#albumDetailsDialog[^}]+92dvh/);
+  assert.match(uiAppSource, /albumDetailsDialog"\)\.showModal\(\)/);
+});
+
+test("Collection secondary menu requires a specific primary with subgenres", () => {
+  class Select {
+    value = "";
+    options = [];
+    disabled = false;
+    replaceChildren(option) {
+      this.options = [option];
+      this.value = option.value;
+    }
+    add(option) { this.options.push(option); }
+  }
+  const primary = new Select();
+  const secondary = new Select();
+  const albums = [
+    { primary_genre: "Metal", genres: ["Metal", "Power metal"] },
+    { primary_genre: "Jazz", genres: ["Jazz", "Bebop"] },
+    { primary_genre: "Rock", genres: ["Rock"] },
+    { genres: [] },
+  ];
+  const source = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const beginning = source.indexOf("function refreshGenreFilters()");
+  const ending = source.indexOf("\nfunction render(", beginning);
+  assert.ok(beginning >= 0 && ending > beginning);
+  const context = {
+    $: (selector) => selector === "#primaryGenreFilter" ? primary : secondary,
+    state: { albums }, albumPrimaryGenre, albumSecondaryGenres,
+    NO_PRIMARY_GENRE_FILTER, NO_SECONDARY_GENRE_FILTER,
+    Option: class { constructor(text, value) { this.text = text; this.value = value; } },
+  };
+  const refresh = () => runInNewContext(`${source.slice(beginning, ending)}\nrefreshGenreFilters();`, context);
+  const values = () => secondary.options.map((option) => option.value);
+  refresh();
+  assert.equal(secondary.disabled, true);
+  assert.equal(secondary.value, "");
+  assert.equal(values().includes("power metal"), false);
+  primary.value = "metal";
+  refresh();
+  assert.equal(secondary.disabled, false);
+  assert.equal(values().includes("power metal"), true);
+  assert.equal(values().includes("bebop"), false);
+  secondary.value = "power metal";
+  primary.value = "jazz";
+  refresh();
+  assert.equal(secondary.value, "");
+  assert.equal(values().includes("power metal"), false);
+  assert.equal(values().includes("bebop"), true);
+  secondary.value = "bebop";
+  primary.value = "";
+  refresh();
+  assert.equal(secondary.disabled, true);
+  assert.equal(secondary.value, "");
+  for (const value of ["rock", NO_PRIMARY_GENRE_FILTER]) {
+    primary.value = value;
+    refresh();
+    assert.equal(secondary.disabled, true);
+    assert.equal(secondary.value, "");
+  }
+});
 
 const spotifyResponse = (value, headers = {}, status = 200) => ({
   status, headers, json: async () => value,

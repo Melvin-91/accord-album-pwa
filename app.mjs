@@ -44,6 +44,12 @@ import {
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
 } from "./core.mjs?v=34";
+import {
+  localCommandResults,
+  normalizeCollectionPreferences,
+  prepareAlbumUpdates,
+  visibleSelection,
+} from "./ui.mjs?v=1";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -120,8 +126,22 @@ const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Mi pia
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();
+const COLLECTION_UI_KEY = "accord-collection-ui-v1";
+let collectionPreferences;
+try {
+  collectionPreferences = normalizeCollectionPreferences(JSON.parse(localStorage.getItem(COLLECTION_UI_KEY) || "{}"));
+} catch {
+  collectionPreferences = normalizeCollectionPreferences(null);
+}
+let selectedAlbumIds = new Set();
+let visibleAlbums = [];
+let detailsAlbumId = null;
+let detailsReturnFocus = null;
+let feedbackTimer;
 let automaticSyncQueued = false;
 $("#sortOrder").value = state.sortOrder;
+$("#collectionLayout").value = collectionPreferences.layout;
+$("#albumList").dataset.layout = collectionPreferences.layout;
 const viewTabs = [...document.querySelectorAll(".view-tabs [role='tab']")];
 
 function activateViewTab(selectedTab) {
@@ -132,6 +152,11 @@ function activateViewTab(selectedTab) {
     document.getElementById(tab.getAttribute("aria-controls")).hidden = !selected;
   }
   sessionStorage.setItem(ACTIVE_VIEW_TAB_KEY, selectedTab.id);
+  if (selectedTab.id !== "collectionTab") {
+    selectedAlbumIds.clear();
+    document.querySelectorAll(".album-select").forEach((input) => { input.checked = false; });
+    updateSelectionToolbar();
+  }
 }
 
 const restoredViewTab = viewTabs.find((tab) => tab.id === sessionStorage.getItem(ACTIVE_VIEW_TAB_KEY));
@@ -499,6 +524,7 @@ function openSettings() {
   $("#lastfmApiKeyInput").value = "";
   $("#lastfmApiKeyInput").placeholder = localStorage.getItem(LASTFM_KEY)
     ? "Chiave salvata (vuoto per mantenerla)" : "Chiave API (32 caratteri)";
+  $("#settingsFeedback").hidden = true;
   $("#settingsDialog").showModal();
 }
 
@@ -513,7 +539,7 @@ $("#saveLastfmApiKey").addEventListener("click", () => {
   localStorage.setItem(LASTFM_KEY, key);
   input.value = "";
   input.placeholder = "Chiave salvata (vuoto per mantenerla)";
-  showMessage("Chiave Last.fm salvata", "La chiave resta in questo profilo browser e non viene inclusa nella raccolta o nella sincronizzazione GitHub.");
+  showFeedback("Chiave Last.fm salvata solo in questo browser");
 });
 $("#clearLastfmApiKey").addEventListener("click", () => {
   localStorage.removeItem(LASTFM_KEY);
@@ -574,6 +600,7 @@ $("#settingsForm").addEventListener("submit", (event) => {
   $("#tokenInput").value = "";
   $("#settingsDialog").close();
   setSyncState("Configurazione salvata");
+  showFeedback("Preferenze salvate");
   if (automaticSyncQueued) {
     automaticSyncQueued = false;
     void sync();
@@ -598,6 +625,273 @@ $("#disconnectSpotify").addEventListener("click", () => {
     "accord-spotify-token-expires", "accord-spotify-oauth-state", "accord-spotify-code-verifier",
     "accord-spotify-pending-playlist", "accord-spotify-pending-albums"]) sessionStorage.removeItem(key);
   setSyncState("Spotify scollegato");
+});
+
+function showFeedback(message, error = false) {
+  if ($("#settingsDialog").open) {
+    $("#settingsFeedback").textContent = message;
+    $("#settingsFeedback").hidden = false;
+  }
+  const toast = $("#feedbackToast");
+  clearTimeout(feedbackTimer);
+  toast.textContent = message;
+  toast.classList.toggle("feedback-error", error);
+  toast.hidden = false;
+  feedbackTimer = setTimeout(() => { toast.hidden = true; }, error ? 8000 : 4000);
+}
+
+function saveCollectionPreferences(next) {
+  try {
+    localStorage.setItem(COLLECTION_UI_KEY, JSON.stringify(next));
+    collectionPreferences = next;
+    return true;
+  } catch (error) {
+    showFeedback(`Preferenze non salvate: ${error.message}`, true);
+    return false;
+  }
+}
+
+function setAlbumPins(ids, pinned) {
+  const pins = new Set(collectionPreferences.pinnedIds);
+  for (const id of ids) {
+    if (pinned) pins.add(id);
+    else pins.delete(id);
+  }
+  if (!saveCollectionPreferences({ ...collectionPreferences, pinnedIds: [...pins] })) return;
+  render();
+  showFeedback(pinned ? "Album fissati su questo dispositivo" : "Album non più fissati");
+}
+
+function collectionHasFilters() {
+  return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
+    "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
+    || $("#pinnedOnlyInput").checked;
+}
+
+function resetCollectionFilters() {
+  for (const selector of ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
+    "#statusFilter", "#collectionFilter", "#tagFilter"]) $(selector).value = "";
+  $("#pinnedOnlyInput").checked = false;
+  render();
+  $("#searchInput").focus();
+}
+
+function updateSelectionToolbar() {
+  const count = selectedAlbumIds.size;
+  $("#selectionToolbar").hidden = !count;
+  $("#selectionCount").textContent = `${count} selezionat${count === 1 ? "o" : "i"}`;
+  $("#applyBulkStatus").disabled = !count || !$("#bulkStatus").value;
+}
+
+function commitAlbumChanges(ids, changes) {
+  if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+  const next = prepareAlbumUpdates(state.albums, ids, changes, validateAlbum);
+  const previous = state.albums;
+  state.albums = next;
+  try {
+    saveState();
+  } catch (error) {
+    state.albums = previous;
+    throw error;
+  }
+  setSyncState("Modifiche locali in attesa di sincronizzazione");
+}
+
+function openAlbumDetails(id, returnFocus = document.activeElement) {
+  const album = state.albums.find((record) => record.id === id);
+  if (!album) {
+    showFeedback("Album non più presente nella raccolta", true);
+    return;
+  }
+  detailsAlbumId = id;
+  detailsReturnFocus = returnFocus;
+  $("#albumDetailsTitle").textContent = album.name;
+  $("#albumDetailsMeta").textContent = `${album.artist} · ${album.year || "Anno sconosciuto"}`;
+  $("#albumDetailsError").hidden = true;
+  const fields = template.content.querySelector(".album-fields").cloneNode(true);
+  fields.hidden = false;
+  fields.querySelector(".status-input").value = album.status;
+  fields.querySelector(".genres-input").value = album.genres.join(", ");
+  fields.querySelector(".collections-input").value = album.collections.join(", ");
+  fields.querySelector(".tags-input").value = album.tags.join(", ");
+  const rating = fields.querySelector(".rating-input");
+  for (let step = 1; step <= 10; step += 1) {
+    rating.add(new Option(`${(step / 2).toFixed(1)} / 5`, String(step / 2)));
+  }
+  rating.value = album.rating === null ? "" : String(album.rating);
+  $("#albumDetailsFields").replaceChildren(fields);
+  $("#albumDetailsDialog").showModal();
+}
+
+$("#albumDetailsForm").addEventListener("submit", (event) => {
+  if (event.submitter?.value !== "save") return;
+  event.preventDefault();
+  const fields = $("#albumDetailsFields");
+  const list = (selector) => fields.querySelector(selector).value.split(",").map((value) => value.trim()).filter(Boolean);
+  try {
+    if (!state.albums.some((album) => album.id === detailsAlbumId)) throw new Error("Album non più presente.");
+    commitAlbumChanges(new Set([detailsAlbumId]), {
+      status: fields.querySelector(".status-input").value,
+      genres: list(".genres-input"),
+      collections: list(".collections-input"),
+      tags: list(".tags-input"),
+      rating: fields.querySelector(".rating-input").value ? Number(fields.querySelector(".rating-input").value) : null,
+    });
+    $("#albumDetailsDialog").close();
+    render();
+    showFeedback("Album salvato sul dispositivo");
+  } catch (error) {
+    $("#albumDetailsError").textContent = error.message;
+    $("#albumDetailsError").hidden = false;
+  }
+});
+$("#albumDetailsDialog").addEventListener("close", () => {
+  const target = detailsReturnFocus;
+  const id = detailsAlbumId;
+  detailsAlbumId = null;
+  queueMicrotask(() => {
+    if (target?.isConnected) target.focus();
+    else {
+      const card = [...$("#albumList").children].find((item) => item.dataset.albumId === id);
+      (card?.querySelector(".album-details-button") || $("#searchInput")).focus();
+    }
+  });
+});
+$("#collectionLayout").addEventListener("change", () => {
+  const layout = $("#collectionLayout").value;
+  if (saveCollectionPreferences({ ...collectionPreferences, layout })) $("#albumList").dataset.layout = layout;
+  else $("#collectionLayout").value = collectionPreferences.layout;
+});
+$("#pinnedOnlyInput").addEventListener("change", render);
+$("#resetFiltersButton").addEventListener("click", resetCollectionFilters);
+$("#emptyActionButton").addEventListener("click", () => {
+  if (state.albums.length) resetCollectionFilters();
+  else $("#manualAlbumButton").click();
+});
+$("#clearSelectionButton").addEventListener("click", () => {
+  selectedAlbumIds.clear();
+  document.querySelectorAll(".album-select").forEach((input) => { input.checked = false; });
+  updateSelectionToolbar();
+});
+$("#selectVisibleButton").addEventListener("click", () => {
+  selectedAlbumIds = new Set(visibleAlbums.map((album) => album.id));
+  document.querySelectorAll(".album-select").forEach((input) => { input.checked = true; });
+  updateSelectionToolbar();
+});
+$("#bulkStatus").addEventListener("change", updateSelectionToolbar);
+$("#applyBulkStatus").addEventListener("click", () => {
+  if (!selectedAlbumIds.size || !$("#bulkStatus").value) return;
+  try {
+    const count = selectedAlbumIds.size;
+    commitAlbumChanges(selectedAlbumIds, { status: $("#bulkStatus").value });
+    selectedAlbumIds.clear();
+    $("#bulkStatus").value = "";
+    render();
+    showFeedback(`Stato aggiornato per ${count} album`);
+  } catch (error) {
+    showFeedback(`Modifiche non salvate: ${error.message}`, true);
+  }
+});
+$("#pinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, true));
+$("#unpinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, false));
+$("#loadCoversButton").addEventListener("click", () => {
+  $("#viewMenu").open = false;
+  render({ remoteCovers: true });
+});
+document.addEventListener("click", (event) => {
+  if (!$("#viewMenu").contains(event.target)) $("#viewMenu").open = false;
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("#viewMenu").open) {
+    $("#viewMenu").open = false;
+    $("#viewMenu summary").focus();
+  }
+});
+
+const localCommands = [
+  { id: "collection", label: "Vai alla raccolta album" },
+  { id: "suggestions", label: "Vai ai suggerimenti" },
+  { id: "playlist", label: "Vai a Crea playlist" },
+  { id: "add", label: "Aggiungi album · apri ricerca online" },
+  { id: "import", label: "Importa playlist · apri finestra" },
+  { id: "settings", label: "Apri preferenze e collegamenti" },
+  { id: "search", label: "Cerca nella raccolta locale" },
+  { id: "reset", label: "Azzera filtri della raccolta" },
+];
+
+function runLocalCommand(result) {
+  $("#commandDialog").close();
+  if (result.albumId) {
+    activateViewTab($("#collectionTab"));
+    openAlbumDetails(result.albumId, $("#commandButton"));
+    return;
+  }
+  const tabs = { collection: "#collectionTab", suggestions: "#suggestionsTab", playlist: "#playlistBuilderTab" };
+  if (tabs[result.id]) {
+    activateViewTab($(tabs[result.id]));
+    $(tabs[result.id]).focus();
+  } else if (result.id === "settings") openSettings();
+  else if (result.id === "add") $("#manualAlbumButton").click();
+  else if (result.id === "import") $("#playlistImportButton").click();
+  else {
+    activateViewTab($("#collectionTab"));
+    if (result.id === "reset") resetCollectionFilters();
+    else $("#searchInput").focus();
+  }
+}
+
+function renderLocalCommands() {
+  const results = localCommandResults($("#commandInput").value, localCommands, state.albums);
+  $("#commandResults").replaceChildren();
+  for (const result of results) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = `${result.albumId ? "Album · " : ""}${result.label}`;
+    button.addEventListener("click", () => runLocalCommand(result));
+    $("#commandResults").append(button);
+  }
+  $("#commandStatus").textContent = results.length
+    ? `${results.length} risultati locali${results.length === 30 ? " · affina la ricerca per trovarne altri" : ""}`
+    : "Nessun risultato locale. Per aggiungere musica usa Aggiungi album.";
+}
+
+function openCommandPalette() {
+  if (document.querySelector("dialog[open]")) return;
+  $("#commandInput").value = "";
+  renderLocalCommands();
+  $("#commandDialog").showModal();
+  $("#commandInput").focus();
+}
+$("#commandButton").addEventListener("click", openCommandPalette);
+$("#closeCommandButton").addEventListener("click", () => $("#commandDialog").close());
+$("#commandInput").addEventListener("input", renderLocalCommands);
+for (const selector of ["#albumDetailsDialog", "#commandDialog"]) {
+  $(selector).addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    $(selector).close();
+  });
+}
+$("#commandDialog").addEventListener("keydown", (event) => {
+  const buttons = [...$("#commandResults").querySelectorAll("button")];
+  if (!buttons.length) return;
+  const current = buttons.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const next = event.key === "ArrowDown" ? (current + 1) % buttons.length
+      : (current <= 0 ? buttons.length - 1 : current - 1);
+    buttons[next].focus();
+  } else if (event.key === "Enter" && event.target === $("#commandInput")) {
+    event.preventDefault();
+    buttons[0].click();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k") {
+    event.preventDefault();
+    if ($("#commandDialog").open) $("#commandDialog").close();
+    else openCommandPalette();
+  }
 });
 
 function refreshGroupFilter(selector, key, allLabel) {
@@ -647,7 +941,7 @@ function refreshGenreFilters() {
       : state.albums;
   const secondaryCounts = new Map();
   let albumsWithoutSecondary = 0;
-  for (const album of scopedAlbums) {
+  for (const album of primary && primary !== NO_PRIMARY_GENRE_FILTER ? scopedAlbums : []) {
     const secondaryGenres = albumSecondaryGenres(album);
     if (!secondaryGenres.length) albumsWithoutSecondary += 1;
     for (const genre of secondaryGenres) {
@@ -662,11 +956,13 @@ function refreshGenreFilters() {
   for (const [key, entry] of [...secondaryCounts].sort((left, right) => left[1].label.localeCompare(right[1].label))) {
     secondaryFilter.add(new Option(`${entry.label} (${entry.count})`, key));
   }
-  secondaryFilter.value = [...secondaryFilter.options].some((option) => option.value === selectedSecondary)
+  secondaryFilter.disabled = secondaryCounts.size === 0;
+  secondaryFilter.value = !secondaryFilter.disabled
+    && [...secondaryFilter.options].some((option) => option.value === selectedSecondary)
     ? selectedSecondary : "";
 }
 
-function render() {
+function render(options = {}) {
   finishManualDrag(false);
   ensureManualOrder();
   refreshGenreFilters();
@@ -682,9 +978,20 @@ function render() {
     tag: $("#tagFilter").value,
     order: sortOrder,
   });
-  const albums = sortOrder === "manual"
+  const sortedAlbums = sortOrder === "manual"
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
     : filteredAlbums;
+  const pins = new Set(collectionPreferences.pinnedIds);
+  const albums = $("#pinnedOnlyInput").checked
+    ? sortedAlbums.filter((album) => pins.has(album.id)) : sortedAlbums;
+  visibleAlbums = albums;
+  selectedAlbumIds = visibleSelection(selectedAlbumIds, albums);
+  updateSelectionToolbar();
+  $("#resetFiltersButton").hidden = !collectionHasFilters();
+  const filterCount = ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
+    "#collectionFilter", "#tagFilter"].filter((selector) => $(selector).value).length
+    + Number($("#pinnedOnlyInput").checked);
+  $("#activeFilterCount").textContent = filterCount ? `· ${filterCount} attivi` : "";
   const manualSorting = sortOrder === "manual";
   $("#manualOrderHint").hidden = !manualSorting;
   if (manualSorting) {
@@ -692,28 +999,60 @@ function render() {
       "Ordine manuale salvato solo su questo dispositivo: tieni premuto un album e trascinalo; puoi anche usare le frecce.";
   }
   const generation = ++coverRenderGeneration;
-  for (const url of coverObjectUrls) URL.revokeObjectURL(url);
-  coverObjectUrls = [];
+  const previousCovers = new Map([...$("#albumList").children]
+    .filter((card) => card.classList.contains("has-cover"))
+    .map((card) => [card.dataset.albumId, card.querySelector(".cover-frame")]));
   $("#albumList").replaceChildren();
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
   $("#emptyState").hidden = albums.length !== 0;
-  $("#emptyState").textContent = state.albums.length
+  $("#emptyHeading").textContent = state.albums.length ? "Nessun album trovato" : "La tua raccolta inizia qui";
+  $("#emptyDescription").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
     : "Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist Spotify.";
+  $("#emptyActionButton").textContent = state.albums.length ? "Azzera filtri" : "Aggiungi il primo album";
   updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
     const card = template.content.firstElementChild.cloneNode(true);
     card.dataset.albumId = album.id;
+    const selection = card.querySelector(".album-select");
+    selection.checked = selectedAlbumIds.has(album.id);
+    selection.setAttribute("aria-label", `Seleziona ${album.name}`);
+    selection.addEventListener("change", () => {
+      if (selection.checked) selectedAlbumIds.add(album.id);
+      else selectedAlbumIds.delete(album.id);
+      updateSelectionToolbar();
+    });
+    const pinned = pins.has(album.id);
+    card.querySelector(".pinned-indicator").hidden = !pinned;
+    const pinButton = card.querySelector(".pin-album");
+    pinButton.setAttribute("aria-pressed", String(pinned));
+    pinButton.setAttribute("aria-label", `${pinned ? "Non fissare" : "Fissa"} ${album.name}`);
+    pinButton.textContent = pinned ? "Non fissare" : "Fissa";
+    pinButton.addEventListener("click", () => {
+      setAlbumPins([album.id], !pinned);
+      const replacement = [...$("#albumList").children].find((item) => item.dataset.albumId === album.id);
+      (replacement?.querySelector(".pin-album") || $("#pinnedOnlyInput")).focus();
+    });
+    card.querySelector(".album-details-button").setAttribute("aria-label", `Dettagli di ${album.name}`);
+    card.querySelector(".album-details-button").addEventListener("click", (event) => openAlbumDetails(album.id, event.currentTarget));
     if (manualSorting) card.classList.add("manual-sortable");
     card.querySelector(".album-title").textContent = album.name;
     card.querySelector(".album-meta").textContent =
       `${album.artist} · ${album.year || "Anno sconosciuto"} · ${labels[album.status]}`;
+    card.querySelector(".album-extra").textContent = [
+      albumPrimaryGenre(album), album.rating === null ? "" : `${album.rating} / 5`,
+      album.collections.join(", "), album.tags.length ? `Tag: ${album.tags.join(", ")}` : "",
+    ].filter(Boolean).join(" · ");
     const coverImage = card.querySelector(".album-cover");
     coverImage.alt = `Copertina di ${album.name}`;
     coverImage.referrerPolicy = "no-referrer";
     card.querySelector(".cover-placeholder").textContent = album.cover_sha256
       ? "Premi Sincronizza per scaricare"
-      : "Cerco una copertina online…";
+      : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
+    if (!options.remoteCovers && previousCovers.has(album.id)) {
+      card.querySelector(".cover-frame").replaceWith(previousCovers.get(album.id));
+      card.classList.add("has-cover");
+    }
     card.querySelector(".status-input").value = album.status;
     card.querySelector(".status-input").setAttribute("aria-label", `Stato per ${album.name}`);
     card.querySelector(".status-input").addEventListener("change", (event) =>
@@ -763,19 +1102,29 @@ function render() {
     }));
     $("#albumList").append(card);
   }
-  void renderCovers(albums, generation);
+  const retainedUrls = new Set([...$("#albumList").querySelectorAll(".album-cover")].map((image) => image.src));
+  coverObjectUrls = coverObjectUrls.filter((url) => {
+    if (retainedUrls.has(url)) return true;
+    URL.revokeObjectURL(url);
+    return false;
+  });
+  void renderCovers(albums, generation, Boolean(options.remoteCovers));
 }
 
-async function renderCovers(albums, generation) {
+async function renderCovers(albums, generation, remoteCovers = false) {
   try {
     let unavailable = 0;
     const cards = new Map([...$("#albumList").children].map((card) => [card.dataset.albumId, card]));
     for (const [index, album] of albums.entries()) {
       const card = cards.get(album.id);
       if (!card) continue;
+      if (card.classList.contains("has-cover")) continue;
+      const enqueue = () => {
+        if (remoteCovers) enqueueCollectionCover({ album, card, generation });
+      };
       if (!album.cover_sha256) {
         unavailable += 1;
-        enqueueCollectionCover({ album, card, generation });
+        enqueue();
         continue;
       }
       let data;
@@ -784,12 +1133,12 @@ async function renderCovers(albums, generation) {
       } catch (error) {
         collectionCoverFailures.set(album.id, `Archivio offline: ${error.message}`);
         unavailable += 1;
-        enqueueCollectionCover({ album, card, generation });
+        enqueue();
         continue;
       }
       if (!data) {
         unavailable += 1;
-        enqueueCollectionCover({ album, card, generation });
+        enqueue();
         continue;
       }
       const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
@@ -797,7 +1146,7 @@ async function renderCovers(albums, generation) {
       if (hash !== album.cover_sha256) {
         collectionCoverFailures.set(album.id, "La miniatura locale non corrisponde all'impronta sincronizzata.");
         unavailable += 1;
-        enqueueCollectionCover({ album, card, generation });
+        enqueue();
         continue;
       }
       if (generation !== coverRenderGeneration) return;
@@ -818,7 +1167,7 @@ async function renderCovers(albums, generation) {
         card.querySelector(".cover-placeholder").textContent = "Cerco una copertina online…";
         card.classList.add("cover-error");
         collectionCoverFailures.set(album.id, "La miniatura sincronizzata non è leggibile come immagine.");
-        enqueueCollectionCover({ album, card, generation });
+        enqueue();
       }, { once: true });
       image.src = url;
     }
@@ -1089,7 +1438,7 @@ function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
     state.albums = previous;
     throw error;
   }
-  render();
+  render({ remoteCovers: true });
   if (syncAutomatically) requestAutomaticSync();
   else setSyncState("Album aggiunto localmente · sincronizza per inviarlo");
   return true;
@@ -3143,7 +3492,7 @@ function updateCollectionCoverNotice() {
   const failures = [...collectionCoverFailures.entries()].filter(([id]) => albums.has(id));
   const messages = [];
   if (missingArchive) {
-    messages.push(`${missingArchive} album non hanno una miniatura sincronizzata. La PWA cerca le copertine online; sincronizza Accord desktop per archiviarle offline.`);
+    messages.push(`${missingArchive} album senza miniatura sincronizzata. Per cercare le copertine usa “Vista e altro”; sincronizza Accord desktop per archiviarle offline.`);
   }
   if (streamed) {
     messages.push(`${streamed} copertine sono mostrate online ma non nella cache offline. Premi “Sincronizza” per scaricare le miniature.`);
@@ -3156,14 +3505,12 @@ function updateCollectionCoverNotice() {
 
 function updateAlbum(id, changes) {
   try {
-    const index = state.albums.findIndex((album) => album.id === id);
-    if (index < 0) throw new Error("Album non piu' presente.");
-    state.albums[index] = validateAlbum({ ...state.albums[index], ...changes });
-    saveState();
+    if (!state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
+    commitAlbumChanges(new Set([id]), changes);
     render();
-    setSyncState("Modifiche locali in attesa di sincronizzazione");
+    showFeedback("Album salvato sul dispositivo");
   } catch (error) {
-    showMessage("Modifica non valida", error.message);
+    showFeedback(`Modifica non salvata: ${error.message}`, true);
   }
 }
 
@@ -4076,7 +4423,7 @@ $("#suggestionSearchButton").addEventListener("click", async (event) => {
 });
 updateSuggestionToolUi();
 
-render();
+render({ remoteCovers: true });
 restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {
   setSyncState("Autorizzazione Spotify non riuscita");

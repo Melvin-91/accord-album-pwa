@@ -4,6 +4,47 @@ La raccolta album, i suggerimenti e la creazione di playlist sono organizzati in
 La versione attiva dell'app è visibile nell'intestazione della PWA e nella
 barra del titolo dell'app desktop; la build iniziale è `1.0.0`.
 
+## Interfaccia e comandi locali
+
+- Tema scuro con un solo accento, focus da tastiera visibile e navigazione
+  tra Raccolta, Suggerimenti e Crea playlist (anche con le frecce nelle schede).
+- **Aggiungi album** è l'azione principale. **Vista e altro** raccoglie
+  importazione playlist, caricamento esplicito delle copertine mancanti,
+  vista comoda/compatta e filtro degli album fissati. I filtri musicali e
+  l'ordinamento sono in un pannello espandibile separato dalla ricerca.
+- Le schede mostrano copertina, titolo originale, artista, anno, stato e
+  riepilogo dei metadati. **Fissa** aggiunge un indicatore separato:
+  non modifica il titolo né l'ordine manuale. Vista e album fissati sono
+  preferenze locali e non vengono sincronizzati.
+- **Dettagli** apre una finestra modale accessibile, adattata a pannello
+  inferiore sugli schermi stretti. Stato, voto, generi, collezioni e tag si
+  salvano insieme con **Salva modifiche**; **Annulla** ed Esc scartano la
+  bozza. Errori di validazione restano nella finestra, senza perdere i campi.
+  Il collegamento ad ogni album Spotify resta disponibile sulla scheda.
+- Le caselle sulle schede attivano una barra contestuale soltanto dopo la
+  prima selezione: seleziona tutti gli album visibili, cambia stato, fissa,
+  rimuovi il fissaggio o annulla la selezione. Gli album esclusi dai filtri
+  vengono rimossi dalla selezione; cambiare sezione la azzera.
+- **Cerca nella raccolta** filtra solo gli album locali. **Ctrl+K** (o
+  **Cmd+K**) apre comandi e ricerca globale locale, anche da altre sezioni:
+  cerca album/artisti, generi, collezioni e tag o passa a una sezione. Frecce,
+  Invio ed Esc permettono l'uso senza mouse. La palette mostra fino a 30
+  risultati; **Aggiungi album** apre invece la ricerca online, da avviare
+  esplicitamente con **Cerca**. Nessun comando di navigazione sincronizza
+  o avvia suggerimenti.
+- Stati vuoti distinguono raccolta vuota e nessun risultato, con azione per
+  aggiungere un album o azzerare tutti i filtri. Conferme di salvataggio
+  discrete e preferenze raggruppate per GitHub, Last.fm e Spotify.
+
+Ricerca locale, filtri, fissaggio, selezione, ordinamento, apertura dettagli
+e cambio vista non avviano nuove ricerche di copertine o richieste API.
+Le immagini già visualizzate vengono riutilizzate e le miniature IndexedDB
+restano disponibili offline. Il caricamento online iniziale delle copertine
+rimane; dopo un filtro puoi usare **Carica copertine mancanti online**.
+I servizi musicali e la sincronizzazione conservano le code e i cooldown
+esistenti. Questa PWA è il compagno album di Accord: non replica task,
+posta o altre funzioni desktop.
+
 Client statico per la raccolta album Accord. Questo repository pubblico deve
 contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 `albums.json`, dati personali, token o segreti. Il repository privato
@@ -16,6 +57,9 @@ mi piace), anno, genere principale, generi secondari,
 voto, collezioni e tag. I filtri separano il genere principale dai
 sottogeneri; scegliendo un principale, il secondo menu propone i relativi
 generi secondari e l'opzione **Nessun sottogenere**.
+Il menu dei generi secondari resta disabilitato con **Tutti i generi principali**,
+**Senza genere principale** o quando il principale scelto non ha sottogeneri;
+in questi casi l'eventuale filtro secondario viene azzerato.
 Nei campi, il testo grigio e corsivo è un esempio e non viene salvato finché
 non lo inserisci.
 I documenti v1 e v2 restano compatibili: il primo genere della lista diventa
@@ -23,7 +67,7 @@ principale quando il record non ne specifica uno. La versione corrente
 sincronizza il genere principale insieme agli altri campi della raccolta.
 Le miniature JPEG sincronizzate sono conservate in `covers.bin` nel repository
 privato, verificate con SHA-256 e salvate in IndexedDB per l'uso offline. Se
-una miniatura manca, la PWA prova a recuperarla dal singolo album Spotify e poi dal Cover Art
+una miniatura manca, all'avvio o su richiesta esplicita la PWA prova a recuperarla dal singolo album Spotify e poi dal Cover Art
 Archive; queste copertine online non vengono aggiunte al repository e per
 averle offline serve sincronizzare Accord desktop. La
 sincronizzazione album trasferisce solo i campi musicali previsti: non include

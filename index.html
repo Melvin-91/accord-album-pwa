@@ -11,7 +11,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=20">
+    <link rel="stylesheet" href="style.css?v=22">
     <title>Accord v1.0.0 · La mia raccolta</title>
   </head>
   <body>
@@ -22,15 +22,16 @@
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
-        <button id="syncButton" class="primary" type="button">Sincronizza</button>
-        <button id="settingsButton" class="icon-button" type="button" aria-label="Impostazioni GitHub e Spotify" title="Impostazioni GitHub e Spotify">⚙</button>
+        <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Cerca / Ctrl+K</button>
+        <button id="syncButton" class="secondary" type="button">Sincronizza</button>
+        <button id="settingsButton" class="icon-button" type="button" aria-label="Preferenze e collegamenti" title="Preferenze e collegamenti">⚙</button>
       </div>
     </header>
 
     <main>
       <section class="intro tab-intro">
-        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>La tua musica, su desktop e telefono.</h2></div>
-        <p>Gestisci la raccolta e scopri nuovi suggerimenti. Se configuri il repository privato, Accord sincronizza la raccolta e archivia lì le copertine.<span class="placeholder-help">Il testo grigio e corsivo nei campi è solo un esempio: non è inserito e scompare quando scrivi.</span></p>
+        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>Album da ritrovare. Musica da scoprire.</h2></div>
+        <p>La raccolta resta sul dispositivo fino alla sincronizzazione GitHub. Ricerca e comandi locali non interrogano i servizi musicali.</p>
       </section>
 
       <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
@@ -41,14 +42,31 @@
 
       <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
       <section class="playlist-import">
-        <div><p class="eyebrow">ALBUM</p><h2>Aggiungi album</h2><p>Cerca album su Last.fm, MusicBrainz o Spotify, oppure importa quelli mancanti da una playlist Spotify. Gli album restano sul dispositivo finché non avvii una sincronizzazione GitHub; l'importazione non invia dati automaticamente.</p></div>
-        <div class="playlist-import-actions"><button id="manualAlbumButton" class="secondary" type="button">Aggiungi album</button><button id="playlistImportButton" class="secondary" type="button">Importa playlist</button></div>
+        <div><p class="eyebrow">LIBRERIA</p><h2>I tuoi album</h2><p>Apri i dettagli per modificare stato, voto, generi, collezioni e tag.</p></div>
+        <div class="playlist-import-actions">
+          <button id="manualAlbumButton" class="primary" type="button">+ Aggiungi album</button>
+          <details id="viewMenu" class="view-menu">
+            <summary>Vista e altro</summary>
+            <div class="view-menu-content">
+              <button id="playlistImportButton" class="secondary" type="button">Importa playlist Spotify…</button>
+              <button id="loadCoversButton" class="secondary" type="button">Carica copertine mancanti online</button>
+              <label>Visualizzazione <select id="collectionLayout"><option value="comfortable">Schede comode</option><option value="compact">Elenco compatto</option></select></label>
+              <label class="check"><input id="pinnedOnlyInput" type="checkbox"> Solo album fissati</label>
+              <p class="summary">Vista e album fissati restano su questo dispositivo.</p>
+            </div>
+          </details>
+        </div>
       </section>
 
-      <section class="filters" aria-label="Ricerca e filtri album">
-        <label class="search">Cerca
+      <div class="collection-search">
+        <label class="search">Cerca nella raccolta · solo su questo dispositivo
           <input id="searchInput" type="search" placeholder="Album, artista o genere" autocomplete="off">
         </label>
+        <button id="resetFiltersButton" class="secondary" type="button" hidden>Azzera filtri</button>
+      </div>
+      <details id="collectionFilters" class="filter-disclosure">
+      <summary>Filtri e ordinamento <span id="activeFilterCount"></span></summary>
+      <section class="filters" aria-label="Filtri album">
         <label>Genere principale
           <select id="primaryGenreFilter"><option value="">Tutti i generi principali</option></select>
         </label>
@@ -77,12 +95,22 @@
           </select>
         </label>
       </section>
+      </details>
 
       <p id="collectionSummary" class="summary" aria-live="polite"></p>
+      <section id="selectionToolbar" class="selection-toolbar" aria-label="Azioni album selezionati" hidden>
+        <strong id="selectionCount"></strong>
+        <button id="selectVisibleButton" type="button">Seleziona visibili</button>
+        <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Mi piace</option><option value="disliked">Non mi piace</option></select></label>
+        <button id="applyBulkStatus" type="button">Applica stato</button>
+        <button id="pinSelectedButton" type="button">Fissa selezionati</button>
+        <button id="unpinSelectedButton" type="button">Non fissare</button>
+        <button id="clearSelectionButton" type="button">Annulla selezione</button>
+      </section>
       <p id="manualOrderHint" class="summary manual-order-hint" role="status" hidden></p>
       <p id="coverSyncNotice" class="notice cover-sync-notice" role="status" hidden></p>
       <section id="albumList" class="album-list" aria-label="Album"></section>
-      <p id="emptyState" class="empty" hidden>Nessun album corrisponde ai filtri.</p>
+      <section id="emptyState" class="empty" hidden><h3 id="emptyHeading">Nessun album trovato</h3><p id="emptyDescription"></p><button id="emptyActionButton" class="primary" type="button">Aggiungi il primo album</button></section>
       </section>
 
       <section id="suggestionsPanel" class="tab-panel" role="tabpanel" aria-labelledby="suggestionsTab" tabindex="0" hidden>
@@ -254,7 +282,8 @@
 
     <dialog id="settingsDialog">
       <form id="settingsForm" method="dialog">
-        <div class="dialog-heading"><div><p class="eyebrow">IMPOSTAZIONI PRIVATE</p><h2>GitHub e Spotify</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+        <div class="dialog-heading"><div><p class="eyebrow">IMPOSTAZIONI PRIVATE</p><h2>Preferenze e collegamenti</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="Chiudi">×</button></div>
+        <fieldset class="preference-group"><legend>GitHub · sincronizzazione privata</legend>
         <label>Proprietario GitHub
           <input id="ownerInput" autocomplete="username" required pattern="[A-Za-z0-9\-]{1,39}" placeholder="nome-utente">
         </label>
@@ -266,15 +295,15 @@
         <label class="check"><input id="useSyncedLastfmHistoryInput" type="checkbox"> Usa la cronologia Last.fm esportata da Accord Desktop.</label>
         <p class="notice">Questa opzione scarica in questo browser <code>lastfm-history.json.gz</code> durante la sincronizzazione e la conserva offline. Solo l’azione “Esporta Last.fm” in Desktop invia l’archivio al repository; la PWA non lo modifica.</p>
         <div class="dialog-actions settings-actions"><button id="forgetSyncedLastfmHistory" class="secondary" type="button">Dimentica copia Last.fm locale</button></div>
-        <hr>
-        <p class="eyebrow">LAST.FM</p>
+        </fieldset>
+        <fieldset class="preference-group"><legend>Last.fm · chiave di ricerca</legend>
         <label>Chiave API Last.fm
           <input id="lastfmApiKeyInput" type="password" autocomplete="new-password" placeholder="Chiave API (32 caratteri)">
         </label>
         <div class="dialog-actions settings-actions"><button id="clearLastfmApiKey" class="secondary" type="button">Dimentica chiave</button><button id="saveLastfmApiKey" class="secondary" type="button">Salva chiave</button></div>
         <p class="notice">Accord conserva la chiave solo in questo profilo del browser, separata dalla raccolta, e la invia esclusivamente a Last.fm. Non viene sincronizzata con GitHub. Puoi creare una chiave su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
-        <hr>
-        <p class="eyebrow">SPOTIFY</p>
+        </fieldset>
+        <fieldset class="preference-group"><legend>Spotify · accesso con PKCE</legend>
         <label>Client ID dell’app Spotify
           <input id="spotifyClientIdInput" autocomplete="off" placeholder="Client ID (32 caratteri)">
         </label>
@@ -282,7 +311,9 @@
           <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
         </label>
         <p class="notice">Registra questo URI di reindirizzamento, inclusa la barra finale, nelle impostazioni dell’app Spotify. È lo stesso nel browser e nella PWA installata. Accord usa Authorization Code con PKCE, quindi non inserire un client secret. I token Spotify restano nella sessione del browser e non vengono sincronizzati.</p>
+        </fieldset>
         <div class="dialog-actions settings-actions"><button id="clearCredentials" class="secondary" type="button">Dimentica GitHub</button><button id="disconnectSpotify" class="secondary" type="button">Scollega Spotify</button><button class="primary" value="save">Salva</button></div>
+        <p id="settingsFeedback" class="summary" role="status" hidden></p>
       </form>
     </dialog>
 
@@ -351,10 +382,30 @@
       <form method="dialog"><div class="dialog-heading"><h2 id="messageTitle"></h2><button class="icon-button" value="close" aria-label="Chiudi">×</button></div><p id="messageBody"></p><div class="dialog-actions"><button class="primary" value="close">Chiudi</button></div></form>
     </dialog>
 
+    <dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">
+      <form id="albumDetailsForm" method="dialog">
+        <div class="dialog-heading"><div><p class="eyebrow">DETTAGLI ALBUM</p><h2 id="albumDetailsTitle"></h2><p id="albumDetailsMeta" class="summary"></p></div><button class="icon-button" value="cancel" formnovalidate aria-label="Chiudi dettagli">×</button></div>
+        <div id="albumDetailsFields" class="album-detail-fields"></div>
+        <p id="albumDetailsError" class="inline-error" role="alert" hidden></p>
+        <div class="dialog-actions"><button class="secondary" value="cancel" formnovalidate>Annulla</button><button class="primary" value="save">Salva modifiche</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="commandDialog" aria-labelledby="commandTitle">
+      <div class="dialog-heading"><h2 id="commandTitle">Comandi e album</h2><button id="closeCommandButton" class="icon-button" type="button" aria-label="Chiudi comandi">×</button></div>
+      <label class="command-search">Ricerca locale in tutte le sezioni<input id="commandInput" type="search" autocomplete="off" placeholder="Un comando, album o artista…"></label>
+      <p class="summary">Nessuna ricerca online. ↑ ↓ per navigare, Invio per aprire, Esc per chiudere.</p>
+      <div id="commandResults" class="command-results" role="group" aria-label="Risultati locali"></div>
+      <p id="commandStatus" class="summary" role="status"></p>
+    </dialog>
+    <p id="feedbackToast" class="feedback-toast" role="status" hidden></p>
+
     <template id="albumTemplate">
       <article class="album-card">
+        <label class="album-selection"><input class="album-select" type="checkbox"><span class="sr-only">Seleziona album</span></label>
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><h3 class="album-title"></h3><p class="album-meta"></p></div><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div>
+        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="spotify-link" target="_blank" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
+        <div class="album-fields" hidden>
         <label class="status-field">Stato
           <select class="status-input">
             <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
@@ -367,8 +418,9 @@
         <label class="rating-field">Il tuo voto
           <select class="rating-input"><option value="">Nessun voto</option></select>
         </label>
+        </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=57"></script>
+    <script type="module" src="app.mjs?v=59"></script>
   </body>
 </html>
