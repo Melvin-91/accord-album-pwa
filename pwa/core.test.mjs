@@ -14,6 +14,9 @@ import {
   createConditionalJsonCache,
   createSpotifyJsonReader,
   createSpotifyTransport,
+  createSpotifyReadBudget,
+  collectSpotifyDiscoveryAlbums,
+  spotifyDiscoveryPlaylistPreview,
   expandSimilarArtists,
   filterAlbums,
   filterUnheardArtists,
@@ -195,11 +198,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=59", "style.css?v=22"]) {
+  for (const file of ["app.mjs?v=60", "style.css?v=22"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=34", "ui.mjs?v=1"]) {
+  for (const file of ["core.mjs?v=36", "ui.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -207,6 +210,305 @@ test("offline shell versions include every local module and responsive dialogs k
   assert.match(html, /id="selectionToolbar"[^>]+hidden/);
   assert.match(css, /#albumDetailsDialog[^}]+92dvh/);
   assert.match(uiAppSource, /albumDetailsDialog"\)\.showModal\(\)/);
+});
+
+test("Spotify playlist reuses the real Suggestions candidate, album and Discogs selection path", async () => {
+  const id = (number) => String(number).padStart(22, "0");
+  const heard = { id: id(1), name: "Heard", genres: ["rock"] };
+  const fresh = { id: id(2), name: "Fresh", genres: ["rock"], popularity: 80 };
+  const other = { id: id(3), name: "Other", genres: ["rock"], popularity: 70 };
+  const album = (artist, number) => ({
+    id: id(number), name: `Album ${number}`, artists: [artist], album_type: "album",
+    external_urls: { spotify: `https://open.spotify.com/album/${id(number)}` },
+    release_date: "2025-01-01",
+  });
+  const makeTrack = (artist, number, record) => ({
+    id: id(number), uri: `spotify:track:${id(number)}`, name: `Track ${number}`,
+    artists: [artist], album: record, popularity: 50,
+  });
+  const freshAlbum = album(fresh, 20);
+  const preferredAlbum = album(fresh, 23);
+  const otherAlbum = album(other, 30);
+  const samples = new Map([
+    ["Fresh", [makeTrack(fresh, 21, freshAlbum), makeTrack(heard, 22, freshAlbum),
+      { ...makeTrack(fresh, 24, preferredAlbum), popularity: 1 }]],
+    ["Other", [makeTrack(other, 31, otherAlbum)]],
+  ]);
+  let failedArtist = "";
+  const calls = [];
+  const elements = new Map();
+  for (const [selector, value] of Object.entries({
+    "#spotifySuggestionExclusion": "medium_term",
+    "#spotifyIncludeGenresMatch": "exact",
+    "#spotifyExcludeGenresMatch": "exact",
+  })) elements.set(selector, { value });
+  const context = {
+    URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums,
+    spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
+    rankDiscogsSuggestionAlbums, state: { albums: [{ artist: "Fresh", name: "Owned old album" }] },
+    playlistDiscoveryContinuation: null,
+    suggestionFilterValues: () => [],
+    $: (selector) => elements.get(selector) || {},
+    rateDiscogsSuggestionCandidates: async (albums) => ({
+      albums: albums.map((record) => ({ ...record,
+        discogs: record.spotifyArtistId === other.id ? 5 : record.id === preferredAlbum.id ? 4 : 3,
+        discogs_votes: 20 })),
+    }),
+    spotifyRequest: async (path, _token, budget) => {
+      budget.read();
+      calls.push(path);
+      if (path.startsWith("me/top/artists")) return { items: [heard] };
+      if (path.startsWith("me/top/tracks")) return { items: [] };
+      return { artists: { items: [heard, fresh, other] } };
+    },
+    spotifySearchRequest: async (parameters, _token, budget) => {
+      budget.read();
+      const name = JSON.parse(parameters.get("q").slice(7));
+      calls.push(`tracks:${name}`);
+      if (name === failedArtist) throw new Error("HTTP 403");
+      return { tracks: { items: samples.get(name) } };
+    },
+  };
+  const discoverySource = appFunction("const spotifyTimeRanges =", "\nfunction renderSpotifyAlbumSuggestions(");
+  const previewSource = appFunction("async function loadTopArtistPlaylistPreview(", "\nfunction renderTopArtistPlaylistPreview(");
+  const api = runInNewContext(`${discoverySource}\n${previewSource}
+    ({ suggestions: () => buildSpotifyAlbumSuggestions({period:"medium_term", exclusion:"medium_term"}, "token", {}),
+       preview: () => loadTopArtistPlaylistPreview({artistCount:5,tracksPerArtist:3,timeRange:"medium_term"}, "token") });`, context);
+  const suggestions = await api.suggestions();
+  const preview = await api.preview();
+  assert.deepEqual(Array.from(preview.artists, (artist) => artist.id),
+    Array.from(suggestions.albums, (record) => record.spotifyArtistId));
+  assert.deepEqual(Array.from(preview.artists, (artist) => artist.name), ["Other", "Fresh"]);
+  assert.equal(preview.tracks.length, 2);
+  assert.equal(preview.tracks.find((track) => track.sourceArtistId === fresh.id).albumId, preferredAlbum.id);
+  assert.equal(preview.tracks.some((track) => track.uri === `spotify:track:${id(21)}`), false);
+  assert.ok(preview.tracks.every((track) => track.sourceArtistId !== heard.id));
+  assert.ok(preview.tracks.every((track) => suggestions.albums.some((record) => record.id === track.albumId)));
+  assert.equal(calls.filter((path) => path.startsWith("tracks:")).length, 4);
+  assert.equal(calls.includes("tracks:Heard"), false);
+  context.state.albums = [
+    { artist: "Fresh", name: freshAlbum.name },
+    { artist: "Fresh", name: preferredAlbum.name },
+  ];
+  const collectionSuggestions = await api.suggestions();
+  assert.equal(collectionSuggestions.albums.some((record) => record.spotifyArtistId === fresh.id), false);
+  const collectionPreview = await api.preview();
+  assert.ok(collectionPreview.artists.some((artist) => artist.id === fresh.id),
+    "owning every sampled album must not remove the artist from a discovery playlist");
+  assert.equal(collectionPreview.artists.some((artist) => artist.id === heard.id), false);
+  context.state.albums = [];
+  failedArtist = "Other";
+  const partial = await api.preview();
+  assert.equal(partial.artists.length, 1);
+  assert.equal(partial.hasMore, true);
+  assert.equal(partial.partialReason, "HTTP 403");
+  const freshReads = calls.filter((path) => path === "tracks:Fresh").length;
+  const topReads = calls.filter((path) => path.startsWith("me/top/")).length;
+  failedArtist = "";
+  const continued = await api.preview();
+  assert.equal(continued.artists.length, 2);
+  assert.equal(continued.hasMore, false);
+  assert.equal(calls.filter((path) => path === "tracks:Fresh").length, freshReads);
+  assert.equal(calls.filter((path) => path.startsWith("me/top/")).length, topReads);
+  samples.set("Fresh", []);
+  samples.set("Other", []);
+  const empty = await api.preview();
+  assert.equal(empty.tracks.length, 0);
+  assert.equal(empty.artists.length, 0);
+  assert.equal(calls.includes("tracks:Heard"), false);
+});
+
+function pagedDiscoveryFixture({ emptyAlbums = false, interruptGenre = false, exhausted = false, endless = false } = {}) {
+  const id = (number) => String(number).padStart(22, "0");
+  const seed = { id: id(1), name: "Seed", genres: ["rock"] };
+  const first = { id: id(2), name: "First", genres: ["rock"], popularity: 80 };
+  const later = { id: id(3), name: "Later", genres: ["rock"], popularity: 70 };
+  const calls = [];
+  let interrupted = false;
+  const context = {
+    URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums,
+    spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
+    rankDiscogsSuggestionAlbums, state: { albums: [] },
+    suggestionFilterValues: () => [],
+    $: () => ({ value: "exact" }),
+    rateDiscogsSuggestionCandidates: async (albums) => ({ albums }),
+    spotifyRequest: async (path, _token, budget) => {
+      budget.read();
+      budget.attempt();
+      calls.push(path);
+      if (path.startsWith("me/top/artists")) return { items: [seed] };
+      if (path.startsWith("me/top/tracks")) return { items: [] };
+      const offset = Number(new URLSearchParams(path.slice(7)).get("offset"));
+      if (interruptGenre && offset === 1 && !interrupted) {
+        interrupted = true;
+        while (budget.actual < 40) budget.attempt();
+        budget.attempt();
+      }
+      return { artists: {
+        offset, items: endless ? Array(10).fill(first) : offset === 0 ? [emptyAlbums ? first : seed] : [later],
+        next: endless || !exhausted && offset === 0 ? "next" : null,
+      } };
+    },
+    spotifySearchRequest: async (parameters, _token, budget) => {
+      budget.read();
+      budget.attempt();
+      const name = JSON.parse(parameters.get("q").slice(7));
+      calls.push(`tracks:${name}`);
+      if (name === first.name) return { tracks: { items: [] } };
+      const album = {
+        id: id(20), name: "New album", artists: [later], album_type: "album",
+        external_urls: { spotify: `https://open.spotify.com/album/${id(20)}` },
+        release_date: "2025-01-01",
+      };
+      return { tracks: { items: [{
+        id: id(21), uri: `spotify:track:${id(21)}`, name: "New track",
+        artists: [later], album, popularity: 50,
+      }] } };
+    },
+  };
+  const source = appFunction("const spotifyTimeRanges =", "\nfunction renderSpotifyAlbumSuggestions(");
+  const build = runInNewContext(`${source}\nbuildSpotifyAlbumSuggestions;`, context);
+  return {
+    calls,
+    run: (continuation = null) => build({ period: "medium_term", exclusion: "medium_term" }, "token", {}, {
+      maximum: 10, continuation, excludeCollectionAlbums: false,
+      playlistRequest: { artistCount: 1, tracksPerArtist: 3, timeRange: "medium_term" },
+    }),
+  };
+}
+
+test("Spotify shared discovery refills later genre pages after filtered candidates or empty artist albums", async () => {
+  for (const emptyAlbums of [false, true]) {
+    const fixture = pagedDiscoveryFixture({ emptyAlbums });
+    const result = await fixture.run();
+    assert.equal(result.albums.length, 1);
+    assert.equal(result.albums[0].spotifyRelatedArtist, "Later");
+    const searches = fixture.calls.filter((path) => path.startsWith("search?"));
+    assert.equal(searches.length, 2);
+    assert.ok(searches[0].includes("offset=0"));
+    assert.ok(searches[1].includes("offset=1"));
+    assert.equal(result.continuation, null);
+    assert.equal(result.partialReason, "");
+  }
+});
+
+test("Spotify genre discovery budget interruption retains cursor and resumes without repeated completed pages", async () => {
+  const fixture = pagedDiscoveryFixture({ interruptGenre: true, emptyAlbums: true });
+  const first = await fixture.run();
+  assert.ok(first.continuation);
+  assert.equal(first.reads.actual, 40);
+  assert.match(first.partialReason, /40 letture/);
+  assert.equal(first.continuation.genrePages[0].offset, 1);
+  assert.equal(first.continuation.candidates.size, 1);
+  assert.equal(first.continuation.processedArtistIds.size, 1);
+  const second = await fixture.run(first.continuation);
+  assert.equal(second.albums.length, 1);
+  assert.equal(second.continuation, null);
+  assert.equal(fixture.calls.filter((path) => path.startsWith("me/top/")).length, 2);
+  assert.equal(fixture.calls.filter((path) => path.startsWith("search?") && path.includes("offset=0")).length, 1);
+  assert.equal(fixture.calls.filter((path) => path === "tracks:First").length, 1);
+});
+
+test("Spotify exhausted discovery stops finitely with no misleading continuation or heard fallback", async () => {
+  for (const emptyAlbums of [false, true]) {
+    const fixture = pagedDiscoveryFixture({ emptyAlbums, exhausted: true });
+    const result = await fixture.run();
+    assert.equal(result.albums.length, 0);
+    assert.equal(result.continuation, null);
+    assert.equal(result.partialReason, "");
+    assert.equal(fixture.calls.filter((path) => path.startsWith("search?")).length, 1);
+    assert.equal(fixture.calls.includes("tracks:Seed"), false);
+  }
+  const bounded = pagedDiscoveryFixture({ endless: true });
+  const result = await bounded.run();
+  assert.equal(result.continuation, null);
+  assert.equal(result.albums.length, 0);
+  assert.equal(bounded.calls.filter((path) => path.startsWith("search?")).length, 5);
+  assert.equal(bounded.calls.filter((path) => path === "tracks:First").length, 1);
+});
+
+test("Spotify discovery preserves completed artists on errors and only continues on a manual pass", async () => {
+  const discovery = { artists: [{ id: "a" }, { id: "b" }, { id: "c" }], albums: [], nextArtist: 0 };
+  const calls = [];
+  const first = await collectSpotifyDiscoveryAlbums(discovery, async (artist) => {
+    calls.push(artist.id);
+    if (artist.id === "b") throw new Error("HTTP 403");
+    return [{ id: artist.id }];
+  });
+  assert.deepEqual(calls, ["a", "b"]);
+  assert.deepEqual(first.albums, [{ id: "a" }]);
+  assert.equal(first.hasMore, true);
+  assert.equal(first.partialReason, "HTTP 403");
+  const second = await collectSpotifyDiscoveryAlbums(discovery, async (artist) => {
+    calls.push(artist.id);
+    return [{ id: artist.id }];
+  });
+  assert.deepEqual(calls, ["a", "b", "b", "c"]);
+  assert.deepEqual(second.albums.map((record) => record.id), ["a", "b", "c"]);
+  assert.equal(second.hasMore, false);
+});
+
+test("Spotify playlist rejects wrong artist identities, album identities, forged URIs and unavailable tracks", () => {
+  const id = (number) => String(number).padStart(22, "0");
+  const artist = { id: id(1), name: "Artist" };
+  const track = { id: id(3), uri: `spotify:track:${id(3)}`, name: "Valid", artists: [artist], album: { id: id(2) } };
+  const record = {
+    id: id(2), spotifyArtistId: artist.id, spotifyRelatedArtist: artist.name,
+    spotifyTracks: [
+      { ...track, artists: [{ id: id(9), name: "Artist" }] },
+      { ...track, album: { id: id(8) } },
+      { ...track, uri: `spotify:track:${id(4)}` },
+      { ...track, is_playable: false }, { ...track, restrictions: { reason: "market" } },
+      track, track,
+    ],
+  };
+  const preview = spotifyDiscoveryPlaylistPreview([record], { artistCount: 50, tracksPerArtist: 10 });
+  assert.equal(preview.tracks.length, 1);
+  assert.equal(preview.tracks[0].uri, track.uri);
+});
+
+test("Spotify discovery caps logical reads and actual retry attempts at forty per manual pass", async () => {
+  for (const limit of [0, -1, 41, 1.5, NaN]) {
+    assert.throws(() => createSpotifyReadBudget(limit), /1 e 40/);
+  }
+  const budget = createSpotifyReadBudget();
+  for (let index = 0; index < 40; index += 1) budget.read();
+  assert.throws(() => budget.read(), /40 letture/);
+  assert.equal(budget.logical, 40);
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(503));
+  for (let index = 0; index < 13; index += 1) {
+    await fixture.transport.fetch("search", {}, true, budget);
+  }
+  assert.equal(fixture.calls.length, 39);
+  await assert.rejects(fixture.transport.fetch("search", {}, true, budget), /40 letture/);
+  assert.equal(fixture.calls.length, 40);
+  assert.equal(budget.actual, 40);
+  await assert.rejects(fixture.transport.fetch("search", {}, true, budget), /40 letture/);
+  assert.equal(fixture.calls.length, 40);
+  const nextManualPass = createSpotifyReadBudget();
+  assert.equal(nextManualPass.logical, 0);
+  assert.equal(nextManualPass.actual, 0);
+});
+
+test("Spotify discovery counts cache hits as logical reads while reusing the normal transport", async () => {
+  const fixture = spotifyTransportFixture(() =>
+    ({ ...spotifyResponse({ items: [] }, { "Cache-Control": "max-age=600" }), ok: true }));
+  const context = {
+    URL, SPOTIFY_API: "https://api.spotify.com/v1",
+    spotifyTransport: fixture.transport, spotifyJsonReader: createSpotifyJsonReader(),
+    clearSpotifySession() { assert.fail("unexpected expired session"); },
+    readSpotifySearchPages,
+  };
+  const source = appFunction("async function spotifyApiFetch(", "\nasync function spotifyWriteRequest(");
+  const request = runInNewContext(`${source}\nspotifyRequest;`, context);
+  const budget = createSpotifyReadBudget();
+  for (let index = 0; index < 40; index += 1) {
+    await request("me/top/artists?limit=50&time_range=medium_term", "token", budget);
+  }
+  await assert.rejects(request("me/top/artists?limit=50&time_range=medium_term", "token", budget), /40 letture/);
+  assert.equal(budget.logical, 40);
+  assert.equal(budget.actual, 1);
+  assert.equal(fixture.calls.length, 1);
 });
 
 test("Collection secondary menu requires a specific primary with subgenres", () => {
@@ -328,8 +630,9 @@ test("Spotify Retry-After accepts seconds, HTTP dates and a conservative missing
     const fixture = spotifyTransportFixture((_url, _init, count) =>
       spotifyHttpResponse(count === 1 ? 429 : 200, value));
     await fixture.transport.fetch("catalog", {}, true);
-    assert.deepEqual(fixture.waits, [delay]);
+    assert.deepEqual(fixture.waits, delay < 3000 ? [delay, 3000 - delay] : [delay]);
     assert.equal(fixture.calls.length, 2);
+    assert.equal(fixture.calls[1].time - fixture.calls[0].time, Math.max(delay, 3000));
   }
 });
 
@@ -337,7 +640,7 @@ test("Spotify read retries are bounded, quota errors are not retried, and cooldo
   const fixture = spotifyTransportFixture(() => spotifyHttpResponse(429, "1"));
   await assert.rejects(fixture.transport.fetch("catalog", {}, true), /Limite richieste/);
   assert.equal(fixture.calls.length, 3);
-  assert.deepEqual(fixture.waits, [1000, 1000]);
+  assert.deepEqual(fixture.waits, [1000, 2000, 1000, 2000]);
   assert.equal(Number(fixture.values.get(spotifyCooldownKey)), fixture.now() + 1000);
   const quota = spotifyTransportFixture(() =>
     spotifyHttpResponse(429, "2", { reason: "quota_exceeded" }));
@@ -410,9 +713,10 @@ test("Spotify transient GET retries back off and recheck a newly extended shared
     return spotifyHttpResponse(count === 2 ? 503 : 200);
   });
   await fixture.transport.fetch("catalog", {}, true);
-  assert.deepEqual(fixture.waits, [500, 1500, 1000]);
+  assert.deepEqual(fixture.waits, [500, 1500, 1000, 1000, 2000]);
   assert.equal(fixture.calls.length, 3);
-  assert.equal(fixture.calls[1].time - fixture.calls[0].time, 2000);
+  assert.equal(fixture.calls[1].time - fixture.calls[0].time, 3000);
+  assert.equal(fixture.calls[2].time - fixture.calls[1].time, 3000);
 });
 
 test("Spotify transports in separate tabs serialize through the same Web Lock and share OAuth cooldown", async () => {
@@ -451,6 +755,86 @@ test("Spotify one-tab queue serializes different endpoints even without Web Lock
   release(spotifyHttpResponse(200));
   await Promise.all([first, second]);
   assert.equal(fixture.calls.length, 2);
+});
+
+test("Spotify proactive pacing persists exact three-second slots across queued jobs and separate tabs", async () => {
+  let queue = Promise.resolve();
+  const lock = (_name, task) => {
+    const result = queue.then(task);
+    queue = result.catch(() => {});
+    return result;
+  };
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(200), { lock });
+  const secondTab = createSpotifyTransport(fixture.options);
+  await Promise.all([
+    fixture.transport.fetch("catalog", {}, true),
+    secondTab.fetch("token", { method: "POST" }),
+    fixture.transport.fetch("playlist", { method: "POST" }),
+  ]);
+  assert.deepEqual(fixture.calls.map((call) => call.time - fixture.calls[0].time), [0, 3000, 6000]);
+  assert.deepEqual(fixture.waits, [3000, 3000]);
+  assert.equal(Number(fixture.values.get("accord-spotify-request-at-v1")), fixture.calls[2].time);
+  await createSpotifyTransport(fixture.options).fetch("another-catalog", {}, true);
+  assert.equal(fixture.calls[3].time - fixture.calls[2].time, 3000);
+});
+
+test("Spotify malformed persisted pacing timestamps fail before HTTP while a missing timestamp permits first use", async () => {
+  for (const value of ["", " ", "\t\n", "NaN", "Infinity", "-Infinity", "-1", "invalid"]) {
+    const fixture = spotifyTransportFixture(() => spotifyHttpResponse(200));
+    fixture.values.set("accord-spotify-request-at-v1", value);
+    await assert.rejects(fixture.transport.fetch("catalog", {}, true),
+      /Configurazione intervallo Spotify non valida.*accord-spotify-request-at-v1/);
+    assert.equal(fixture.calls.length, 0);
+    assert.deepEqual(fixture.waits, []);
+    assert.equal(fixture.values.get("accord-spotify-request-at-v1"), value);
+  }
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(200));
+  await fixture.transport.fetch("catalog", {}, true);
+  assert.equal(fixture.calls.length, 1);
+  assert.deepEqual(fixture.waits, []);
+});
+
+test("Spotify cache hits consume no pacing wait and the next actual request retains its slot", async () => {
+  const fixture = spotifyTransportFixture(() =>
+    spotifyResponse({ items: [] }, { "Cache-Control": "max-age=600" }));
+  const reader = createSpotifyJsonReader();
+  const read = (url) => reader.read(url, "token", () => fixture.transport.fetch(url, {}, true));
+  const url = "https://api.spotify.com/v1/search?q=first&type=artist";
+  await read(url);
+  await read(url);
+  assert.equal(fixture.calls.length, 1);
+  assert.deepEqual(fixture.waits, []);
+  await read("https://api.spotify.com/v1/search?q=second&type=artist");
+  assert.equal(fixture.calls.length, 2);
+  assert.deepEqual(fixture.waits, [3000]);
+});
+
+test("Spotify long Retry-After remains unchanged and sends no jobs during the cooldown", async () => {
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(429, "17240"));
+  const start = fixture.now();
+  await assert.rejects(fixture.transport.fetch("catalog", {}, true), /17240 secondi/);
+  const until = String(start + 17_240_000);
+  assert.equal(fixture.values.get(spotifyCooldownKey), until);
+  await assert.rejects(fixture.transport.fetch("other", {}, true), /17240 secondi/);
+  await assert.rejects(fixture.transport.fetch("playlist", { method: "POST" }), /17240 secondi/);
+  assert.equal(fixture.calls.length, 1);
+  assert.deepEqual(fixture.waits, []);
+  assert.equal(fixture.values.get(spotifyCooldownKey), until);
+});
+
+test("Spotify cooldown extended during proactive pacing is rechecked before sending a write", async () => {
+  let time = Date.UTC(2026, 9, 28);
+  let fixture;
+  fixture = spotifyTransportFixture(() => spotifyHttpResponse(200), {
+    now: () => time,
+    wait: async (delay) => {
+      time += delay;
+      fixture.values.set(spotifyCooldownKey, String(time + 17_240_000));
+    },
+  });
+  await fixture.transport.fetch("first", {}, true);
+  await assert.rejects(fixture.transport.fetch("playlist", { method: "POST" }), /17240 secondi/);
+  assert.equal(fixture.calls.length, 1);
 });
 
 test("Spotify cache subtracts intermediary Age and apparent Date age, including revalidation", () => {

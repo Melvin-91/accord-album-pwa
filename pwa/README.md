@@ -118,17 +118,56 @@ Le risposte Spotify rispettano gli header `Cache-Control`: `max-age`, ridotto
 dall'età indicata da `Age` o `Date`, limita
 la durata in memoria, gli ETag vengono rivalidati con `If-None-Match`/`304` e
 `no-store` non viene conservato; player e contenuto playlist restano fuori
-dalla cache. La playlist per artista usa la ricerca e
-ordina i risultati disponibili per popolarità, senza replicare la classifica
-completa dell'endpoint deprecato.
+dalla cache. **Crea playlist** riusa lo stesso percorso di **Suggerimenti
+Spotify**: prime cinque seed ammesse della classifica artisti, affinità tramite
+generi, album nuovi dalla ricerca dei brani e scelta dell'album tramite Discogs.
+Il periodo nella scheda playlist cambia solo la classifica di partenza;
+esclusione degli ascolti, artisti e generi sono quelli della scheda
+Suggerimenti Spotify. I brani vengono presi dal campione già letto dell'album
+selezionato, verificando ID artista, ID album e URI del brano e ordinandoli
+per popolarità disponibile. Nessun ripiego sugli artisti ascoltati né su Last.fm,
+nessuna nuova ricerca per creare dalla stessa anteprima.
+La presenza di album nella raccolta non esclude un artista dalla playlist,
+nemmeno quando tutti i suoi album campionati sono già posseduti:
+**Crea playlist** non applica l'esclusione degli album in raccolta.
+**Suggerimenti Spotify** continua invece a nascondere gli album già posseduti.
+Entrambi applicano gli album già campionati fra gli ascolti e le esclusioni
+artisti impostate. Il percorso condiviso è quello Spotify, non quello dei
+suggerimenti Last.fm; a parità di filtri i due risultati possono quindi
+differire per questo filtro raccolta e per la dimensione del pool richiesta.
 Le GET identiche in corso (anche fra suggerimenti e creazione playlist)
 condividono una sola richiesta, con copie JSON indipendenti e separazione per
 token; errori e risposte senza header di cache non vengono memorizzati.
 Ogni tentativo di scrittura invalida cache e GET condivise al completamento,
 anche se l'esito è incerto; una lettura precedente non ripopola la cache.
 Anche i rinnovi concorrenti del token nella stessa scheda condividono una sola richiesta.
-Le ricerche usano pagine da massimo 10 risultati, mantenendo il campione
-complessivo richiesto fino a 50 e fermandosi all'ultima pagina disponibile.
+Le ricerche usano pagine da massimo 10 risultati. Per l'affinità si parte
+da una pagina per ciascuno dei primi sei generi delle seed; se i candidati
+non producono abbastanza album/brani compatibili, il medesimo percorso
+legge le pagine successive, al massimo 50 risultati per genere. Non è
+l'intero catalogo. La ricerca brani per artista mantiene un
+campione fino a 50, fermandosi all'ultima pagina disponibile.
+Ogni passaggio manuale di Suggerimenti Spotify o dell'anteprima ha due
+contatori distinti, entrambi limitati a **40**: letture logiche (anche cache
+hit) e tentativi HTTP effettivi (anche retry di rete, 429 o 5xx).
+Non è una quota ufficiale Spotify; il cooldown condiviso resta obbligatorio.
+L'anteprima richiede 1–50 artisti nuovi e 1–10 brani per artista (predefiniti
+5 e 3), senza garantire quei numeri. Ogni gruppo di candidati usa la stessa graduatoria dei Suggerimenti
+(generi condivisi, popolarità, nome), con gruppi da almeno dieci candidati
+o dal numero richiesto fino a 50. I candidati senza album/brani compatibili
+non consumano definitivamente il numero richiesto: si passa ai successivi
+e, se necessario, alle pagine genere seguenti entro il budget.
+Se budget o errore interrompono la lettura, gli artisti completati restano
+nell'anteprima parziale: **Continua anteprima** avvia un altro passaggio
+esplicito dalla prima ricerca artista incompleta (ripartendo dalla sua
+prima pagina), oppure dalla pagina genere incompleta. Offset e fine delle
+pagine genere, candidati deduplicati, artisti già processati e album
+completati restano in memoria: non si rileggono classifiche o pagine genere
+già completate. Una pagina fallita non viene avanzata. Cambiando impostazioni, account o
+raccolta si riparte. Nessuna continuazione automatica e nessuna aggiunta di
+artisti ascoltati per raggiungere il numero richiesto; a campione esaurito
+può restare una playlist più corta, o nessun brano. La continuazione resta
+solo in memoria e non sopravvive al ricaricamento.
 Non vengono usati endpoint batch di lettura né endpoint top-tracks deprecati.
 L'importazione legge pagine da 50 elementi e ricontrolla lo snapshot finale;
 la creazione invia fino a 100 URI per scrittura, senza ritentare le POST.
@@ -151,9 +190,9 @@ retry GET limitati e le risposte già disponibili in memoria:
 | Autorizzazione e refresh | PKCE e redirect canonico; `POST accounts.spotify.com/api/token`, token in `sessionStorage`, refresh concorrenti riuniti nella scheda. Nessun replay automatico della POST. |
 | Ricerca manuale, abbinamento Last.fm/MusicBrainz | Una `GET search` da 10 risultati oppure una `GET albums/{id}` per ID/link diretto. Copertina e selezione di un suggerimento riusano lo stesso abbinamento in memoria. |
 | Album di un artista | Ricerca album fino a 50 risultati, massimo cinque pagine da 10, arresto quando la pagina è esaurita; nessuna ricerca alternativa illimitata. |
-| Suggerimenti Spotify | Una classifica artisti e una brani, più eventuale classifica di esclusione diversa; fino a sei ricerche genere e dieci artisti, ciascuna fino a cinque pagine. Nessun caricamento automatico della cronologia completa, endpoint related-artists, recommendations o top-tracks rimosso. I risultati possono essere limitati o vuoti se Spotify omette generi/popolarità. |
-| Anteprima playlist | Una classifica di 1–20 artisti e fino a cinque pagine di ricerca brani per artista; anteprima riusata per la creazione, non ricalcolata. |
-| Creazione playlist | `POST me/playlists`, poi `POST playlists/{id}/items` a blocchi di massimo 100 URI (massimo 200 brani). Fallimento interrompe i blocchi successivi; playlist parziale esplicitamente segnalata. Nessun retry automatico di scritture incerte. |
+| Suggerimenti Spotify | Una classifica artisti e una brani, più eventuale classifica di esclusione diversa; fino a sei generi con massimo cinque pagine ciascuno, gruppi di dieci candidati e fino a cinque pagine brani per artista; refill se mancano album compatibili. Massimo 40 letture logiche e 40 tentativi HTTP per passaggio, compresi retry. Nessun caricamento automatico della cronologia completa, endpoint related-artists, recommendations o top-tracks rimosso. |
+| Anteprima playlist | Stesso percorso candidati/album dei Suggerimenti, pool di 10–50 artisti; stessi limiti 40/40. I brani dell'album scelto riusano il campione verificato, senza ulteriori letture. Risultati parziali e continuazione manuale; anteprima riusata per la creazione. |
+| Creazione playlist | `POST me/playlists`, poi `POST playlists/{id}/items` a blocchi di massimo 100 URI (massimo 500 brani). Fallimento interrompe i blocchi successivi; playlist parziale esplicitamente segnalata. Nessun retry automatico di scritture incerte. |
 | Import playlist | Risoluzione ID/link o scansione nomi da 50, limite 2000 playlist; contenuti `/items` da 50, limite 5000 brani, verifica offset/totali/next e snapshot finale. Nessuna aggiunta locale se la lettura è incompleta o lo snapshot cambia. |
 | Copertine raccolta e suggerimenti | Caricamento lazy delle schede visibili, code limitate, GET singolo album o ricerca già condivisa; fallback Cover Art Archive/MusicBrainz senza aggirare Spotify. Nessuna lettura batch rimossa. |
 | Player, export e sync | Nessun polling/player Web API PWA. Export, persistenza e sincronizzazione GitHub della raccolta non chiamano Spotify; l'apertura dei link Spotify è una navigazione esplicita, non un fallback API. |
@@ -164,6 +203,17 @@ della **stessa origine** quando Web Locks è disponibile. Senza Web Locks resta
 la coda per scheda e il cooldown in `localStorage`, ma non una mutua esclusione
 atomica fra schede. Origini diverse, profili/dispositivi diversi e Desktop non
 condividono questo storage; non esiste un coordinatore globale dell'app.
+Prima di ogni tentativo HTTP, inclusi retry GET e POST OAuth/playlist, il
+trasporto impone almeno **3 secondi fra gli inizi delle richieste**. L'istante
+dell'ultimo invio è persistito in `accord-spotify-request-at-v1` sotto lo stesso
+lock/coda, così anche una nuova scheda della stessa origine rispetta il passo.
+Le risposte già in cache non attendono e non spostano l'istante. Il cooldown
+`Retry-After` resta prioritario e non viene ridotto: anche un'attesa di
+17240 secondi deve scadere prima di altre richieste. Se il cooldown viene
+esteso durante l'attesa preventiva, viene ricontrollato prima dell'invio.
+La pausa preventiva non ripete mai una scrittura dall'esito incerto.
+Questo passo prudenziale non è una quota ufficiale né garantisce assenza di
+429: Spotify considera tutto il traffico dell'app, anche da altri dispositivi.
 Cache e deduplicazione delle GET sono per istanza/scheda e token, non globali.
 I dati già visualizzati/abbinati sono snapshot dell'operazione, non una cache
 persistente delle risposte HTTP. Il service worker intercetta solo la propria

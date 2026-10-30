@@ -387,6 +387,8 @@ export function createSpotifyTransport({
   random = () => Math.random(),
 } = {}) {
   const cooldownKey = "accord-spotify-rate-limit-until-v1";
+  const requestAtKey = "accord-spotify-request-at-v1";
+  const requestInterval = 3000;
   const maxRetries = 2;
   const maxWait = 30_000;
   let queue = Promise.resolve();
@@ -414,13 +416,28 @@ export function createSpotifyTransport({
     return Number.isFinite(date) ? Math.max(1000, date - now()) : 5000;
   };
   const transientDelay = (retry) => 500 * (2 ** retry) + Math.floor(random() * 250);
+  const waitForSlot = async (retryRead) => {
+    while (true) {
+      await waitForCooldown(retryRead);
+      const saved = storage.getItem(requestAtKey);
+      if (saved !== null && (!saved.trim() || !Number.isFinite(Number(saved)) || Number(saved) < 0)) {
+        throw new Error("Configurazione intervallo Spotify non valida: rimuovi la chiave accord-spotify-request-at-v1 dai dati del sito e riprova.");
+      }
+      const previous = saved === null ? NaN : Number(saved);
+      const remaining = Number.isFinite(previous) ? previous + requestInterval - now() : 0;
+      if (remaining <= 0) return;
+      await wait(remaining);
+    }
+  };
   return {
-    async fetch(url, options, retryRead = false) {
+    async fetch(url, options, retryRead = false, budget = null) {
       const queued = queue.then(() => lock("accord-spotify-api", async () => {
         let rateRetries = 0;
         let transientRetries = 0;
         while (true) {
-          await waitForCooldown(retryRead);
+          await waitForSlot(retryRead);
+          budget?.attempt();
+          storage.setItem(requestAtKey, String(now()));
           let response;
           try {
             response = await request(url, options);
@@ -461,6 +478,79 @@ export function createSpotifyTransport({
       return queued;
     },
   };
+}
+
+export function createSpotifyReadBudget(limit = 40) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 40) {
+    throw new TypeError("Il budget Spotify deve essere compreso tra 1 e 40 letture.");
+  }
+  let logical = 0;
+  let actual = 0;
+  const consume = (value) => {
+    if (value >= limit) throw new Error(`Budget Spotify di ${limit} letture raggiunto; continua manualmente.`);
+    return value + 1;
+  };
+  return {
+    read() { logical = consume(logical); },
+    attempt() { actual = consume(actual); },
+    get logical() { return logical; },
+    get actual() { return actual; },
+  };
+}
+
+export async function collectSpotifyDiscoveryAlbums(discovery, loadAlbums) {
+  let partialReason = "";
+  while (discovery.nextArtist < discovery.artists.length) {
+    const artist = discovery.artists[discovery.nextArtist];
+    try {
+      const albums = await loadAlbums(artist);
+      discovery.albums.push(...albums);
+      discovery.nextArtist += 1;
+    } catch (error) {
+      partialReason = error.message;
+      break;
+    }
+  }
+  return {
+    ...discovery,
+    partialReason,
+    hasMore: discovery.nextArtist < discovery.artists.length,
+  };
+}
+
+export function spotifyDiscoveryPlaylistPreview(albums, { artistCount, tracksPerArtist, timeRange }) {
+  const artists = [];
+  const tracks = [];
+  const seen = new Set();
+  for (const album of albums) {
+    const id = album.spotifyArtistId;
+    if (!/^[A-Za-z0-9]{22}$/.test(id || "")) continue;
+    let artist = artists.find((entry) => entry.id === id);
+    if (!artist && artists.length >= artistCount) continue;
+    const selected = (album.spotifyTracks || []).filter((track) =>
+      track?.artists?.some((entry) => entry?.id === id)
+      && track.album?.id === album.id && track.is_playable !== false && !track.restrictions
+      && /^[A-Za-z0-9]{22}$/.test(track.id || "")
+      && track.uri === `spotify:track:${track.id}`
+      && typeof track.name === "string" && track.name.trim()
+      && !seen.has(track.id))
+      .sort((left, right) => (right.popularity || 0) - (left.popularity || 0));
+    for (const track of selected) {
+      if (seen.has(track.id) || (artist?.tracks || 0) >= tracksPerArtist) continue;
+      if (!artist) {
+        artist = { id, name: album.spotifyRelatedArtist, tracks: 0 };
+        artists.push(artist);
+      }
+      seen.add(track.id);
+      tracks.push({
+        uri: track.uri, name: track.name,
+        artist: track.artists.map((entry) => entry?.name).filter((name) => typeof name === "string").join(", "),
+        sourceArtist: artist.name, sourceArtistId: id, albumId: album.id,
+      });
+      artist.tracks += 1;
+    }
+  }
+  return { artists, tracks, timeRange, tracksPerArtist };
 }
 
 export function spotifyCacheableRead(url) {

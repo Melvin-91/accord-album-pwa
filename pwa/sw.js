@@ -1,11 +1,11 @@
-const CACHE = "accord-album-pwa-v77";
+const CACHE = "accord-album-pwa-v79";
 const FILES = [
   "./",
   "./index.html",
   "./style.css?v=22",
-  "./core.mjs?v=34",
+  "./core.mjs?v=36",
   "./ui.mjs?v=1",
-  "./app.mjs?v=59",
+  "./app.mjs?v=60",
   "./manifest.json",
   "../assets/malt_metal.ico",
   "../assets/accord-192.png",

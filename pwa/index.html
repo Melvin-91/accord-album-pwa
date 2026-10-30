@@ -252,11 +252,15 @@
         <section class="suggestions playlist-builder" aria-labelledby="playlistBuilderHeading">
           <div class="tab-intro">
             <div><p class="eyebrow">CREAZIONE SPOTIFY</p><h2 id="playlistBuilderHeading">Crea una playlist</h2></div>
-            <p>Accord usa i tuoi artisti Spotify più ascoltati e cerca i loro brani più popolari disponibili. I risultati possono differire dalla classifica completa Spotify; controlla l'anteprima prima di creare la playlist privata.</p>
+            <p>Nuovi artisti con lo stesso metodo di Suggerimenti Spotify. Playlist privata, solo dopo conferma.</p>
           </div>
+          <details class="suggestion-filter-details">
+            <summary>Come funziona</summary>
+            <p>Accord riusa artisti affini, filtri ed esclusioni di Suggerimenti Spotify, scegliendo brani verificati dagli album selezionati anche con Discogs. A differenza dei suggerimenti album, la playlist non esclude album o artisti perché presenti nella raccolta. Il periodo qui sotto definisce gli ascolti di partenza; gli altri filtri restano nella scheda Suggerimenti Spotify, non Last.fm. Fino a 50 artisti, senza garanzia di raggiungerli: ogni passaggio manuale ha un budget di 40 letture Spotify, inclusi i retry. Se necessario premi Continua anteprima. Nessun ripiego sugli artisti ascoltati; la playlist privata viene creata solo dopo la tua conferma.</p>
+          </details>
           <div class="playlist-builder-controls">
             <label>Numero di artisti
-              <input id="playlistArtistCount" type="number" min="1" max="20" step="1" value="5" required>
+              <input id="playlistArtistCount" type="number" min="1" max="50" step="1" value="5" required>
             </label>
             <label>Brani per artista
               <input id="playlistTracksPerArtist" type="number" min="1" max="10" step="1" value="3" required>
@@ -265,7 +269,7 @@
               <select id="playlistTimeRange">
                 <option value="short_term">Ultime 4 settimane</option>
                 <option value="medium_term" selected>Ultimi 6 mesi</option>
-                <option value="long_term">Tutto lo storico</option>
+                <option value="long_term">Ultimi 12 mesi</option>
               </select>
             </label>
             <label>Nome playlist
@@ -421,6 +425,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=59"></script>
+    <script type="module" src="app.mjs?v=60"></script>
   </body>
 </html>
