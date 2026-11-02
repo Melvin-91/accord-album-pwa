@@ -198,11 +198,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=60", "style.css?v=22"]) {
+  for (const file of ["app.mjs?v=61", "style.css?v=22"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=36", "ui.mjs?v=1"]) {
+  for (const file of ["core.mjs?v=37", "ui.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -1162,6 +1162,7 @@ test("migrates legacy album states to the current collection states", () => {
   assert.equal(validateAlbum(album("heard", { status: "heard" })).status, "liked");
   assert.equal(validateAlbum(album("hidden", { status: "hidden" })).status, "disliked");
   assert.equal(validateAlbum(album("disliked", { status: "disliked" })).status, "disliked");
+  assert.equal(validateAlbum(album("neutral", { status: "neutral" })).status, "neutral");
 });
 
 test("selects up to three distinct album genres in catalog order", () => {

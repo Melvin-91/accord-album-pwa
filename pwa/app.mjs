@@ -46,7 +46,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=36";
+} from "./core.mjs?v=37";
 import {
   localCommandResults,
   normalizeCollectionPreferences,
@@ -126,7 +126,7 @@ let collectionCoverTokenPromise = null;
 let collectionCoverJobsActive = 0;
 let collectionCoverBatchScheduled = false;
 const LASTFM_KEY = "accord-lastfm-api-key";
-const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Mi piace", disliked: "Non mi piace" };
+const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Piaciuto", neutral: "Neutro", disliked: "Non piaciuto" };
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();

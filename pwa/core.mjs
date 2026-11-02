@@ -1,4 +1,4 @@
-export const ALBUM_STATES = new Set(["queued", "listening", "liked", "disliked"]);
+export const ALBUM_STATES = new Set(["queued", "listening", "liked", "neutral", "disliked"]);
 const LEGACY_ALBUM_STATES = { heard: "liked", hidden: "disliked" };
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
 const ALBUM_FIELDS_V2 = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
@@ -635,7 +635,7 @@ export async function readSpotifyPlaylistItems(path, fetchPage) {
       expectedTotal = total;
     }
     entries.push(...page.items);
-    if (entries.length > 5000) throw new Error("Playlist troppo grande per essere importata in una sola volta.");
+    if (entries.length > 10000) throw new Error("Playlist troppo grande per essere importata in una sola volta.");
     if (page.next === null || page.next === undefined) {
       if (expectedTotal !== null && entries.length !== expectedTotal) {
         throw new Error("Lettura playlist incompleta; nessun album è stato aggiunto.");

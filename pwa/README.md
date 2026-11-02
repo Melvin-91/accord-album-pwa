@@ -52,8 +52,8 @@ contenere solo il codice PWA, la documentazione pubblica e l'icona: mai
 La pagina e l'installazione mobile usano l'icona del gatto in PNG da 192 e
 512 pixel, con percorsi relativi al sito GitHub Pages.
 
-La raccolta mostra copertina, stato (Da ascoltare, In ascolto, Mi piace o Non
-mi piace), anno, genere principale, generi secondari,
+La raccolta mostra copertina, stato (Da ascoltare, In ascolto, Piaciuto, Neutro
+o Non piaciuto), anno, genere principale, generi secondari,
 voto, collezioni e tag. I filtri separano il genere principale dai
 sottogeneri; scegliendo un principale, il secondo menu propone i relativi
 generi secondari e l'opzione **Nessun sottogenere**.
@@ -193,7 +193,7 @@ retry GET limitati e le risposte già disponibili in memoria:
 | Suggerimenti Spotify | Una classifica artisti e una brani, più eventuale classifica di esclusione diversa; fino a sei generi con massimo cinque pagine ciascuno, gruppi di dieci candidati e fino a cinque pagine brani per artista; refill se mancano album compatibili. Massimo 40 letture logiche e 40 tentativi HTTP per passaggio, compresi retry. Nessun caricamento automatico della cronologia completa, endpoint related-artists, recommendations o top-tracks rimosso. |
 | Anteprima playlist | Stesso percorso candidati/album dei Suggerimenti, pool di 10–50 artisti; stessi limiti 40/40. I brani dell'album scelto riusano il campione verificato, senza ulteriori letture. Risultati parziali e continuazione manuale; anteprima riusata per la creazione. |
 | Creazione playlist | `POST me/playlists`, poi `POST playlists/{id}/items` a blocchi di massimo 100 URI (massimo 500 brani). Fallimento interrompe i blocchi successivi; playlist parziale esplicitamente segnalata. Nessun retry automatico di scritture incerte. |
-| Import playlist | Risoluzione ID/link o scansione nomi da 50, limite 2000 playlist; contenuti `/items` da 50, limite 5000 brani, verifica offset/totali/next e snapshot finale. Nessuna aggiunta locale se la lettura è incompleta o lo snapshot cambia. |
+| Import playlist | Risoluzione ID/link o scansione nomi da 50, limite 2000 playlist; contenuti `/items` da 50, limite 10000 brani, verifica offset/totali/next e snapshot finale. Nessuna aggiunta locale se la lettura è incompleta o lo snapshot cambia. |
 | Copertine raccolta e suggerimenti | Caricamento lazy delle schede visibili, code limitate, GET singolo album o ricerca già condivisa; fallback Cover Art Archive/MusicBrainz senza aggirare Spotify. Nessuna lettura batch rimossa. |
 | Player, export e sync | Nessun polling/player Web API PWA. Export, persistenza e sincronizzazione GitHub della raccolta non chiamano Spotify; l'apertura dei link Spotify è una navigazione esplicita, non un fallback API. |
 

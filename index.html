@@ -77,7 +77,7 @@
           <select id="statusFilter">
             <option value="">Tutti gli stati</option>
             <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
-            <option value="liked">Mi piace</option><option value="disliked">Non mi piace</option>
+            <option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option>
           </select>
         </label>
         <label>Collezione
@@ -101,7 +101,7 @@
       <section id="selectionToolbar" class="selection-toolbar" aria-label="Azioni album selezionati" hidden>
         <strong id="selectionCount"></strong>
         <button id="selectVisibleButton" type="button">Seleziona visibili</button>
-        <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Mi piace</option><option value="disliked">Non mi piace</option></select></label>
+        <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option></select></label>
         <button id="applyBulkStatus" type="button">Applica stato</button>
         <button id="pinSelectedButton" type="button">Fissa selezionati</button>
         <button id="unpinSelectedButton" type="button">Non fissare</button>
@@ -413,7 +413,7 @@
         <label class="status-field">Stato
           <select class="status-input">
             <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
-            <option value="liked">Mi piace</option><option value="disliked">Non mi piace</option>
+            <option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option>
           </select>
         </label>
         <label class="genres-field">Generi <input class="genres-input" type="text" maxlength="1619" placeholder="Es. rock, jazz, elettronica"></label>
@@ -425,6 +425,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=60"></script>
+    <script type="module" src="app.mjs?v=61"></script>
   </body>
 </html>
