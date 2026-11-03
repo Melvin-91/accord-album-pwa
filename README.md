@@ -1,10 +1,106 @@
 # Accord · Raccolta album PWA
 
+## Novità PWA 1.3.0
+
+- Stato e voto modificabili direttamente sulle schede, anche da tastiera e
+  su mobile. Se esiste una bozza dell'album, prima salvarla o scartarla nei
+  dettagli: la modifica rapida non la sovrascrive.
+- Precedente/Successivo nei dettagli seguono esclusivamente la vista
+  filtrata e ordinata corrente, senza ricominciare dal primo album.
+  Le bozze sono separate per album; un errore di salvataggio impedisce
+  di cambiare album o chiudere l'editor.
+- Incolla un link album Spotify nella raccolta. Gli album già presenti si
+  aprono localmente; gli altri preparano Aggiungi album, senza richieste
+  finché non premi **Cerca**. Le aggiunte usano la deduplicazione esistente.
+  Il manifest espone un `share_target` GET: sui sistemi/browser compatibili,
+  una condivisione apre l'album locale o prepara il link per una scelta
+  esplicita. I parametri condivisi sono rimossi dalla barra degli indirizzi.
+  L'avvio da condivisione non carica copertine online né avvia l'auto-sync.
+- L'anteprima playlist mostra durata stimata, artisti unici, ripetizioni e
+  proporzione di brani noti soltanto dai dati già disponibili. Dati mancanti
+  o parziali sono dichiarati; gli album in raccolta non sono impropriamente
+  considerati prove di ascolto dei singoli brani. Nessuna lettura aggiuntiva.
+- **Vista e altro → Scarica backup locale JSON** esporta album e una lista
+  chiusa di preferenze: layout, album fissati, dimensione testo, contrasto e
+  densità. Nessuna credenziale, bozza, ricerca, cronologia, token o immagine.
+  Gli URL album esportati sono canonici, senza parametri. Il file contiene
+  comunque la tua raccolta personale: custodiscilo in un luogo privato.
+  Il ripristino accetta backup locali di questo formato (massimo 10 MB):
+  valida tutto prima dell'anteprima, richiede la selezione degli album e
+  una conferma; le preferenze sono facoltative. Sostituisce per ID o aggiunge,
+  non elimina gli album non selezionati. Album e preferenze sono salvati
+  atomicamente in un'unica scrittura locale; un errore non cambia lo stato.
+  Modifiche durante l'anteprima richiedono di riaprirla. Bozze preesistenti
+  restano separate; il ripristino non equivale a una sincronizzazione.
+  Le copertine già archiviate restano disponibili, ma non sono nel backup.
+- **Attività** raccoglie lavoro in corso, messaggi/errori e scelte recenti
+  solo in memoria (ultimi 30 eventi), con la scadenza del cooldown Spotify
+  condiviso. Si aggiorna su eventi/apertura: niente polling o nuovi retry.
+- Gli aggiornamenti pronti mostrano **Aggiorna ora / Più tardi**. Il worker
+  non chiama `skipWaiting` all'installazione: l'attivazione richiede la scelta
+  esplicita, senza bozze, finestre di modifica o attività in corso.
+  Album locali già salvati, anche non sincronizzati, restano intatti.
+  Scheda, filtri, selezione, posizione e anteprima playlist sono mantenuti
+  nel riavvio richiesto; non parte un nuovo auto-sync/caricamento copertine.
+  Un'altra finestra che attiva il worker non forza il riavvio di questa.
+  **Più tardi** è reversibile da Attività. Il primo passaggio da una vecchia
+  release priva di questo banner può richiedere la chiusura delle finestre
+  precedenti secondo il normale ciclo del service worker.
+- In **Preferenze → Accessibilità**, testo normale/115%/130%, contrasto alto
+  e densità touch/compatta si applicano e persistono subito, senza dipendere
+  dalla configurazione degli account. Il layout schede/elenco resta separato.
+
+Non cambiano endpoint, budget, cache HTTP o gestione condivisa di
+`Retry-After` Spotify. Condivisione installata e transizioni di aggiornamento
+dipendono dal supporto del browser; la suite Node verifica i contratti
+locali e del worker, non sostituisce una prova d'installazione su dispositivo.
+
 La raccolta album, i suggerimenti e la creazione di playlist sono organizzati in tre schede.
-La versione attiva dell'app è visibile nell'intestazione della PWA e nella
-barra del titolo dell'app desktop; la build iniziale è `1.0.0`.
+La versione attiva è visibile nell'intestazione della PWA e nella barra del
+titolo desktop. I due prodotti seguono cicli di rilascio indipendenti.
+
+## Versionamento
+
+Usiamo `MAJOR.MINOR.PATCH`: major per incompatibilita', minor per nuove
+funzionalita' compatibili, patch per correzioni e ottimizzazioni. La versione
+avanza una volta per insieme completo e verificato di modifiche, non a ogni
+modifica intermedia. Le modifiche a un solo prodotto non incrementano l'altro.
+
+La versione desktop risiede in `../app_version.py` e alimenta titolo e
+diagnostica. Per la PWA, titolo e badge in `index.html` devono corrispondere
+alla versione della cache in `sw.js`; un test ne verifica la coerenza.
+I suffissi degli asset (`?v=...`) sono identificatori tecnici della cache,
+non versioni del prodotto. Le versioni degli schemi e le chiavi dei dati
+locali non cambiano con la release, evitando di perdere dati o preferenze.
+La pubblicazione resta un'azione esplicita: preparare una versione non
+significa che quella versione sia gia' online.
 
 ## Interfaccia e comandi locali
+
+- **Vista e altro**: estrazione di un album locale per stato/genere,
+  confronto delle possibili edizioni duplicate (senza fusioni), statistiche,
+  viste salvate, differenze da sincronizzare e disponibilita' offline.
+- Liste intelligenti per album ascoltati senza voto, piaciuti senza voto,
+  modificati di recente o Da ascoltare fermi da 30 giorni. Le date sono
+  registrate localmente da questa release, non ricostruite per gli album
+  precedenti.
+- I suggerimenti mostrano il motivo e i riferimenti effettivamente salvati.
+  **Non adesso** li nasconde per 30 giorni sul dispositivo; i rinvii sono
+  ripristinabili. Gli ultimi cinque risultati Spotify/Last.fm si riaprono
+  dalla cronologia senza nuove ricerche.
+- Bozze dei campi di ricerca manuale e dei dettagli album conservate dopo
+  chiusura o riavvio; Salva/Aggiungi applicano, Scarta bozza elimina.
+- Su mobile la barra della selezione resta in basso e apre la modifica
+  multipla di stato, voto, generi, collezioni e tag. Solo i campi spuntati
+  cambiano; gli elenchi supportano Aggiungi/Rimuovi/Sostituisci.
+- La sincronizzazione mostra modifiche locali e ultimo successo. Prima
+  delle scritture presenta invii/ricezioni/invariati; i conflitti affiancano
+  soltanto i campi cambiati. L'importazione playlist richiede conferma
+  dell'effetto locale prima del salvataggio.
+- Lo stato offline verifica tutti i file della cache e conta le copertine
+  archiviate. La rete rilevata non prova la disponibilita' dei servizi.
+  Le nuove comodita' locali non generano richieste Spotify, Last.fm o GitHub.
+  Bozze, viste, cronologia e rinvii non vengono sincronizzati.
 
 - Tema scuro con un solo accento, focus da tastiera visibile e navigazione
   tra Raccolta, Suggerimenti e Crea playlist (anche con le frecce nelle schede).

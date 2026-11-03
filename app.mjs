@@ -51,10 +51,13 @@ import {
 } from "./core.mjs?v=38";
 import {
   localCommandResults,
-  normalizeCollectionPreferences,
   prepareAlbumUpdates,
   visibleSelection,
-} from "./ui.mjs?v=1";
+  duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch,
+  albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
+  normalizeAccessibility, adjacentAlbumIds, spotifyAlbumIntent, playlistPreviewStatistics,
+  portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
+} from "./ui.mjs?v=3";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -132,12 +135,16 @@ const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Piaciu
 const $ = (selector) => document.querySelector(selector);
 const template = $("#albumTemplate");
 const state = loadState();
+const QOL_KEY = "accord-collection-qol-v1";
+const qol = loadCollectionQol();
 const COLLECTION_UI_KEY = "accord-collection-ui-v1";
 let collectionPreferences;
 try {
-  collectionPreferences = normalizeCollectionPreferences(JSON.parse(localStorage.getItem(COLLECTION_UI_KEY) || "{}"));
-} catch {
-  collectionPreferences = normalizeCollectionPreferences(null);
+  collectionPreferences = portablePreferences(state.preferences
+    || JSON.parse(localStorage.getItem(COLLECTION_UI_KEY) || "{}"));
+} catch (error) {
+  collectionPreferences = portablePreferences();
+  queueMicrotask(() => showFeedback(`Preferenze locali non leggibili: ${error.message}`, true));
 }
 let selectedAlbumIds = new Set();
 let visibleAlbums = [];
@@ -298,7 +305,7 @@ function loadState() {
       Array.isArray(records) && records.some((album) =>
         album && normalizeAlbumStatus(album.status) !== album.status));
     if (hasLegacyStatuses) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, albums, base }));
-    return { albums, base, manualOrder, sortOrder };
+    return { albums, base, manualOrder, sortOrder, preferences: saved.preferences };
   } catch (error) {
     queueMicrotask(() => showMessage("Archivio locale non leggibile", error.message));
     return { albums: [], base: [], manualOrder: [], sortOrder: "artist", loadError: error.message };
@@ -307,6 +314,7 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  updateLocalSyncSummary();
 }
 
 function ensureManualOrder() {
@@ -648,8 +656,10 @@ function showFeedback(message, error = false) {
 
 function saveCollectionPreferences(next) {
   try {
-    localStorage.setItem(COLLECTION_UI_KEY, JSON.stringify(next));
-    collectionPreferences = next;
+    if (state.loadError) throw new Error(state.loadError);
+    const preferences = portablePreferences(next);
+    commitLocalRestore(localStorage, STORAGE_KEY, state, { ...state, preferences });
+    collectionPreferences = preferences;
     return true;
   } catch (error) {
     showFeedback(`Preferenze non salvate: ${error.message}`, true);
@@ -671,13 +681,14 @@ function setAlbumPins(ids, pinned) {
 function collectionHasFilters() {
   return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
     "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
-    || $("#pinnedOnlyInput").checked;
+    || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value);
 }
 
 function resetCollectionFilters() {
   for (const selector of ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
     "#statusFilter", "#collectionFilter", "#tagFilter"]) $(selector).value = "";
   $("#pinnedOnlyInput").checked = false;
+  $("#smartCollectionList").value = "";
   render();
   $("#searchInput").focus();
 }
@@ -691,6 +702,9 @@ function updateSelectionToolbar() {
 
 function commitAlbumChanges(ids, changes) {
   if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+  if (Object.hasOwn(changes, "genres") && !Object.hasOwn(changes, "primary_genre")) {
+    changes = { ...changes, primary_genre: changes.genres[0] || "" };
+  }
   const next = prepareAlbumUpdates(state.albums, ids, changes, validateAlbum);
   const previous = state.albums;
   state.albums = next;
@@ -700,6 +714,7 @@ function commitAlbumChanges(ids, changes) {
     state.albums = previous;
     throw error;
   }
+  rememberLocalChanges(ids);
   setSyncState("Modifiche locali in attesa di sincronizzazione");
 }
 
@@ -726,11 +741,43 @@ function openAlbumDetails(id, returnFocus = document.activeElement) {
   }
   rating.value = album.rating === null ? "" : String(album.rating);
   $("#albumDetailsFields").replaceChildren(fields);
-  $("#albumDetailsDialog").showModal();
+  restoreDetailsDraft(id);
+  const adjacent = adjacentAlbumIds(visibleAlbums, id);
+  $("#previousAlbumButton").disabled = !adjacent.previous;
+  $("#nextAlbumButton").disabled = !adjacent.next;
+  if (!$("#albumDetailsDialog").open) $("#albumDetailsDialog").showModal();
 }
 
+const detailsDraftSelectors = [".status-input", ".rating-input", ".genres-input", ".collections-input", ".tags-input"];
+function persistDetailsDraft() {
+  if (!detailsAlbumId) return true;
+  const album = state.albums.find((record) => record.id === detailsAlbumId);
+  const fields = Object.fromEntries(detailsDraftSelectors.map((selector) =>
+    [selector, $("#albumDetailsFields").querySelector(selector).value]));
+  const original = album ? { ".status-input": album.status, ".rating-input": album.rating === null ? "" : String(album.rating),
+    ".genres-input": album.genres.join(", "), ".collections-input": album.collections.join(", "),
+    ".tags-input": album.tags.join(", ") } : {};
+  return JSON.stringify(fields) === JSON.stringify(original)
+    ? (!qol.drafts[`edit:${detailsAlbumId}`] || clearAlbumDraft(`edit:${detailsAlbumId}`))
+    : saveAlbumDraft(`edit:${detailsAlbumId}`, fields);
+}
+for (const [selector, direction] of [["#previousAlbumButton", "previous"], ["#nextAlbumButton", "next"]]) {
+  $(selector).addEventListener("click", () => {
+    const id = adjacentAlbumIds(visibleAlbums, detailsAlbumId)[direction];
+    if (!id || !persistDetailsDraft()) return;
+    openAlbumDetails(id, detailsReturnFocus);
+    $(selector).focus();
+  });
+}
+$("#albumDetailsDialog").addEventListener("cancel", (event) => {
+  if (!persistDetailsDraft()) event.preventDefault();
+});
+
 $("#albumDetailsForm").addEventListener("submit", (event) => {
-  if (event.submitter?.value !== "save") return;
+  if (event.submitter?.value !== "save") {
+    if (!persistDetailsDraft()) event.preventDefault();
+    return;
+  }
   event.preventDefault();
   const fields = $("#albumDetailsFields");
   const list = (selector) => fields.querySelector(selector).value.split(",").map((value) => value.trim()).filter(Boolean);
@@ -743,6 +790,7 @@ $("#albumDetailsForm").addEventListener("submit", (event) => {
       tags: list(".tags-input"),
       rating: fields.querySelector(".rating-input").value ? Number(fields.querySelector(".rating-input").value) : null,
     });
+    if (!clearAlbumDraft(`edit:${detailsAlbumId}`)) return;
     $("#albumDetailsDialog").close();
     render();
     showFeedback("Album salvato sul dispositivo");
@@ -983,7 +1031,7 @@ function render(options = {}) {
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
     order: sortOrder,
-  });
+  }).filter((album) => smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt));
   const sortedAlbums = sortOrder === "manual"
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
     : filteredAlbums;
@@ -1063,6 +1111,12 @@ function render(options = {}) {
     card.querySelector(".status-input").setAttribute("aria-label", `Stato per ${album.name}`);
     card.querySelector(".status-input").addEventListener("change", (event) =>
       updateAlbum(album.id, { status: event.currentTarget.value }));
+    const quick = document.createElement("div");
+    quick.className = "album-quick-edit";
+    quick.setAttribute("role", "group");
+    quick.setAttribute("aria-label", `Modifica rapida di ${album.name}`);
+    card.querySelector(".album-main").append(quick);
+    quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
     const link = card.querySelector(".spotify-link");
     link.href = album.url;
     const orderControls = card.querySelector(".manual-order-controls");
@@ -1444,6 +1498,8 @@ function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
     state.albums = previous;
     throw error;
   }
+  rememberLocalChanges(new Set([album.id]));
+  clearAlbumDraft("manual");
   render({ remoteCovers: true });
   if (syncAutomatically) requestAutomaticSync();
   else setSyncState("Album aggiunto localmente · sincronizza per inviarlo");
@@ -2697,6 +2753,8 @@ function restoreListeningSuggestionsForSpotifyReturn() {
 }
 
 function renderListeningAlbumSuggestions(albums) {
+  rememberSuggestionResult("lastfm", albums);
+  albums = albums.filter(suggestionNotSnoozed);
   const container = $("#suggestionAlbums");
   container.replaceChildren();
   suggestionCoverObserver?.disconnect();
@@ -2716,6 +2774,7 @@ function renderListeningAlbumSuggestions(albums) {
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    appendSuggestionActions(card, album, () => renderListeningAlbumSuggestions(albums));
     const cover = createAlbumCoverFrame(album.name);
     const rememberedMatch = suggestedSpotifyCoverMatches.get(album.id);
     if (rememberedMatch) {
@@ -3141,11 +3200,14 @@ async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
 }
 
 function renderSpotifyAlbumSuggestions(albums) {
+  rememberSuggestionResult("spotify", albums);
+  albums = albums.filter(suggestionNotSnoozed);
   const container = $("#spotifySuggestionAlbums");
   container.replaceChildren();
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    appendSuggestionActions(card, album, () => renderSpotifyAlbumSuggestions(albums));
     if (typeof album.coverUrl === "string" && album.coverUrl.startsWith("https://i.scdn.co/image/")) {
       const cover = createAlbumCoverFrame(album.name);
       setAlbumCover(cover, album.coverUrl);
@@ -3200,11 +3262,13 @@ async function loadSpotifyAlbumSuggestions(request, accessToken) {
   status.textContent = "Leggo le classifiche Spotify e preparo i suggerimenti…";
   const result = await buildSpotifyAlbumSuggestions(request, accessToken, status);
   renderSpotifyAlbumSuggestions(result.albums);
+  const visibleCount = result.albums.filter(suggestionNotSnoozed).length;
   const { discogs } = result;
   status.textContent = `Spotify · ${result.trackCount} brani campionati · ${result.seedCount} artisti di partenza · `
     + `${result.similarArtistCount} artisti simili`
     + (result.similarityCandidates ? ` (grafo Last.fm: ${result.similarityCandidates})` : " (per genere)")
-    + ` · ${result.albums.length}/${result.candidateCount} album nuovi`
+    + ` · ${visibleCount}/${result.candidateCount} album nuovi visibili`
+    + (visibleCount < result.albums.length ? ` · ${result.albums.length - visibleCount} rimandati localmente` : "")
     + (result.similarityNote ? ` · ${result.similarityNote}` : "")
     + (result.exclusionCount ? ` · ${result.exclusionCount} artisti esclusi` : "")
     + ` · Discogs ${discogs.rated}/${discogs.attempted} album valutati`
@@ -3269,6 +3333,7 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
   const preview = spotifyDiscoveryPlaylistPreview(result.albums, request);
   return {
     ...preview,
+    sourceAlbums: result.albums,
     partialReason: [result.partialReason, result.discogs.unavailable,
       result.discogs.limited ? "budget Discogs raggiunto" : ""].filter(Boolean).join(" · "),
     hasMore: Boolean(result.continuation),
@@ -3280,6 +3345,18 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
 function renderTopArtistPlaylistPreview(preview) {
   const container = $("#playlistBuilderPreview");
   container.replaceChildren();
+  const stats = playlistPreviewStatistics(preview.tracks,
+    (preview.sourceAlbums || []).flatMap((album) => album.spotifyTracks || []));
+  const summary = document.createElement("p");
+  summary.className = "notice";
+  summary.textContent = `Durata stimata: ${stats.timed ? `~${Math.round(stats.duration / 60000)} min su ${stats.timed}/${stats.total} brani` : "sconosciuta"}${
+    stats.timed < stats.total ? " (totale sconosciuto)" : ""} · Artisti unici: ${
+    stats.artistRows ? stats.uniqueArtists : "sconosciuti"}${
+    stats.artistRows < stats.total && stats.artistRows ? " (dati parziali)" : ""} · Ripetizioni: ${
+    stats.identified === stats.total ? stats.repeats : "sconosciute"} · Brani già noti: ${
+    stats.classified ? `${stats.known}/${stats.classified} classificati (${Math.round(stats.known / stats.classified * 100)}%)` : "sconosciuti"}${
+    stats.classified < stats.total ? `; ${stats.total - stats.classified} non classificati` : ""}. Solo dati disponibili, nessuna richiesta aggiuntiva.`;
+  container.append(summary);
   for (const artist of preview.artists) {
     const group = document.createElement("details");
     group.className = "playlist-artist-preview";
@@ -3621,6 +3698,423 @@ function setCoverNotice(message) {
   notice.textContent = message;
 }
 
+function loadCollectionQol() {
+  const empty = { views: {}, drafts: {}, history: [], snoozes: {}, changedAt: {}, lastSync: "" };
+  try {
+    const saved = JSON.parse(localStorage.getItem(QOL_KEY) || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error("Formato non valido");
+    for (const key of ["views", "drafts", "snoozes", "changedAt"]) {
+      if (saved[key] && (typeof saved[key] !== "object" || Array.isArray(saved[key]))) throw new Error(`Campo ${key} non valido`);
+    }
+    if (saved.history && !Array.isArray(saved.history)) throw new Error("Cronologia non valida");
+    if (saved.history?.some((entry) => !entry || !["spotify", "lastfm"].includes(entry.kind)
+      || !Array.isArray(entry.albums) || entry.albums.some((album) =>
+        !album || typeof album.id !== "string" || typeof album.name !== "string"
+        || typeof album.artist !== "string" || !Array.isArray(album.genres)))) throw new Error("Risultati precedenti non validi");
+    if (Object.values(saved.views || {}).some((view) => !view || typeof view !== "object"
+      || Array.isArray(view))) throw new Error("Viste salvate non valide");
+    if (Object.values(saved.drafts || {}).some((draft) => !draft || typeof draft !== "object"
+      || Array.isArray(draft))) throw new Error("Bozze non valide");
+    return { ...empty, ...saved };
+  } catch (error) {
+    queueMicrotask(() => showMessage("Preferenze locali non leggibili", error.message));
+    return { ...empty, loadError: error.message };
+  }
+}
+
+function saveCollectionQol(next) {
+  try {
+    if (qol.loadError) throw new Error(`Preferenze precedenti non sovrascritte: ${qol.loadError}`);
+    localStorage.setItem(QOL_KEY, JSON.stringify(next));
+    Object.assign(qol, next);
+    $("#qolStorageError").hidden = true;
+    return true;
+  } catch (error) {
+    $("#qolStorageError").textContent = `Preferenze o bozze non salvate: ${error.message}`;
+    $("#qolStorageError").hidden = false;
+    showFeedback(`Preferenze o bozza non salvate: ${error.message}`, true);
+    return false;
+  }
+}
+
+function rememberLocalChanges(ids) {
+  const changedAt = { ...qol.changedAt };
+  for (const id of ids) changedAt[id] = new Date().toISOString();
+  saveCollectionQol({ ...qol, changedAt });
+}
+
+function updateLocalSyncSummary() {
+  const count = albumChanges(state.base, state.albums).length;
+  $("#localSyncSummary").textContent = `${count} album con modifiche locali da sincronizzare · ultimo successo: ${
+    qol.lastSync ? new Date(qol.lastSync).toLocaleString() : "mai su questo dispositivo"}`;
+}
+
+function changesText(changes) {
+  return changes.map((change) => {
+    const album = change.after || change.before;
+    const values = change.kind === "updated" ? change.fields.map((field) =>
+      `  ${field}: ${JSON.stringify(change.before[field])} -> ${JSON.stringify(change.after[field])}`).join("\n") : "";
+    return `${change.kind} | ${album.artist} - ${album.name} | ${change.fields.join(", ")}${values ? `\n${values}` : ""}`;
+  }).join("\n");
+}
+
+function confirmSyncChanges(outgoing, incoming, albums) {
+  const dialog = document.createElement("dialog");
+  const heading = document.createElement("h2");
+  heading.textContent = "Anteprima sincronizzazione";
+  const details = document.createElement("pre");
+  details.className = "qol-details";
+  const changedIds = new Set([...outgoing, ...incoming].map((change) => change.id));
+  details.textContent = `Verso GitHub: ${outgoing.length}\n${changesText(outgoing)}\n\nVerso questo dispositivo: ${
+    incoming.length}\n${changesText(incoming)}\n\nInvariati: ${albums.filter((album) =>
+      !changedIds.has(album.id)).length}. Nessuna scrittura ancora eseguita.`;
+  const accept = document.createElement("button");
+  accept.textContent = "Sincronizza queste modifiche";
+  const cancel = document.createElement("button");
+  cancel.textContent = "Annulla";
+  dialog.append(heading, details, accept, cancel);
+  document.body.append(dialog);
+  return new Promise((resolve) => {
+    accept.addEventListener("click", () => dialog.close("accept"));
+    cancel.addEventListener("click", () => dialog.close("cancel"));
+    dialog.addEventListener("close", () => {
+      const accepted = dialog.returnValue === "accept";
+      dialog.remove();
+      resolve(accepted);
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
+function saveAlbumDraft(key, fields) {
+  return saveCollectionQol({ ...qol, drafts: { ...qol.drafts, [key]: fields } });
+}
+
+function clearAlbumDraft(key) {
+  const drafts = { ...qol.drafts };
+  delete drafts[key];
+  return saveCollectionQol({ ...qol, drafts });
+}
+
+const manualDraftSelectors = ["#manualAlbumSource", "#manualAlbumQuery", "#manualAlbumArtist",
+  "#manualAlbumGenre", "#manualAlbumYear"];
+function restoreManualAlbumDraft() {
+  const draft = qol.drafts.manual;
+  if (!draft) return;
+  for (const selector of manualDraftSelectors) if (typeof draft[selector] === "string") $(selector).value = draft[selector];
+  showFeedback("Bozza di ricerca ripristinata. Premi Cerca per avviare richieste online.");
+}
+
+function restoreDetailsDraft(id) {
+  const draft = qol.drafts[`edit:${id}`];
+  if (!draft) return;
+  for (const [selector, value] of Object.entries(draft)) {
+    const field = $("#albumDetailsFields").querySelector(selector);
+    if (field && typeof value === "string") field.value = value;
+  }
+  showFeedback("Bozza album ripristinata. Premi Salva per applicarla.");
+}
+
+function suggestionNotSnoozed(album) {
+  return !(Number(qol.snoozes[suggestionIdentity(album)]) > Date.now());
+}
+
+let replayingSuggestions = false;
+function rememberSuggestionResult(kind, albums) {
+  if (replayingSuggestions || !albums.length) return;
+  const records = JSON.parse(JSON.stringify(albums));
+  const signature = JSON.stringify([kind, records]);
+  const history = qol.history.filter((entry) => JSON.stringify([entry.kind, entry.albums]) !== signature);
+  history.unshift({ kind, at: new Date().toISOString(), albums: records });
+  if (saveCollectionQol({ ...qol, history: history.slice(0, 5) })) refreshSuggestionHistory();
+}
+
+function refreshSuggestionHistory() {
+  const select = $("#suggestionHistory");
+  select.replaceChildren(new Option("Scegli risultato locale", ""));
+  qol.history.forEach((entry, index) => select.add(new Option(
+    `${entry.kind} · ${new Date(entry.at).toLocaleString()} · ${entry.albums.length} album`, String(index))));
+}
+
+function appendSuggestionActions(card, album, rerender) {
+  const actions = document.createElement("div");
+  actions.className = "qol-actions";
+  const why = document.createElement("button");
+  why.type = "button";
+  why.textContent = "Perche' questo album?";
+  why.addEventListener("click", () => showMessage("Origine del suggerimento", suggestionWhy(album)));
+  const snooze = document.createElement("button");
+  snooze.type = "button";
+  snooze.textContent = "Non adesso · 30 giorni";
+  snooze.addEventListener("click", () => {
+    if (!saveCollectionQol({ ...qol, snoozes: {
+      ...qol.snoozes, [suggestionIdentity(album)]: Date.now() + 30 * 86400000,
+    } })) return;
+    replayingSuggestions = true;
+    try { rerender(); } finally { replayingSuggestions = false; }
+    showFeedback("Suggerimento nascosto per 30 giorni, non escluso definitivamente.");
+  });
+  actions.append(why, snooze);
+  card.append(actions);
+}
+
+const collectionViewSelectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
+  "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+function refreshSavedCollectionViews() {
+  const select = $("#savedCollectionView");
+  select.replaceChildren(new Option("Scegli vista", ""));
+  for (const name of Object.keys(qol.views).sort()) select.add(new Option(name, name));
+}
+
+function pickLocalAlbum() {
+  const dialog = document.createElement("dialog");
+  const heading = document.createElement("h2");
+  heading.textContent = "Cosa ascolto adesso?";
+  const status = document.createElement("select");
+  status.setAttribute("aria-label", "Stato da cui estrarre");
+  for (const [value, label] of [["queued", "Da ascoltare"], ["neutral", "Neutri da rivalutare"], ["", "Tutti"]]) {
+    status.add(new Option(label, value));
+  }
+  const genre = document.createElement("select");
+  genre.setAttribute("aria-label", "Genere da cui estrarre");
+  genre.add(new Option("Tutti i generi", ""));
+  for (const value of [...new Set(state.albums.flatMap((album) => album.genres))].sort()) genre.add(new Option(value, value));
+  const result = document.createElement("p");
+  const pick = document.createElement("button");
+  pick.textContent = "Estrai album locale";
+  pick.addEventListener("click", () => {
+    const candidates = state.albums.filter((album) => (!status.value || album.status === status.value)
+      && (!genre.value || album.genres.includes(genre.value)));
+    if (!candidates.length) { result.textContent = "Nessun album corrisponde alla scelta."; return; }
+    const album = candidates[Math.floor(Math.random() * candidates.length)];
+    result.textContent = `${album.artist} - ${album.name} · ${labels[album.status]}`;
+    open.hidden = false;
+    open.onclick = () => { dialog.close(); openAlbumDetails(album.id); };
+  });
+  const open = document.createElement("button");
+  open.textContent = "Apri dettagli";
+  open.hidden = true;
+  const close = document.createElement("button");
+  close.textContent = "Chiudi";
+  close.addEventListener("click", () => dialog.close());
+  dialog.append(heading, status, genre, pick, result, open, close);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.showModal();
+}
+
+function openBulkEditor() {
+  if (!selectedAlbumIds.size) return;
+  const ids = new Set(selectedAlbumIds);
+  const dialog = document.createElement("dialog");
+  const heading = document.createElement("h2");
+  heading.textContent = `Modifica ${ids.size} album`;
+  const form = document.createElement("form");
+  const controls = new Map();
+  for (const [key, caption] of [["status", "Stato"], ["rating", "Voto (vuoto = nessun voto)"],
+    ["genres", "Generi"], ["collections", "Collezioni"], ["tags", "Tag"]]) {
+    const row = document.createElement("label");
+    row.className = "qol-bulk-row";
+    const captionText = document.createElement("span");
+    captionText.textContent = caption;
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.setAttribute("aria-label", `Applica ${caption}`);
+    const field = document.createElement(key === "status" ? "select" : "input");
+    if (key === "status") for (const [value, label] of Object.entries(labels)) field.add(new Option(label, value));
+    else if (key === "rating") { field.type = "number"; field.min = "0.5"; field.max = "5"; field.step = "0.5"; }
+    else field.placeholder = "Valori separati da virgole";
+    field.addEventListener("input", () => { enabled.checked = true; });
+    row.append(captionText, enabled, field);
+    form.append(row);
+    controls.set(key, { enabled, field });
+  }
+  const mode = document.createElement("select");
+  mode.setAttribute("aria-label", "Modifica generi, collezioni e tag");
+  for (const [value, label] of [["add", "Aggiungi valori"], ["remove", "Rimuovi valori"], ["replace", "Sostituisci elenchi"]]) {
+    mode.add(new Option(label, value));
+  }
+  const error = document.createElement("p");
+  error.setAttribute("role", "alert");
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.textContent = "Applica campi spuntati";
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Annulla";
+  close.addEventListener("click", () => dialog.close());
+  form.append(mode, error, save, close);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    try {
+      const values = {};
+      for (const [key, { enabled, field }] of controls) {
+        if (!enabled.checked) continue;
+        values[key] = key === "status" ? field.value : key === "rating" ? (field.value ? Number(field.value) : null)
+          : field.value.split(",").map((value) => value.trim()).filter(Boolean);
+      }
+      if (!Object.keys(values).length) throw new Error("Spunta almeno un campo.");
+      const next = state.albums.map((album) => ids.has(album.id)
+        ? validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value) }) : album);
+      if (!window.confirm(`Applicare ${Object.keys(values).join(", ")} a ${ids.size} album?`)) return;
+      const previous = state.albums;
+      state.albums = next;
+      try { saveState(); } catch (failure) { state.albums = previous; throw failure; }
+      rememberLocalChanges(ids);
+      dialog.close();
+      render();
+      showFeedback(`${ids.size} album modificati localmente`);
+    } catch (failure) { error.textContent = failure.message; }
+  });
+  dialog.append(heading, form);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.showModal();
+}
+
+async function updateOfflineReadiness() {
+  const notice = $("#offlineSummary");
+  try {
+    let appReady = false;
+    const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+    if (registration?.active) {
+      appReady = await new Promise((resolve, reject) => {
+        const channel = new MessageChannel();
+        const timer = setTimeout(() => {
+          channel.port1.close();
+          reject(new Error("La versione offline non risponde: chiudi e riapri la PWA per aggiornarla."));
+        }, 3000);
+        channel.port1.onmessage = ({ data }) => {
+          clearTimeout(timer);
+          channel.port1.close();
+          if (data.error) reject(new Error(data.error));
+          else resolve(data.ready === true);
+        };
+        registration.active.postMessage({ type: "accord-offline-status" }, [channel.port2]);
+      });
+    }
+    const database = await openCoverDatabase();
+    const coverIds = await new Promise((resolve, reject) => {
+      const request = database.transaction(COVER_STORE, "readonly").objectStore(COVER_STORE).getAllKeys();
+      request.onsuccess = () => resolve(new Set(request.result));
+      request.onerror = () => reject(new Error("Impossibile contare le copertine offline"));
+    });
+    const count = state.albums.filter((album) => coverIds.has(album.id)).length;
+    notice.textContent = `App offline: ${appReady ? "cache installata" : "non ancora pronta"} · copertine salvate: ${
+      count}/${state.albums.length} · ${navigator.onLine ? "rete rilevata (servizi non verificati)" : "offline: Spotify, Last.fm e GitHub non disponibili"}. Ricerca e modifiche locali restano disponibili.`;
+  } catch (error) {
+    notice.textContent = `Verifica offline non riuscita: ${error.message}. Disponibilita' non confermata.`;
+  }
+}
+
+function initializeCollectionQol() {
+  refreshSavedCollectionViews();
+  refreshSuggestionHistory();
+  updateLocalSyncSummary();
+  $("#viewMenu").addEventListener("click", (event) => {
+    if (event.target.closest("button")) $("#viewMenu").open = false;
+  });
+  $("#smartCollectionList").addEventListener("change", render);
+  $("#pickAlbumButton").addEventListener("click", pickLocalAlbum);
+  $("#bulkEditButton").addEventListener("click", openBulkEditor);
+  $("#syncChangesButton").addEventListener("click", () => showMessage("Modifiche locali",
+    changesText(albumChanges(state.base, state.albums)) || "Nessuna modifica da sincronizzare."));
+  $("#statisticsButton").addEventListener("click", () => {
+    const stats = albumStatistics(state.albums, qol.changedAt);
+    showMessage("Statistiche locali", `${stats.total} album · ${stats.rated} votati · media ${
+      stats.average === null ? "-" : stats.average.toFixed(2)}\nAscoltati senza voto: ${
+      stats.unratedListened}\nModificati su questo dispositivo nel mese: ${stats.changedThisMonth}\n\nStati:\n${
+      Object.entries(stats.states).map(([key, count]) => `${labels[key]}: ${count}`).join("\n")}\n\nGeneri:\n${
+      Object.entries(stats.genres).sort((a, b) => b[1] - a[1]).map(([key, count]) => `${key}: ${count}`).join("\n")}`);
+  });
+  $("#duplicatesButton").addEventListener("click", () => {
+    const text = duplicateAlbumGroups(state.albums).map((group) => group.map((album) =>
+      `${album.artist} | ${album.name} | ${album.year || "-"} | ${labels[album.status]} | voto ${
+        album.rating ?? "-"} | ${album.genres.join(", ")} | ${album.id}`).join("\n")).join("\n\n");
+    showMessage("Possibili duplicati: confronto locale", text || "Nessun possibile duplicato. Nessuna fusione automatica.");
+  });
+  $("#saveCollectionViewButton").addEventListener("click", () => {
+    const name = window.prompt("Nome della vista locale");
+    if (!name?.trim()) return;
+    const view = Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value]));
+    view.pinnedOnly = $("#pinnedOnlyInput").checked;
+    if (saveCollectionQol({ ...qol, views: { ...qol.views, [name.trim()]: view } })) refreshSavedCollectionViews();
+  });
+  $("#deleteCollectionViewButton").addEventListener("click", () => {
+    const name = $("#savedCollectionView").value;
+    if (!name || !window.confirm(`Eliminare la vista ${name}?`)) return;
+    const views = { ...qol.views };
+    delete views[name];
+    if (saveCollectionQol({ ...qol, views })) refreshSavedCollectionViews();
+  });
+  $("#savedCollectionView").addEventListener("change", () => {
+    const view = qol.views[$("#savedCollectionView").value];
+    if (!view) return;
+    for (const selector of collectionViewSelectors) {
+      if (typeof view[selector] === "string") $(selector).value = view[selector];
+      if (selector === "#primaryGenreFilter") refreshGenreFilters();
+    }
+    $("#pinnedOnlyInput").checked = Boolean(view.pinnedOnly);
+    saveCollectionPreferences({ ...collectionPreferences, layout: $("#collectionLayout").value });
+    state.sortOrder = $("#sortOrder").value;
+    saveState();
+    render();
+    $("#viewMenu").open = false;
+  });
+  for (const selector of manualDraftSelectors) {
+    $(selector).addEventListener("input", () => saveAlbumDraft("manual",
+      Object.fromEntries(manualDraftSelectors.map((field) => [field, $(field).value]))));
+  }
+  const discardManual = document.createElement("button");
+  discardManual.type = "button";
+  discardManual.textContent = "Scarta bozza";
+  discardManual.addEventListener("click", () => {
+    if (!clearAlbumDraft("manual")) return;
+    $("#manualAlbumSource").value = "spotify";
+    for (const selector of manualDraftSelectors.slice(1)) $(selector).value = "";
+    updateManualAlbumSourceNotice();
+  });
+  $("#manualAlbumSearchForm").append(discardManual);
+  $("#albumDetailsFields").addEventListener("input", () => {
+    persistDetailsDraft();
+  });
+  const discardDetails = document.createElement("button");
+  discardDetails.type = "button";
+  discardDetails.textContent = "Scarta bozza e ricarica album";
+  discardDetails.addEventListener("click", () => {
+    const id = detailsAlbumId;
+    if (!clearAlbumDraft(`edit:${id}`)) return;
+    openAlbumDetails(id, detailsReturnFocus);
+  });
+  $("#albumDetailsForm").append(discardDetails);
+  $("#suggestionHistory").addEventListener("change", () => {
+    const value = $("#suggestionHistory").value;
+    if (value === "") return;
+    const entry = qol.history[Number(value)];
+    if (!entry || !["spotify", "lastfm"].includes(entry.kind) || !Array.isArray(entry.albums)) {
+      showFeedback("Risultato precedente non valido", true);
+      return;
+    }
+    $("#suggestionTool").value = entry.kind;
+    updateSuggestionToolUi();
+    replayingSuggestions = true;
+    try {
+      if (entry.kind === "spotify") renderSpotifyAlbumSuggestions(entry.albums);
+      else renderListeningAlbumSuggestions(entry.albums);
+    } finally { replayingSuggestions = false; }
+  });
+  $("#clearSuggestionHistory").addEventListener("click", () => {
+    if (saveCollectionQol({ ...qol, history: [] })) refreshSuggestionHistory();
+  });
+  $("#restoreSnoozedButton").addEventListener("click", () => {
+    if (saveCollectionQol({ ...qol, snoozes: {} })) showFeedback("Rinvii rimossi. Riapri i risultati precedenti per rivederli.");
+  });
+  $("#offlineStatusButton").addEventListener("click", () => void updateOfflineReadiness());
+  window.addEventListener("online", () => void updateOfflineReadiness());
+  window.addEventListener("offline", () => void updateOfflineReadiness());
+  void updateOfflineReadiness();
+}
+
 function updateCollectionCoverNotice() {
   const albums = new Map(state.albums.map((album) => [album.id, album]));
   const missingArchive = state.albums.filter((album) => !album.cover_sha256).length;
@@ -3641,12 +4135,23 @@ function updateCollectionCoverNotice() {
 }
 
 function updateAlbum(id, changes) {
+  const selector = document.activeElement?.classList.contains("status-input") ? ".status-input"
+    : document.activeElement?.classList.contains("rating-input") ? ".rating-input" : null;
+  const restoreFocus = () => {
+    if (!selector) return;
+    const card = [...$("#albumList").children].find((item) => item.dataset.albumId === id);
+    (card?.querySelector(selector) || $("#searchInput")).focus();
+  };
   try {
     if (!state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
+    if (qol.drafts[`edit:${id}`]) throw new Error("Una bozza è presente per questo album: apri Dettagli per salvarla o scartarla prima della modifica rapida.");
     commitAlbumChanges(new Set([id]), changes);
     render();
+    restoreFocus();
     showFeedback("Album salvato sul dispositivo");
   } catch (error) {
+    render();
+    restoreFocus();
     showFeedback(`Modifica non salvata: ${error.message}`, true);
   }
 }
@@ -3856,6 +4361,12 @@ async function runPlaylistImport(input, accessToken) {
   }
   const additions = playlistAlbumRecords(entries);
   const result = addPlaylistAlbums(state.albums, additions);
+  const skipped = entries.filter((entry) => !playlistAlbumRecords([entry]).length).length;
+  if (!window.confirm(`${playlist.name}: ${result.added} album nuovi, ${result.duplicates} gia' presenti e invariati, ${
+    skipped} elementi non utilizzabili saltati. Applicare solo alla raccolta locale?`)) {
+    setSyncState("Importazione annullata: raccolta invariata");
+    return;
+  }
   const previous = state.albums;
   state.albums = result.albums;
   try {
@@ -3865,6 +4376,8 @@ async function runPlaylistImport(input, accessToken) {
     throw error;
   }
   if (result.added) {
+    rememberLocalChanges(new Set(result.albums.filter((album) =>
+      !previous.some((existing) => existing.id === album.id)).map((album) => album.id)));
     render();
     setSyncState("Album aggiunti localmente · sincronizza per inviarli");
   } else {
@@ -4085,11 +4598,12 @@ $("#playlistImportButton").addEventListener("click", () => {
 });
 
 $("#manualAlbumButton").addEventListener("click", () => {
-  $("#manualAlbumSource").value = "lastfm";
+  $("#manualAlbumSource").value = "spotify";
   $("#manualAlbumQuery").value = "";
   $("#manualAlbumArtist").value = "";
   $("#manualAlbumGenre").value = "";
   $("#manualAlbumYear").value = "";
+  restoreManualAlbumDraft();
   updateManualAlbumSourceNotice();
   $("#manualAlbumStatus").textContent = "";
   $("#manualAlbumResults").replaceChildren();
@@ -4330,15 +4844,37 @@ function chooseConflicts(conflicts) {
     const article = document.createElement("article");
     article.className = "conflict-card";
     const heading = document.createElement("h3");
-    heading.textContent = `${conflict.local.name} · ${conflict.local.artist}`;
+    const album = conflict.local || conflict.remote || conflict.base;
+    heading.textContent = `${album.name} · ${album.artist}`;
     article.append(heading);
-    for (const [source, record] of [["base", conflict.base], ["locale", conflict.local], ["GitHub", conflict.remote]]) {
-      const detail = document.createElement("p");
-      detail.textContent = `${source}: ${albumDescription(record)}`;
-      article.append(detail);
+    const comparison = document.createElement("table");
+    comparison.className = "qol-conflict-table";
+    const header = document.createElement("tr");
+    for (const title of ["Campo cambiato", "Base", "Dispositivo", "GitHub"]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = title;
+      header.append(cell);
     }
+    comparison.append(header);
+    const fields = [...new Set([...albumFieldChanges(conflict.base, conflict.local),
+      ...albumFieldChanges(conflict.base, conflict.remote)])];
+    for (const key of fields) {
+      const row = document.createElement("tr");
+      for (const value of [key, ...[conflict.base, conflict.local, conflict.remote].map((record) =>
+        record ? JSON.stringify(record[key]) : "Album assente")]) {
+        const cell = document.createElement("td");
+        cell.textContent = value ?? "-";
+        row.append(cell);
+      }
+      comparison.append(row);
+    }
+    const scroll = document.createElement("div");
+    scroll.className = "qol-comparison-scroll";
+    scroll.append(comparison);
+    article.append(scroll);
     const fieldset = document.createElement("fieldset");
-    fieldset.setAttribute("aria-label", `Scelta per ${conflict.local.name}`);
+    fieldset.setAttribute("aria-label", `Scelta per ${album.name}`);
     for (const [value, label] of [["local", "Mantieni questo dispositivo"], ["remote", "Usa GitHub"]]) {
       const choice = document.createElement("label");
       const radio = document.createElement("input");
@@ -4393,6 +4929,14 @@ async function sync(choices = {}) {
       await sync(resolutions);
       return;
     }
+    const outgoing = albumChanges(remote.albums, merged.albums);
+    const incoming = albumChanges(state.albums, merged.albums);
+    const snapshot = JSON.stringify(state.albums);
+    if ((outgoing.length || incoming.length) && !await confirmSyncChanges(outgoing, incoming, merged.albums)) {
+      setSyncState("Sincronizzazione annullata: nessuna scrittura eseguita");
+      return;
+    }
+    if (JSON.stringify(state.albums) !== snapshot) throw new Error("La raccolta e' cambiata durante l'anteprima. Riapri Sincronizza.");
     const selectedCovers = new Map();
     for (const album of merged.albums) {
       if (!album.cover_sha256) continue;
@@ -4425,6 +4969,8 @@ async function sync(choices = {}) {
     state.albums = merged.albums;
     state.base = merged.albums;
     saveState();
+    saveCollectionQol({ ...qol, lastSync: new Date().toISOString() });
+    updateLocalSyncSummary();
     render();
     setSyncState(`Sincronizzati ${merged.albums.length} album${historySyncNote} · aggiornato ${new Date().toLocaleTimeString()}`);
   } catch (error) {
@@ -4561,16 +5107,325 @@ $("#suggestionSearchButton").addEventListener("click", async (event) => {
 });
 updateSuggestionToolUi();
 
-render({ remoteCovers: true });
+function applyAccessibility() {
+  const preferences = normalizeAccessibility(collectionPreferences);
+  for (const [key, value] of Object.entries(preferences)) document.documentElement.dataset[key] = value;
+  $("#textScaleInput").value = preferences.textScale;
+  $("#contrastInput").value = preferences.contrast;
+  $("#densityInput").value = preferences.density;
+}
+for (const selector of ["#textScaleInput", "#contrastInput", "#densityInput"]) {
+  $(selector).addEventListener("change", () => {
+    saveCollectionPreferences({ ...collectionPreferences,
+      textScale: $("#textScaleInput").value, contrast: $("#contrastInput").value, density: $("#densityInput").value });
+    applyAccessibility();
+  });
+}
+
+function openSpotifyAlbumIntent(input) {
+  const intent = spotifyAlbumIntent(input);
+  const existing = state.albums.find((album) => album.id === intent.id);
+  if (existing) {
+    activateViewTab($("#collectionTab"));
+    openAlbumDetails(existing.id);
+    return;
+  }
+  if (qol.drafts.manual && !window.confirm("Una bozza di ricerca manuale è presente. Sostituirla con questo link?")) return;
+  $("#manualAlbumButton").click();
+  $("#manualAlbumSource").value = "spotify";
+  $("#manualAlbumQuery").value = intent.url;
+  for (const selector of manualDraftSelectors.slice(2)) $(selector).value = "";
+  updateManualAlbumSourceNotice();
+  if (!saveAlbumDraft("manual", Object.fromEntries(manualDraftSelectors.map((selector) => [selector, $(selector).value])))) {
+    showFeedback("Link preparato ma bozza non salvata. Non chiudere prima di risolvere l'errore.", true);
+  }
+  $("#manualAlbumStatus").textContent = "Album non presente localmente. Premi Cerca per autorizzare la ricerca Spotify; nessuna richiesta ancora eseguita.";
+}
+$("#openSpotifyForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  try { openSpotifyAlbumIntent($("#openSpotifyInput").value); }
+  catch (error) { showFeedback(error.message, true); }
+});
+
+function receiveSharedAlbum() {
+  const url = new URL(location.href);
+  const keys = ["share_url", "share_text", "share_title"];
+  if (!keys.some((key) => url.searchParams.has(key))) return;
+  const input = keys.map((key) => url.searchParams.get(key) || "").join(" ");
+  for (const key of keys) url.searchParams.delete(key);
+  history.replaceState(history.state, "", url);
+  try {
+    const intent = spotifyAlbumIntent(input);
+    $("#openSpotifyInput").value = intent.url;
+    if (state.albums.some((album) => album.id === intent.id)) openSpotifyAlbumIntent(intent.url);
+    else {
+      activateViewTab($("#collectionTab"));
+      $("#openSpotifyInput").focus();
+      showFeedback("Link condiviso ricevuto. Premi Apri album / prepara ricerca, poi Cerca per andare online.");
+    }
+  } catch (error) { showFeedback(`Condivisione non aperta: ${error.message}`, true); }
+}
+
+$("#backupButton").addEventListener("click", () => {
+  try {
+    if (state.loadError) throw new Error(state.loadError);
+    const backup = createLocalBackup(state.albums, collectionPreferences, validateAlbum);
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `accord-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showFeedback("Backup scaricato: album e preferenze consentite. Esclusi credenziali, bozze, ricerche, cronologia e immagini.");
+  } catch (error) { showFeedback(`Backup non creato: ${error.message}`, true); }
+});
+
+function previewLocalRestore(backup) {
+  const snapshot = JSON.stringify(state);
+  const dialog = document.createElement("dialog");
+  dialog.setAttribute("aria-label", "Anteprima ripristino selettivo");
+  const title = document.createElement("h2");
+  title.textContent = "Ripristino locale selettivo";
+  const notice = document.createElement("p");
+  notice.textContent = "Spunta solo gli album da aggiungere o sostituire. Gli altri restano invariati. Nessuna cancellazione, sincronizzazione o ricerca online. Bozze e credenziali restano escluse.";
+  const list = document.createElement("div");
+  list.className = "restore-album-list";
+  const selected = new Set();
+  const preview = document.createElement("pre");
+  preview.className = "qol-details";
+  const preferences = document.createElement("input");
+  preferences.type = "checkbox";
+  const preferenceLabel = document.createElement("label");
+  preferenceLabel.className = "check";
+  preferenceLabel.append(preferences, " Ripristina anche layout, album fissati e accessibilità");
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.textContent = "Conferma ripristino selezionati";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Annulla";
+  const errorOutput = document.createElement("p");
+  errorOutput.setAttribute("role", "alert");
+  const updatePreview = () => {
+    const next = prepareSelectiveRestore(state.albums, backup, selected, validateAlbum);
+    const changes = albumChanges(state.albums, next);
+    preview.textContent = `${selected.size} selezionati · ${changes.length} modifiche effettive\n${
+      changesText(changes) || "Nessuna modifica agli album."}\n${
+      preferences.checked ? `Preferenze: ${JSON.stringify(backup.preferences)}\n` : ""}Le bozze esistenti non vengono applicate né eliminate.`;
+    accept.disabled = !selected.size && !preferences.checked;
+  };
+  for (const album of backup.albums) {
+    const label = document.createElement("label");
+    label.className = "check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.addEventListener("change", () => {
+      if (input.checked) selected.add(album.id);
+      else selected.delete(album.id);
+      updatePreview();
+    });
+    const existing = state.albums.find((entry) => entry.id === album.id);
+    label.append(input, `${album.artist} · ${album.name} · ${existing ? "sostituisci" : "aggiungi"}${
+      qol.drafts[`edit:${album.id}`] ? " · bozza locale conservata" : ""}`);
+    list.append(label);
+  }
+  preferences.addEventListener("change", updatePreview);
+  accept.addEventListener("click", () => {
+    try {
+      if (state.loadError) throw new Error(state.loadError);
+      if (JSON.stringify(state) !== snapshot) throw new Error("La raccolta è cambiata durante l'anteprima. Annulla e riapri il backup.");
+      const albums = prepareSelectiveRestore(state.albums, backup, selected, validateAlbum);
+      const next = { ...state, albums,
+        manualOrder: [...new Set([...state.manualOrder, ...albums.map((album) => album.id)])],
+        preferences: preferences.checked ? backup.preferences : collectionPreferences };
+      commitLocalRestore(localStorage, STORAGE_KEY, state, next);
+      collectionPreferences = portablePreferences(state.preferences);
+      $("#collectionLayout").value = collectionPreferences.layout;
+      $("#albumList").dataset.layout = collectionPreferences.layout;
+      applyAccessibility();
+      updateLocalSyncSummary();
+      dialog.close();
+      rememberLocalChanges(selected);
+      render();
+      showFeedback("Ripristino locale completato. Nessun invio a GitHub e nessuna richiesta musicale.");
+    } catch (error) { errorOutput.textContent = `Ripristino non applicato: ${error.message}`; }
+  });
+  cancel.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.append(title, notice, list, preferenceLabel, preview, errorOutput, accept, cancel);
+  document.body.append(dialog);
+  updatePreview();
+  dialog.showModal();
+}
+$("#restoreBackupInput").addEventListener("change", async (event) => {
+  const file = event.currentTarget.files[0];
+  event.currentTarget.value = "";
+  if (!file) return;
+  try {
+    if (file.size > 10 * 1024 * 1024) throw new Error("Il backup supera il limite locale di 10 MB.");
+    const backup = validateLocalBackup(JSON.parse(await file.text()), validateDocument);
+    previewLocalRestore(backup);
+  } catch (error) { showFeedback(`Backup non aperto: ${error.message}`, true); }
+});
+
+const activityEntries = [];
+const busyActivitySelectors = ["#syncButton", "#playlistPreviewButton", "#suggestionSearchButton", "#manualAlbumSearchButton"];
+const activityStatusNodes = [...document.querySelectorAll("[role='status'], [role='alert'], #suggestionStatus, #manualAlbumStatus")]
+  .filter((node) => !["updateBanner", "updateStatus"].includes(node.id));
+function renderActivity() {
+  const deadline = Number(localStorage.getItem("accord-spotify-rate-limit-until-v1"));
+  $("#activityCooldown").textContent = deadline > Date.now()
+    ? `Spotify in attesa fino a ${new Date(deadline).toLocaleTimeString()}. Nessun tentativo anticipato.`
+    : "Nessun cooldown Spotify attivo noto. Stato aggiornato solo su eventi o apertura, senza polling.";
+  const current = activityStatusNodes.filter((node) => node.id !== "feedbackToast" && !node.hidden && node.textContent.trim());
+  const work = busyActivitySelectors.map((selector) => $(selector)).filter((button) => button.disabled);
+  $("#activityCurrent").replaceChildren(...work.map((button) => {
+    const item = document.createElement("li");
+    item.textContent = `In corso: ${button.textContent.trim()}`;
+    return item;
+  }), ...current.map((node) => {
+    const item = document.createElement("li");
+    item.textContent = node.textContent;
+    return item;
+  }));
+  $("#activityHistory").replaceChildren(...activityEntries.map((entry) => {
+    const item = document.createElement("li");
+    item.textContent = entry;
+    return item;
+  }));
+}
+function recordActivity(text) {
+  if (!text || activityEntries[0]?.endsWith(` · ${text}`)) return;
+  activityEntries.unshift(`${new Date().toLocaleTimeString()} · ${text}`);
+  activityEntries.splice(30);
+  if ($("#activityDialog").open) renderActivity();
+}
+const activityObserver = new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    const node = activityStatusNodes.find((entry) => entry === mutation.target || entry.contains(mutation.target));
+    if (node) recordActivity(node.textContent.trim());
+  }
+});
+for (const node of activityStatusNodes) activityObserver.observe(node, { childList: true, subtree: true, characterData: true });
+const busyObserver = new MutationObserver(() => { if ($("#activityDialog").open) renderActivity(); });
+for (const selector of busyActivitySelectors) busyObserver.observe($(selector), { attributes: true, attributeFilter: ["disabled"] });
+const errorObserver = new MutationObserver(() => {
+  if ($("#messageDialog").open) recordActivity(`${$("#messageTitle").textContent}: ${$("#messageBody").textContent}`);
+});
+errorObserver.observe($("#messageDialog"), { attributes: true, attributeFilter: ["open"] });
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (button && !button.closest("#activityDialog")) recordActivity(`Scelta: ${button.textContent.trim() || button.getAttribute("aria-label")}`);
+});
+window.addEventListener("storage", (event) => {
+  if (event.key === "accord-spotify-rate-limit-until-v1" && $("#activityDialog").open) renderActivity();
+});
+$("#activityButton").addEventListener("click", () => { renderActivity(); $("#activityDialog").showModal(); });
+$("#closeActivityButton").addEventListener("click", () => $("#activityDialog").close());
+
+let waitingUpdate = null;
+let updateChosen = false;
+let updateReadyToReload = false;
+function presentUpdate(worker) {
+  waitingUpdate = worker;
+  $("#updateBanner").hidden = false;
+  $("#showUpdateButton").hidden = false;
+  recordActivity("Aggiornamento disponibile; attivazione solo su scelta esplicita.");
+}
+$("#deferUpdateButton").addEventListener("click", () => { $("#updateBanner").hidden = true; });
+$("#showUpdateButton").addEventListener("click", () => {
+  $("#updateBanner").hidden = false;
+  $("#activityDialog").close();
+});
+function updateHasUnsavedWork() {
+  return Object.keys(qol.drafts).length > 0
+    || [...document.querySelectorAll("dialog")].some((dialog) => dialog.open && dialog.id !== "activityDialog")
+    || busyActivitySelectors.some((selector) => $(selector).disabled);
+}
+$("#applyUpdateButton").addEventListener("click", () => {
+  try {
+    if (!waitingUpdate) throw new Error("Nessun aggiornamento pronto.");
+    if (!persistDetailsDraft()) return;
+    if (updateHasUnsavedWork()) throw new Error("Completa o scarta le bozze, attendi le attività e chiudi le finestre prima di aggiornare. Le modifiche locali già salvate restano sul dispositivo.");
+    saveState();
+    const session = { fields: Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value])),
+      pinnedOnly: $("#pinnedOnlyInput").checked, scrollY: window.scrollY,
+      playlist: { name: $("#playlistBuilderName").value, artists: $("#playlistArtistCount").value,
+        tracks: $("#playlistTracksPerArtist").value, preview: topArtistPlaylistPreview },
+      openSpotify: $("#openSpotifyInput").value, selectedIds: [...selectedAlbumIds] };
+    sessionStorage.setItem("accord-update-view-v1", JSON.stringify(session));
+    updateChosen = true;
+    $("#applyUpdateButton").disabled = true;
+    $("#updateStatus").textContent = "Aggiornamento richiesto. Attendi il riavvio.";
+    if (updateReadyToReload) location.reload();
+    else waitingUpdate.postMessage({ type: "accord-activate-update" });
+  } catch (error) {
+    updateChosen = false;
+    $("#applyUpdateButton").disabled = false;
+    $("#updateStatus").textContent = error.message;
+  }
+});
+
+initializeCollectionQol();
+applyAccessibility();
+const updateView = sessionStorage.getItem("accord-update-view-v1");
+if (updateView) {
+  try {
+    const saved = JSON.parse(updateView);
+    refreshGenreFilters();
+    refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
+    refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
+    for (const selector of collectionViewSelectors) {
+      if (typeof saved.fields?.[selector] === "string") $(selector).value = saved.fields[selector];
+      if (selector === "#primaryGenreFilter") refreshGenreFilters();
+    }
+    $("#pinnedOnlyInput").checked = saved.pinnedOnly === true;
+    if (saved.playlist) {
+      $("#playlistBuilderName").value = saved.playlist.name;
+      $("#playlistArtistCount").value = saved.playlist.artists;
+      $("#playlistTracksPerArtist").value = saved.playlist.tracks;
+      topArtistPlaylistPreview = saved.playlist.preview;
+      if (topArtistPlaylistPreview) renderTopArtistPlaylistPreview(topArtistPlaylistPreview);
+    }
+    if (typeof saved.openSpotify === "string") $("#openSpotifyInput").value = saved.openSpotify;
+    selectedAlbumIds = new Set(Array.isArray(saved.selectedIds) ? saved.selectedIds : []);
+    requestAnimationFrame(() => window.scrollTo(0, Number(saved.scrollY) || 0));
+    sessionStorage.removeItem("accord-update-view-v1");
+  } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
+}
+const incomingShare = ["share_url", "share_text", "share_title"].some((key) => new URL(location.href).searchParams.has(key));
+render({ remoteCovers: !incomingShare && !updateView });
+receiveSharedAlbum();
 restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {
   setSyncState("Autorizzazione Spotify non riuscita");
   showMessage("Errore autorizzazione Spotify", error.message);
 });
 if ("serviceWorker" in navigator && window.isSecureContext) {
-  navigator.serviceWorker.register("./sw.js").catch((error) => {
+  const initialController = navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("./sw.js").then((registration) => {
+    if (registration.waiting) presentUpdate(registration.waiting);
+    registration.addEventListener("updatefound", () => {
+      const worker = registration.installing;
+      worker?.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) presentUpdate(worker);
+      });
+    });
+  }).catch((error) => {
     setSyncState("Cache offline non disponibile");
+    showFeedback(`Cache offline non disponibile: ${error.message}`, true);
     console.error("Accord PWA service worker:", error);
   });
+  navigator.serviceWorker.ready.then(() => updateOfflineReadiness());
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (updateChosen) location.reload();
+    else {
+      if (initialController) {
+        updateReadyToReload = true;
+        presentUpdate(navigator.serviceWorker.controller);
+      }
+      void updateOfflineReadiness();
+    }
+  });
 }
-if (credentials().autoSync && credentials().token) sync();
+if (!incomingShare && !updateView && credentials().autoSync && credentials().token) sync();

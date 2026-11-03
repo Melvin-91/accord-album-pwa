@@ -1,11 +1,11 @@
-const CACHE = "accord-album-pwa-v81";
+const CACHE = "accord-album-pwa-v1.3.0";
 const FILES = [
   "./",
   "./index.html",
-  "./style.css?v=22",
+  "./style.css?v=24",
   "./core.mjs?v=38",
-  "./ui.mjs?v=1",
-  "./app.mjs?v=62",
+  "./ui.mjs?v=3",
+  "./app.mjs?v=64",
   "./manifest.json",
   "./assets/malt_metal.ico",
   "./assets/accord-192.png",
@@ -13,7 +13,7 @@ const FILES = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)));
 });
 
 self.addEventListener("activate", (event) => {
@@ -23,15 +23,33 @@ self.addEventListener("activate", (event) => {
   )).then(() => self.clients.claim()));
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "accord-activate-update") {
+    event.waitUntil(self.skipWaiting());
+    return;
+  }
+  if (event.data?.type !== "accord-offline-status" || !event.ports?.[0]) return;
+  event.waitUntil(caches.open(CACHE).then(async (cache) => {
+    const ready = (await Promise.all(FILES.map((file) => cache.match(file)))).every(Boolean);
+    event.ports[0].postMessage({ cache: CACHE, ready });
+  }).catch((error) => event.ports[0].postMessage({ error: error.message })));
+});
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
-  event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-    if (response.ok) {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put(request, copy));
-    }
-    return response;
-  })));
+  event.respondWith(caches.open(CACHE).then(async (cache) => {
+    const shellNavigation = request.mode === "navigate"
+      && [new URL("./", self.location.href).pathname, new URL("./index.html", self.location.href).pathname].includes(url.pathname);
+    const cached = await cache.match(request)
+      || (shellNavigation ? await cache.match("./index.html") : null);
+    return cached || fetch(request).then((response) => {
+      if (response.ok) {
+        const copy = response.clone();
+        caches.open(CACHE).then((cache) => cache.put(request, copy));
+      }
+      return response;
+    });
+  }));
 });
