@@ -1,5 +1,20 @@
 # Accord · Raccolta album PWA
 
+## Correzioni PWA 1.4.1
+
+- I filtri non attivano piu' due render per la stessa scelta; le schede
+  vengono inserite nel documento con un unico aggiornamento.
+- Le letture Spotify concorrenti sono deduplicate e la cache rispetta
+  `Cache-Control`, `Age`, `Date`, ETag e account. Senza indicazioni del
+  server il fallback e' 30 minuti per le classifiche, 5 minuti per le altre
+  letture ammesse; `no-store`, `no-cache` e scadenze esplicite prevalgono.
+- Una scrittura playlist non elimina catalogo e classifiche validi.
+  Importazioni ripetute riusano un riepilogo limitato in memoria solo con
+  stesso account e snapshot verificato, con una nuova verifica finale.
+  Una playlist cambiata durante la lettura interrompe l'importazione.
+- Nessun polling aggiuntivo, aggiramento dei limiti o retry automatico
+  delle scritture. Cooldown condiviso e `Retry-After` restano obbligatori.
+
 ## Novità PWA 1.4.0
 
 - Nei dettagli, artista, generi, tag e collezioni sono pulsanti: applicano

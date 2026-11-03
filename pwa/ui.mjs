@@ -216,7 +216,7 @@ export function technicalDiagnostics({ stage, httpStatuses = [], counts = {} } =
   for (const key of ["albums", "drafts", "failedCovers"]) {
     if (Number.isSafeInteger(counts[key]) && counts[key] >= 0) safeCounts[key] = counts[key];
   }
-  return JSON.stringify({ product: "Accord PWA", version: "1.4.0",
+  return JSON.stringify({ product: "Accord PWA", version: "1.4.1",
     stage: stages.has(stage) ? stage : "message", httpStatuses: statuses, counts: safeCounts }, null, 2);
 }
 

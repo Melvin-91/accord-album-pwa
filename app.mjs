@@ -48,7 +48,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=38";
+} from "./core.mjs?v=39";
 import {
   localCommandResults,
   prepareAlbumUpdates,
@@ -59,7 +59,7 @@ import {
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-} from "./ui.mjs?v=4";
+} from "./ui.mjs?v=5";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -95,6 +95,7 @@ localStorage.removeItem("accord-spotify-heard-artists-v1");
 localStorage.removeItem("accord-spotify-heard-artist-last-played-v1");
 const suggestedSourceAlbums = new Map();
 const spotifyJsonReader = createSpotifyJsonReader();
+const spotifyPlaylistSnapshots = new Map();
 const spotifyTransport = createSpotifyTransport({
   storage: localStorage,
   lock: (name, request) => navigator.locks?.request
@@ -1207,6 +1208,7 @@ function render(options = {}) {
     .filter((card) => card.classList.contains("has-cover"))
     .map((card) => [card.dataset.albumId, card.querySelector(".cover-frame")]));
   $("#albumList").replaceChildren();
+  const cardsFragment = document.createDocumentFragment();
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
   $("#emptyState").hidden = albums.length !== 0;
   $("#emptyHeading").textContent = state.albums.length ? "Nessun album trovato" : "La tua raccolta inizia qui";
@@ -1315,8 +1317,9 @@ function render(options = {}) {
     rating.addEventListener("change", () => updateAlbum(album.id, {
       rating: rating.value ? Number(rating.value) : null,
     }));
-    $("#albumList").append(card);
+    cardsFragment.append(card);
   }
+  $("#albumList").append(cardsFragment);
   const retainedUrls = new Set([...$("#albumList").querySelectorAll(".album-cover")].map((image) => image.src));
   coverObjectUrls = coverObjectUrls.filter((url) => {
     if (retainedUrls.has(url)) return true;
@@ -3006,17 +3009,9 @@ function renderListeningAlbumSuggestions(albums) {
 }
 
 const spotifyTimeRanges = new Set(["short_term", "medium_term", "long_term"]);
-// Spotify recomputes top lists slowly: Suggestions and Crea playlist reuse them for 30 minutes.
-const spotifyTopSnapshots = new Map();
-
 async function readSpotifyTopSnapshot(kind, timeRange, accessToken, budget, validate) {
-  const key = JSON.stringify([kind, timeRange, accessToken]);
-  const cached = spotifyTopSnapshots.get(key);
-  if (cached && Date.now() - cached.at < 30 * 60 * 1000) return JSON.parse(cached.items);
   const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
-  const items = validate(await spotifyRequest(`me/top/${kind}?${parameters}`, accessToken, budget));
-  spotifyTopSnapshots.set(key, { at: Date.now(), items: JSON.stringify(items) });
-  return items;
+  return validate(await spotifyRequest(`me/top/${kind}?${parameters}`, accessToken, budget));
 }
 
 function spotifySuggestionAlbumKey(artist, name) {
@@ -4623,9 +4618,9 @@ function updateAlbum(id, changes) {
   }
 }
 
-for (const input of [$("#searchInput"), $("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
+$("#searchInput").addEventListener("input", render);
+for (const input of [$("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
   $("#collectionFilter"), $("#tagFilter")]) {
-  input.addEventListener("input", render);
   input.addEventListener("change", render);
 }
 $("#sortOrder").addEventListener("change", () => {
@@ -4641,6 +4636,7 @@ function clearSpotifySession() {
     sessionStorage.removeItem(key);
   }
   spotifyJsonReader.clear();
+  spotifyPlaylistSnapshots.clear();
 }
 
 function storeSpotifyTokens(tokens) {
@@ -4648,6 +4644,7 @@ function storeSpotifyTokens(tokens) {
     throw new Error("Spotify ha restituito una risposta token non valida.");
   }
   spotifyJsonReader.clear();
+  spotifyPlaylistSnapshots.clear();
   sessionStorage.setItem("accord-spotify-access-token", tokens.access_token);
   sessionStorage.setItem("accord-spotify-token-expires", String(Date.now() + tokens.expires_in * 1000));
   if (String(tokens.scope || "").split(/\s+/).includes("user-top-read")) {
@@ -4754,7 +4751,7 @@ async function spotifyWriteRequest(path, accessToken, body) {
     body: JSON.stringify(body),
     credentials: "omit",
     referrerPolicy: "no-referrer",
-  }, false).finally(() => spotifyJsonReader.clear());
+  }, false).finally(() => spotifyJsonReader.invalidateMutable());
   if (response.status === 401) {
     clearSpotifySession();
     throw new Error("Sessione Spotify scaduta. Ricollega l’account e riprova.");
@@ -4821,14 +4818,29 @@ async function runPlaylistImport(input, accessToken) {
   if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
   const playlist = await resolveSpotifyPlaylist(input, accessToken);
   if (!playlist) return;
-  const entries = await completeSpotifyPages(`playlists/${encodeURIComponent(playlist.id)}/items?limit=50&offset=0`, accessToken);
+  const key = JSON.stringify([accessToken, playlist.id]);
+  const cached = spotifyPlaylistSnapshots.get(key);
+  let summary;
+  if (cached?.snapshot === playlist.snapshot_id) {
+    summary = JSON.parse(cached.summary);
+  } else {
+    const entries = await completeSpotifyPages(`playlists/${encodeURIComponent(playlist.id)}/items?limit=50&offset=0`, accessToken);
+    summary = { albums: playlistAlbumRecords(entries), count: entries.length,
+      skipped: entries.filter((entry) => !playlistAlbumRecords([entry]).length).length };
+  }
   const latest = await spotifyRequest(`playlists/${encodeURIComponent(playlist.id)}?fields=id,snapshot_id`, accessToken);
   if (latest.id !== playlist.id || latest.snapshot_id !== playlist.snapshot_id) {
+    spotifyPlaylistSnapshots.delete(key);
     throw new Error("La playlist è cambiata durante la lettura. Ripeti l’importazione.");
   }
-  const additions = playlistAlbumRecords(entries);
+  const serialized = JSON.stringify(summary);
+  if (summary.count <= 5000 && serialized.length <= 1_000_000) {
+    spotifyPlaylistSnapshots.set(key, { snapshot: playlist.snapshot_id, summary: serialized });
+    while (spotifyPlaylistSnapshots.size > 32) spotifyPlaylistSnapshots.delete(spotifyPlaylistSnapshots.keys().next().value);
+  }
+  const additions = summary.albums;
   const result = addPlaylistAlbums(state.albums, additions);
-  const skipped = entries.filter((entry) => !playlistAlbumRecords([entry]).length).length;
+  const skipped = summary.skipped;
   if (!window.confirm(`${playlist.name}: ${result.added} album nuovi, ${result.duplicates} gia' presenti e invariati, ${
     skipped} elementi non utilizzabili saltati. Applicare solo alla raccolta locale?`)) {
     setSyncState("Importazione annullata: raccolta invariata");
@@ -4851,7 +4863,7 @@ async function runPlaylistImport(input, accessToken) {
     setSyncState("Playlist importata · nessun album nuovo");
   }
   showMessage("Importazione playlist completata",
-    `${playlist.name}: ${entries.length} brani letti, ${additions.length} album trovati, ${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato automaticamente a GitHub; usa Sincronizza per inviare la raccolta.`);
+    `${playlist.name}: ${summary.count} brani letti, ${additions.length} album trovati, ${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato automaticamente a GitHub; usa Sincronizza per inviare la raccolta.`);
 }
 
 async function importSpotifyPlaylist(input, accessToken = null) {

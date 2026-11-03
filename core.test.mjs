@@ -324,7 +324,7 @@ test("shared offline navigation uses only the active version shell without reque
     self: { location: { origin: "https://example.test", href: "https://example.test/pwa/sw.js" },
       addEventListener: (event, listener) => { handlers[event] = listener; } },
     caches: { open: async (key) => {
-      assert.equal(key, "accord-album-pwa-v1.4.0");
+      assert.equal(key, "accord-album-pwa-v1.4.1");
       return { match: async (file) => file === "./index.html" ? shell : undefined, put: () => { stored += 1; } };
     } },
     fetch: async () => { requests += 1; return { ok: false }; },
@@ -368,7 +368,7 @@ test("quick edits refuse existing drafts and otherwise use one local commit with
     commitAlbumChanges: (ids, changes) => commits.push({ ids: [...ids], changes }),
     render: () => { renders += 1; }, showFeedback: (message) => messages.push(message),
     fetch: () => { throw new Error("Unexpected request"); } };
-  const edit = runInNewContext(`${appFunction("function updateAlbum(", '\nfor (const input of [$("#searchInput")')}\nupdateAlbum`, context);
+  const edit = runInNewContext(`${appFunction("function updateAlbum(", '\n$("#searchInput").addEventListener')}\nupdateAlbum`, context);
   edit("a", { rating: 4.5 });
   assert.equal(commits.length, 0);
   assert.match(messages[0], /bozza/);
@@ -620,6 +620,23 @@ function appFunction(start, end) {
   assert.ok(beginning >= 0 && ending > beginning, `${start} exists`);
   return uiAppSource.slice(beginning, ending);
 }
+
+test("each collection filter gesture has exactly one render listener", () => {
+  const controls = new Map();
+  let renders = 0;
+  const context = { render: () => { renders += 1; }, state: {}, saveState: () => {},
+    $: (id) => {
+      if (!controls.has(id)) controls.set(id, new EventTarget());
+      return controls.get(id);
+    } };
+  runInNewContext(appFunction('$("#searchInput").addEventListener', "\nfunction clearSpotifySession("), context);
+  for (const [id, control] of controls) {
+    const before = renders;
+    control.dispatchEvent(new Event("input"));
+    control.dispatchEvent(new Event("change"));
+    assert.equal(renders - before, 1, `${id} renders once per gesture`);
+  }
+});
 
 test("exact local facets match whole artists and labels, never substrings or another label type", () => {
   const album = qosAlbum("a", { artist: "Power Metal Band", genres: ["Power Metal"],
@@ -1031,7 +1048,7 @@ test("copied diagnostics allow only technical metadata, never album, artist, pas
   const append = runInNewContext(`${appFunction("function appendErrorActions(", "\nfunction openSettings(")}\nappendErrorActions`, context);
   append(actions, raw);
   await actions.children[0].events.click();
-  assert.deepEqual(JSON.parse(copied[0]), { product: "Accord PWA", version: "1.4.0",
+  assert.deepEqual(JSON.parse(copied[0]), { product: "Accord PWA", version: "1.4.1",
     stage: "message", httpStatuses: [403], counts: { albums: 1, drafts: 1, failedCovers: 0 } });
   for (const secret of [album.name, album.artist, "private personal notes", "private-user", "private-password",
     "private.example", "PrivateAlbum", "private-token", "private-fragment", "private draft content", "https://"]) {
@@ -1042,7 +1059,7 @@ test("copied diagnostics allow only technical metadata, never album, artist, pas
   assert.deepEqual(JSON.parse(technicalDiagnostics({ stage: "Private Album Title", httpStatuses: [403, "private-token", 403, 200],
     counts: { albums: 1, drafts: "private content", failedCovers: -1, notes: "private notes" },
     rawMessage: raw, token: "private-token" })),
-  { product: "Accord PWA", version: "1.4.0", stage: "message", httpStatuses: [403], counts: { albums: 1 } });
+  { product: "Accord PWA", version: "1.4.1", stage: "message", httpStatuses: [403], counts: { albums: 1 } });
 });
 
 test("diagnostics redact saved secrets, token shapes, authorization headers and URL credentials, queries and fragments", () => {
@@ -1144,11 +1161,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=65", "style.css?v=25"]) {
+  for (const file of ["app.mjs?v=66", "style.css?v=25"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=38", "ui.mjs?v=4"]) {
+  for (const file of ["core.mjs?v=39", "ui.mjs?v=5"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -1816,7 +1833,7 @@ test("Spotify concurrent equivalent GETs use one request and independent JSON co
   first.items[0].name = "Changed";
   assert.equal(second.items[0].name, "Original");
   await reader.read("https://api.spotify.com/v1/search?q=test&type=album", "token", request);
-  assert.equal(requests, 2, "responses without cache headers must not become a TTL cache");
+  assert.equal(requests, 1, "headerless catalog reads use the conservative default TTL");
 });
 
 test("Spotify GET coalescing is token scoped and failures can be retried", async () => {
@@ -1895,7 +1912,7 @@ test("Spotify write invalidation detaches stale playlist reads without deleting 
     return new Promise((resolve) => { finishOld = resolve; });
   });
   await Promise.resolve();
-  reader.clear();
+  reader.invalidateMutable();
   const request = () => {
     requests += 1;
     return new Promise((resolve) => { finishFresh = resolve; });
@@ -2864,14 +2881,16 @@ test("track-based artist resolution prefers the most frequent exact homonym", ()
   assert.equal(resolveArtistFromTracks([{ artists: [other] }], "Band"), null);
 });
 
-test("Spotify top lists are reused for 30 minutes across previews", async () => {
+test("Spotify top lists reuse the HTTP cache for 30 minutes only when server policy permits", async () => {
   const calls = [];
   const artist = { id: "a".repeat(22), name: "Seed" };
+  let now = 0;
+  const reader = createSpotifyJsonReader({ cache: createConditionalJsonCache({ now: () => now }) });
+  let headers = {};
   const context = {
     URLSearchParams, JSON,
-    Date: { now: () => context.now },
-    now: 0,
-    spotifyRequest: async (path) => { calls.push(path); return { items: [artist] }; },
+    spotifyRequest: (path, token) => reader.read(new URL(path, "https://api.spotify.com/v1/"), token,
+      async () => { calls.push(path); return spotifyResponse({ items: [artist] }, headers); }),
   };
   const source = appFunction("const spotifyTimeRanges =", "\nasync function resolveSimilarSpotifyArtists(");
   const read = runInNewContext(`${source}\nreadSpotifyTopArtists;`, context);
@@ -2880,7 +2899,83 @@ test("Spotify top lists are reused for 30 minutes across previews", async () => 
   assert.equal((await read("short_term", "token", null))[0].name, "Seed");
   assert.equal(calls.length, 1);
   await read("long_term", "token", null);
-  context.now = 30 * 60 * 1000;
+  now = 30 * 60 * 1000;
   await read("short_term", "token", null);
   assert.equal(calls.length, 3);
+  headers = { "Cache-Control": "no-store" };
+  reader.clear();
+  await read("short_term", "token", null);
+  await read("short_term", "token", null);
+  assert.equal(calls.length, 5);
+  headers = { "Cache-Control": "max-age=1" };
+  await read("short_term", "token", null);
+  now += 1000;
+  await read("short_term", "token", null);
+  assert.equal(calls.length, 7);
+});
+
+test("playlist writes preserve catalog cache and HTTP no-store policy", async () => {
+  const reader = createSpotifyJsonReader();
+  for (const directive of ["max-age=300", "no-store"]) {
+    reader.clear();
+    let reads = 0;
+    const url = "https://api.spotify.com/v1/albums/album";
+    const request = async () => spotifyResponse({ id: ++reads }, { "Cache-Control": directive });
+    await reader.read(url, "token", request);
+    const context = {
+      URL, SPOTIFY_API: "https://api.spotify.com/v1", spotifyJsonReader: reader,
+      spotifyApiFetch: async () => ({ ...spotifyResponse({ snapshot_id: "new" }), ok: true }),
+    };
+    const write = runInNewContext(appFunction("async function spotifyWriteRequest(", "\nasync function completeSpotifyPages(")
+      + "\nspotifyWriteRequest;", context);
+    await write("playlists/one/items", "token", { uris: ["spotify:track:one"] });
+    await reader.read(url, "token", request);
+    assert.equal(reads, directive === "no-store" ? 2 : 1);
+  }
+});
+
+test("PWA imports reuse only verified account-scoped playlist snapshots", async () => {
+  let pages = 0;
+  let checks = 0;
+  let writes = 0;
+  let snapshot = "v1";
+  let latest = "v1";
+  const context = {
+    JSON, Map,
+    state: { albums: [] },
+    spotifyPlaylistSnapshots: new Map(),
+    resolveSpotifyPlaylist: async () => ({ id: "p".repeat(22), name: "Synthetic", snapshot_id: snapshot }),
+    completeSpotifyPages: async () => {
+      pages += 1;
+      return [{ track: { type: "track", album: { id: "a".repeat(22), name: "Synthetic",
+        album_type: "album", artists: [{ name: "Artist" }],
+        external_urls: { spotify: `https://open.spotify.com/album/${"a".repeat(22)}` } } } }, { track: null }];
+    },
+    spotifyRequest: async () => { checks += 1; return { id: "p".repeat(22), snapshot_id: latest }; },
+    playlistAlbumRecords,
+    addPlaylistAlbums,
+    window: { confirm: () => false },
+    setSyncState: () => {},
+    saveState: () => { writes += 1; },
+  };
+  const read = runInNewContext(appFunction("async function runPlaylistImport(", "\nasync function importSpotifyPlaylist(")
+    + "\nrunPlaylistImport;", context);
+  await read("test", "first-token");
+  await read("test", "first-token");
+  assert.equal(pages, 1);
+  const reused = context.spotifyPlaylistSnapshots.get(JSON.stringify(["first-token", "p".repeat(22)]));
+  assert.equal(JSON.parse(reused.summary).count, 2);
+  assert.equal(JSON.parse(reused.summary).skipped, 1);
+  assert.equal(JSON.parse(reused.summary).albums.length, 1);
+  assert.equal("entries" in reused, false, "full track payloads are not retained");
+  assert.equal(checks, 2, "fresh snapshot metadata is always verified");
+  await read("test", "second-token");
+  assert.equal(pages, 2);
+  snapshot = latest = "v2";
+  await read("test", "first-token");
+  assert.equal(pages, 3);
+  latest = "v3";
+  await assert.rejects(read("test", "first-token"), /cambiata durante la lettura/);
+  assert.equal(context.spotifyPlaylistSnapshots.has(JSON.stringify(["first-token", "p".repeat(22)])), false);
+  assert.equal(writes, 0);
 });

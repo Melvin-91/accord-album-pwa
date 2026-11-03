@@ -295,7 +295,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
     const key = Object.keys(headers || {}).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
     return key ? headers[key] : "";
   };
-  const policy = (headers) => {
+  const policy = (headers, defaultMaxAge) => {
     const cacheControl = header(headers, "Cache-Control");
     const etag = header(headers, "ETag");
     const directives = new Map();
@@ -304,7 +304,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
       if (name) directives.set(name.toLowerCase(), parts.join("=").trim().replace(/^"|"$/g, ""));
     }
     if (directives.has("no-store")) return null;
-    const parsedMaxAge = directives.has("max-age") ? Number(directives.get("max-age")) : null;
+    const parsedMaxAge = directives.has("max-age") ? Number(directives.get("max-age")) : defaultMaxAge;
     const maxAge = Number.isSafeInteger(parsedMaxAge) && parsedMaxAge >= 0 ? parsedMaxAge : null;
     const noCache = directives.has("no-cache");
     if (!etag && (maxAge === null || maxAge === 0 || noCache)) return null;
@@ -320,8 +320,8 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
       currentAge,
     };
   };
-  const put = (key, value, headers) => {
-    const details = policy(headers);
+  const put = (key, value, headers, defaultMaxAge = 0) => {
+    const details = policy(headers, defaultMaxAge);
     if (!details) {
       entries.delete(key);
       return;
@@ -331,6 +331,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
       value: clone(value),
       etag: details.etag,
       cacheControl: details.cacheControl,
+      defaultMaxAge,
       expiresAt: currentTime + Math.max(0, details.maxAge * 1000 - details.currentAge),
     });
     for (const [cachedKey, entry] of entries) {
@@ -369,7 +370,7 @@ export function createConditionalJsonCache({ maxEntries = 256, now = () => Date.
         const value = header(headers, name);
         if (value) mergedHeaders[name] = value;
       }
-      put(key, entry.value, mergedHeaders);
+      put(key, entry.value, mergedHeaders, entry.defaultMaxAge);
       return clone(entry.value);
     },
     clear() {
@@ -555,7 +556,7 @@ export function spotifyDiscoveryPlaylistPreview(albums, { artistCount, tracksPer
 
 export function spotifyCacheableRead(url) {
   const path = url.pathname.startsWith("/v1/") ? url.pathname.slice(4) : url.pathname.replace(/^\/+/, "");
-  if (path === "search" || path === "me/top/artists" || path === "me/top/tracks") return true;
+  if (path === "me" || path === "search" || path === "me/top/artists" || path === "me/top/tracks") return true;
   const parts = path.split("/");
   if (parts.length === 2 && ["albums", "artists", "tracks"].includes(parts[0])) return true;
   return parts.length === 3
@@ -589,7 +590,10 @@ export function createSpotifyJsonReader({ cache = createConditionalJsonCache() }
             return result;
           }
           const result = await response.json();
-          if (cacheable && started === generation) cache.set(key, result, response.headers);
+          if (cacheable && started === generation) {
+            const defaultMaxAge = canonical.pathname.startsWith("/v1/me/top/") ? 1800 : 300;
+            cache.set(key, result, response.headers, defaultMaxAge);
+          }
           return result;
         });
         pending.set(key, task);
@@ -604,6 +608,11 @@ export function createSpotifyJsonReader({ cache = createConditionalJsonCache() }
       generation += 1;
       pending.clear();
       cache.clear();
+    },
+    invalidateMutable() {
+      for (const key of pending.keys()) {
+        if (!spotifyCacheableRead(new URL(JSON.parse(key)[1]))) pending.delete(key);
+      }
     },
   };
 }
