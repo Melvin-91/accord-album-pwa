@@ -998,6 +998,88 @@ export async function readMusicBrainzCatalog(fetchPage, maximum = 300) {
   return { groups, total, fetched, pages, truncated };
 }
 
+const normalizeSimilarName = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+
+// Same ranking as the desktop app: log-scaled reference weight x Last.fm match, a consensus
+// bonus for artists similar to several references and a per-reference cap for variety.
+export function rankSimilarArtists(seedResults, excludedNames = [], { perSeedCap = 3, limit = 80 } = {}) {
+  const excluded = new Set([...excludedNames, ...seedResults.map(([name]) => name)].map(normalizeSimilarName));
+  const scaled = seedResults.map(([, weight]) => Math.log1p(Math.max(Number(weight) || 0, 1)));
+  const top = Math.max(1, ...scaled);
+  const candidates = new Map();
+  seedResults.forEach(([seedName, , similar], index) => {
+    const seedWeight = scaled[index] / top;
+    for (const entry of Array.isArray(similar) ? similar : []) {
+      const name = String(entry?.name || "").trim();
+      const key = normalizeSimilarName(name);
+      const match = Number(entry?.match);
+      if (!key || excluded.has(key) || !Number.isFinite(match) || match <= 0 || match > 1) continue;
+      const record = candidates.get(key) || { name, seeds: new Map(), match: 0 };
+      record.seeds.set(seedName, Math.max(record.seeds.get(seedName) || 0, seedWeight * match));
+      record.match = Math.max(record.match, match);
+      candidates.set(key, record);
+    }
+  });
+  const ranked = [...candidates.values()].map((record) => {
+    const support = record.seeds.size;
+    const total = [...record.seeds.values()].reduce((sum, value) => sum + value, 0);
+    const seeds = [...record.seeds.keys()].sort((left, right) =>
+      record.seeds.get(right) - record.seeds.get(left)
+      || normalizeSimilarName(left).localeCompare(normalizeSimilarName(right)));
+    return { name: record.name, score: Math.round(total * Math.log1p(support) / Math.log(2) * 1e4) / 1e4,
+      support, seeds: seeds.slice(0, 3), match: record.match };
+  }).sort((left, right) => right.score - left.score
+    || normalizeSimilarName(left.name).localeCompare(normalizeSimilarName(right.name)));
+  const chosen = [];
+  const overflow = [];
+  const perSeed = new Map();
+  for (const item of ranked) {
+    const primary = normalizeSimilarName(item.seeds[0]);
+    if ((perSeed.get(primary) || 0) < perSeedCap) {
+      perSeed.set(primary, (perSeed.get(primary) || 0) + 1);
+      chosen.push(item);
+    } else {
+      overflow.push(item);
+    }
+  }
+  return [...chosen, ...overflow].slice(0, limit);
+}
+
+export function resolveArtistFromTracks(tracks, name) {
+  const key = String(name || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const found = new Map();
+  (Array.isArray(tracks) ? tracks : []).forEach((track, index) => {
+    for (const artist of Array.isArray(track?.artists) ? track.artists : []) {
+      if (!/^[A-Za-z0-9]{22}$/.test(artist?.id || "") || typeof artist.name !== "string"
+          || artist.name.trim().replace(/\s+/g, " ").toLocaleLowerCase() !== key) continue;
+      const current = found.get(artist.id) || { artist, count: 0, first: index };
+      current.count += 1;
+      found.set(artist.id, current);
+    }
+  });
+  const [best] = [...found.values()].sort((left, right) => right.count - left.count || left.first - right.first);
+  return best ? { id: best.artist.id, name: best.artist.name, genres: [] } : null;
+}
+
+export async function buildSimilarityQueue(references, lookup, excludedNames = [], { maxSeeds = 12 } = {}) {
+  const ordered = references.filter((seed) => seed?.name)
+    .sort((left, right) => (Number(right.weight) || 1) - (Number(left.weight) || 1)).slice(0, maxSeeds);
+  const results = [];
+  let note = "";
+  for (const seed of ordered) {
+    try {
+      results.push([seed.name, seed.weight || 1, await lookup(seed.name)]);
+    } catch (error) {
+      if (/limite|limit|429|configura/i.test(error?.message || "")) {
+        note = `Similarità Last.fm parziale: ${error.message}`;
+        break;
+      }
+      note = `Similarità Last.fm non disponibile per alcuni riferimenti: ${error?.message || error}`;
+    }
+  }
+  return { queue: rankSimilarArtists(results, excludedNames), note };
+}
+
 export async function expandSimilarArtists(seeds, loadSimilarArtists, {
   maximumArtists = 30, maximumSeeds = 30, initialSeedCount = 5, excludedNames = [],
 } = {}) {

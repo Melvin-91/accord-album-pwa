@@ -3,6 +3,9 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import {
+  buildSimilarityQueue,
+  resolveArtistFromTracks,
+  rankSimilarArtists,
   albumPrimaryGenre,
   albumSecondaryGenres,
   addPlaylistAlbums,
@@ -198,11 +201,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=61", "style.css?v=22"]) {
+  for (const file of ["app.mjs?v=62", "style.css?v=22"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=37", "ui.mjs?v=1"]) {
+  for (const file of ["core.mjs?v=38", "ui.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -238,12 +241,14 @@ test("Spotify playlist reuses the real Suggestions candidate, album and Discogs 
   const calls = [];
   const elements = new Map();
   for (const [selector, value] of Object.entries({
+    "#spotifySuggestionPeriod": "medium_term",
     "#spotifySuggestionExclusion": "medium_term",
     "#spotifyIncludeGenresMatch": "exact",
     "#spotifyExcludeGenresMatch": "exact",
   })) elements.set(selector, { value });
   const context = {
     URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums,
+    buildSimilarityQueue, localStorage: { getItem: () => null }, LASTFM_KEY: "lastfm",
     spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
     rankDiscogsSuggestionAlbums, state: { albums: [{ artist: "Fresh", name: "Owned old album" }] },
     playlistDiscoveryContinuation: null,
@@ -273,7 +278,7 @@ test("Spotify playlist reuses the real Suggestions candidate, album and Discogs 
   const previewSource = appFunction("async function loadTopArtistPlaylistPreview(", "\nfunction renderTopArtistPlaylistPreview(");
   const api = runInNewContext(`${discoverySource}\n${previewSource}
     ({ suggestions: () => buildSpotifyAlbumSuggestions({period:"medium_term", exclusion:"medium_term"}, "token", {}),
-       preview: () => loadTopArtistPlaylistPreview({artistCount:5,tracksPerArtist:3,timeRange:"medium_term"}, "token") });`, context);
+       preview: () => loadTopArtistPlaylistPreview({artistCount:5,tracksPerArtist:3}, "token") });`, context);
   const suggestions = await api.suggestions();
   const preview = await api.preview();
   assert.deepEqual(Array.from(preview.artists, (artist) => artist.id),
@@ -293,8 +298,9 @@ test("Spotify playlist reuses the real Suggestions candidate, album and Discogs 
   const collectionSuggestions = await api.suggestions();
   assert.equal(collectionSuggestions.albums.some((record) => record.spotifyArtistId === fresh.id), false);
   const collectionPreview = await api.preview();
-  assert.ok(collectionPreview.artists.some((artist) => artist.id === fresh.id),
-    "owning every sampled album must not remove the artist from a discovery playlist");
+  assert.deepEqual(Array.from(collectionPreview.artists, (artist) => artist.id),
+    Array.from(collectionSuggestions.albums, (record) => record.spotifyArtistId),
+    "playlist and Suggestions must apply the same collection exclusions");
   assert.equal(collectionPreview.artists.some((artist) => artist.id === heard.id), false);
   context.state.albums = [];
   failedArtist = "Other";
@@ -327,6 +333,7 @@ function pagedDiscoveryFixture({ emptyAlbums = false, interruptGenre = false, ex
   let interrupted = false;
   const context = {
     URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums,
+    buildSimilarityQueue, localStorage: { getItem: () => null }, LASTFM_KEY: "lastfm",
     spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
     rankDiscogsSuggestionAlbums, state: { albums: [] },
     suggestionFilterValues: () => [],
@@ -1799,4 +1806,138 @@ test("normalizes ListenBrainz recommendations and rejects unrelated or invalid r
     { name: "Artist B", mbid: "b", score: 2, match: 0.5 },
   ]);
   assert.throws(() => listenBrainzRecommendations({}, "seed"), /ListenBrainz/);
+});
+
+test("similar-artist ranking rewards consensus and matches the desktop scoring", () => {
+  const ranked = rankSimilarArtists([
+    ["Kamelot", 100, [{ name: "Solo match", match: 1 }, { name: "Shared", match: 0.6 }]],
+    ["Epica", 100, [{ name: "Shared", match: 0.6 }]],
+    ["Nightwish", 100, [{ name: "Shared", match: 0.5 }, { name: "kamelot", match: 0.9 }]],
+  ], ["heard"]);
+  assert.equal(ranked[0].name, "Shared");
+  assert.equal(ranked[0].support, 3);
+  assert.deepEqual(ranked[0].seeds, ["Epica", "Kamelot", "Nightwish"]);
+  assert.ok(!ranked.some((item) => item.name.toLowerCase() === "kamelot"));
+});
+
+test("similar-artist ranking caps candidates per reference before overflow", () => {
+  const ranked = rankSimilarArtists([
+    ["Dominant", 1000, [0, 1, 2, 3, 4].map((index) => ({ name: `D${index}`, match: 0.9 - index / 100 }))],
+    ["Other", 1000, [{ name: "O1", match: 0.5 }]],
+  ]);
+  assert.deepEqual(ranked.map((item) => item.name), ["D0", "D1", "D2", "O1", "D3", "D4"]);
+});
+
+test("similarity queue queries only the strongest references and stops on a Last.fm limit", async () => {
+  const references = Array.from({ length: 20 }, (_, index) => ({ name: `Seed ${index}`, weight: 50 - index }));
+  const asked = [];
+  const result = await buildSimilarityQueue(references, async (name) => {
+    asked.push(name);
+    if (asked.length === 3) throw new Error("Limite Last.fm raggiunto");
+    return [{ name: `${name} friend`, match: 0.5 }];
+  });
+  assert.deepEqual(asked, ["Seed 0", "Seed 1", "Seed 2"]);
+  assert.equal(result.queue.length, 2);
+  assert.match(result.note, /parziale/);
+  const full = [];
+  await buildSimilarityQueue(references, async (name) => { full.push(name); return []; });
+  assert.equal(full.length, 12);
+});
+
+test("Spotify discovery takes Last.fm similar artists before genre search and keeps them queued on errors", async () => {
+  const id = (number) => String(number).padStart(22, "0");
+  const seed = { id: id(1), name: "Seed", genres: ["rock"] };
+  const later = { id: id(3), name: "Later", genres: ["rock"], popularity: 70 };
+  const calls = [];
+  let failResolution = true;
+  const context = {
+    URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums, buildSimilarityQueue,
+    resolveArtistFromTracks, spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
+    rankDiscogsSuggestionAlbums, state: { albums: [] },
+    localStorage: { getItem: () => "key" }, LASTFM_KEY: "lastfm",
+    similarLastFmArtists: async (name) => { calls.push(`lastfm:${name}`); return [{ name: "Later", match: 0.9 }]; },
+    suggestionFilterValues: () => [],
+    $: () => ({ value: "exact" }),
+    rateDiscogsSuggestionCandidates: async (albums) => ({ albums }),
+    spotifyRequest: async (path, _token, budget) => {
+      budget.read();
+      budget.attempt();
+      calls.push(path);
+      if (path.startsWith("me/top/artists")) return { items: [seed] };
+      if (path.startsWith("me/top/tracks")) return { items: [] };
+      const query = new URLSearchParams(path.slice(7)).get("q");
+      if (query.startsWith("artist:")) {
+        if (failResolution) {
+          failResolution = false;
+          throw new Error("Limite Spotify raggiunto");
+        }
+        return { artists: { items: [later] } };
+      }
+      return { artists: { items: [], next: null } };
+    },
+    spotifySearchRequest: async (parameters, _token, budget) => {
+      budget.read();
+      budget.attempt();
+      calls.push(`${parameters.get("type")}:${parameters.get("q")}:${parameters.get("limit")}`);
+      if (failResolution) {
+        failResolution = false;
+        throw new Error("Limite Spotify raggiunto");
+      }
+      const album = {
+        id: id(20), name: "New album", artists: [later], album_type: "album",
+        external_urls: { spotify: `https://open.spotify.com/album/${id(20)}` }, release_date: "2025-01-01",
+      };
+      return { tracks: { items: [{ id: id(21), uri: `spotify:track:${id(21)}`, name: "New track",
+        artists: [later], album, popularity: 50 }] } };
+    },
+  };
+  const source = appFunction("const spotifyTimeRanges =", "\nfunction renderSpotifyAlbumSuggestions(");
+  const build = runInNewContext(`${source}\nbuildSpotifyAlbumSuggestions;`, context);
+  const run = (continuation = null) => build({ period: "medium_term", exclusion: "medium_term" }, "token", {}, {
+    maximum: 10, continuation, excludeCollectionAlbums: false,
+    playlistRequest: { artistCount: 1, tracksPerArtist: 1, timeRange: "medium_term" },
+  });
+  const first = await run();
+  assert.equal(first.albums.length, 0);
+  assert.match(first.partialReason, /Limite Spotify/);
+  assert.ok(first.continuation);
+  const second = await run(first.continuation);
+  assert.deepEqual(Array.from(second.albums, (record) => record.spotifyArtistId), [later.id]);
+  assert.deepEqual(Array.from(second.albums[0].spotifySimilarTo), ["Seed"]);
+  assert.equal(second.similarityCandidates, 1);
+  assert.equal(calls.filter((call) => call.startsWith("lastfm:")).length, 1);
+  assert.equal(calls.some((call) => call.includes("genre%3A")), false);
+  // One track search resolves the artist and supplies its albums: no artist search, no second read.
+  assert.deepEqual(calls.filter((call) => call.startsWith("track:")), ['track:artist:"Later":10', 'track:artist:"Later":10']);
+  assert.equal(calls.some((call) => call.startsWith("search?")), false);
+});
+
+test("track-based artist resolution prefers the most frequent exact homonym", () => {
+  const first = { id: "a".repeat(22), name: "Band" };
+  const second = { id: "b".repeat(22), name: "band " };
+  const other = { id: "c".repeat(22), name: "Band Two" };
+  const tracks = [{ artists: [first] }, { artists: [second, other] }, { artists: [second] }, { artists: "bad" }];
+  assert.equal(resolveArtistFromTracks(tracks, "Band").id, second.id);
+  assert.equal(resolveArtistFromTracks([{ artists: [other] }], "Band"), null);
+});
+
+test("Spotify top lists are reused for 30 minutes across previews", async () => {
+  const calls = [];
+  const artist = { id: "a".repeat(22), name: "Seed" };
+  const context = {
+    URLSearchParams, JSON,
+    Date: { now: () => context.now },
+    now: 0,
+    spotifyRequest: async (path) => { calls.push(path); return { items: [artist] }; },
+  };
+  const source = appFunction("const spotifyTimeRanges =", "\nasync function resolveSimilarSpotifyArtists(");
+  const read = runInNewContext(`${source}\nreadSpotifyTopArtists;`, context);
+  const first = await read("short_term", "token", null);
+  first[0].name = "mutated";
+  assert.equal((await read("short_term", "token", null))[0].name, "Seed");
+  assert.equal(calls.length, 1);
+  await read("long_term", "token", null);
+  context.now = 30 * 60 * 1000;
+  await read("short_term", "token", null);
+  assert.equal(calls.length, 3);
 });

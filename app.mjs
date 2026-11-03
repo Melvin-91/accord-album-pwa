@@ -10,6 +10,8 @@ import {
   collectSpotifyDiscoveryAlbums,
   spotifyDiscoveryPlaylistPreview,
   createTimedJsonCache,
+  buildSimilarityQueue,
+  resolveArtistFromTracks,
   expandSimilarArtists,
   filterListeningAlbumSuggestions,
   filterUnheardArtists,
@@ -46,7 +48,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=37";
+} from "./core.mjs?v=38";
 import {
   localCommandResults,
   normalizeCollectionPreferences,
@@ -2786,6 +2788,18 @@ function renderListeningAlbumSuggestions(albums) {
 }
 
 const spotifyTimeRanges = new Set(["short_term", "medium_term", "long_term"]);
+// Spotify recomputes top lists slowly: Suggestions and Crea playlist reuse them for 30 minutes.
+const spotifyTopSnapshots = new Map();
+
+async function readSpotifyTopSnapshot(kind, timeRange, accessToken, budget, validate) {
+  const key = JSON.stringify([kind, timeRange, accessToken]);
+  const cached = spotifyTopSnapshots.get(key);
+  if (cached && Date.now() - cached.at < 30 * 60 * 1000) return JSON.parse(cached.items);
+  const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
+  const items = validate(await spotifyRequest(`me/top/${kind}?${parameters}`, accessToken, budget));
+  spotifyTopSnapshots.set(key, { at: Date.now(), items: JSON.stringify(items) });
+  return items;
+}
 
 function spotifySuggestionAlbumKey(artist, name) {
   const normalize = (value) => String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
@@ -2793,8 +2807,10 @@ function spotifySuggestionAlbumKey(artist, name) {
 }
 
 async function readSpotifyTopArtists(timeRange, accessToken, budget) {
-  const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
-  const response = await spotifyRequest(`me/top/artists?${parameters}`, accessToken, budget);
+  return readSpotifyTopSnapshot("artists", timeRange, accessToken, budget, validateSpotifyTopArtists);
+}
+
+function validateSpotifyTopArtists(response) {
   if (!Array.isArray(response?.items) || response.items.length > 50
       || response.items.some((artist) => !/^[A-Za-z0-9]{22}$/.test(artist?.id || "")
         || typeof artist.name !== "string" || !artist.name.trim())) {
@@ -2805,8 +2821,10 @@ async function readSpotifyTopArtists(timeRange, accessToken, budget) {
 }
 
 async function readSpotifyTopTracks(timeRange, accessToken, budget) {
-  const parameters = new URLSearchParams({ limit: "50", time_range: timeRange });
-  const response = await spotifyRequest(`me/top/tracks?${parameters}`, accessToken, budget);
+  return readSpotifyTopSnapshot("tracks", timeRange, accessToken, budget, validateSpotifyTopTracks);
+}
+
+function validateSpotifyTopTracks(response) {
   if (!Array.isArray(response?.items) || response.items.length > 50
       || response.items.some((track) => !/^[A-Za-z0-9]{22}$/.test(track?.id || "")
         || !track.name?.trim() || !track.album?.id || !track.album?.name)) {
@@ -2815,18 +2833,93 @@ async function readSpotifyTopTracks(timeRange, accessToken, budget) {
   return response.items;
 }
 
+async function resolveSimilarSpotifyArtists(discovery, seedIds, seedNames, excluded, genreAllowed, accessToken, budget, maximum, viaTracks = false) {
+  const candidates = discovery.candidates ||= new Map();
+  const processed = discovery.processedArtistIds ||= new Set();
+  const resolved = [];
+  while (resolved.length < maximum && discovery.similarQueue.length) {
+    const entry = discovery.similarQueue[0];
+    const key = entry.name.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+    if (excluded.has(key) || seedNames.has(key)) {
+      discovery.similarQueue.shift();
+      continue;
+    }
+    let response;
+    try {
+      // The candidate stays queued until Spotify answers, so a limit or budget stop resumes it.
+      // Without required genres, one track search resolves the artist and supplies its albums.
+      response = viaTracks
+        ? await spotifySearchRequest(new URLSearchParams({
+          q: `artist:${JSON.stringify(entry.name)}`, type: "track", limit: "10" }), accessToken, budget)
+        : await spotifyRequest(`search?${new URLSearchParams({
+          q: `artist:${JSON.stringify(entry.name)}`, type: "artist", limit: "5" })}`, accessToken, budget);
+    } catch (error) {
+      if (resolved.length) break;
+      throw error;
+    }
+    discovery.similarQueue.shift();
+    const tracks = viaTracks && Array.isArray(response?.tracks?.items) ? response.tracks.items : null;
+    const items = Array.isArray(response?.artists?.items) ? response.artists.items : [];
+    const artist = tracks ? resolveArtistFromTracks(tracks, entry.name) : items.find((item) => /^[A-Za-z0-9]{22}$/.test(item?.id || "")
+      && typeof item.name === "string" && item.name.trim().replace(/\s+/g, " ").toLocaleLowerCase() === key);
+    if (!artist || seedIds.has(artist.id) || processed.has(artist.id) || candidates.has(artist.id)) continue;
+    const genres = (Array.isArray(artist.genres) ? artist.genres : [])
+      .filter((genre) => typeof genre === "string" && genre.trim()).map((genre) => genre.trim());
+    if (!genreAllowed(genres)) continue;
+    const candidate = {
+      id: artist.id, name: artist.name.trim(),
+      popularity: Number.isInteger(artist.popularity) ? artist.popularity : 0,
+      genres, sharedGenres: new Set(), similarTo: entry.seeds, similarityScore: entry.score,
+      ...(tracks ? { prefetchedTracks: tracks } : {}),
+    };
+    candidates.set(artist.id, candidate);
+    resolved.push(candidate);
+  }
+  discovery.availableArtistIds = resolved.map((artist) => artist.id);
+  return resolved.map((artist) => ({ ...artist, sharedGenres: [] }));
+}
+
 async function findSpotifySimilarArtists(seeds, excludedNames, customExcluded, filters, accessToken, budget, maximum = 10, discovery = {}) {
   const seedIds = new Set(seeds.map((artist) => artist.id));
   const seedNames = new Set(seeds.map((artist) => artist.name.trim().toLocaleLowerCase()));
+  const excluded = new Set([...excludedNames, ...customExcluded]
+    .map((name) => name.trim().replace(/\s+/g, " ").toLocaleLowerCase()).filter(Boolean));
+  const include = filters.includedGenres.map((value) => value.toLocaleLowerCase());
+  const exclude = filters.excludedGenres.map((value) => value.toLocaleLowerCase());
+  const matches = (genre, terms, mode) => mode === "contains"
+    ? terms.some((term) => genre.toLocaleLowerCase().includes(term))
+    : terms.includes(genre.toLocaleLowerCase());
+  const genreAllowed = (values) => (!include.length || values.some((genre) =>
+    matches(genre, include, filters.includedGenresMatch)))
+    && !values.some((genre) => matches(genre, exclude, filters.excludedGenresMatch));
+  if (!discovery.similarQueue) {
+    if (localStorage.getItem(LASTFM_KEY)) {
+      const references = (discovery.references || seeds).map((artist, index) => ({
+        name: artist.name, weight: Number(artist.weight) || 50 - index }));
+      const { queue, note } = await buildSimilarityQueue(
+        references, (name) => similarLastFmArtists(name), [...excluded, ...seedNames]);
+      discovery.similarQueue = queue;
+      discovery.similarityNote = note;
+      discovery.similarityCandidates = queue.length;
+    } else {
+      discovery.similarQueue = [];
+      discovery.similarityNote = "Last.fm non configurato: candidati cercati solo per genere.";
+      discovery.similarityCandidates = 0;
+    }
+  }
+  if (discovery.similarQueue.length) {
+    const resolved = await resolveSimilarSpotifyArtists(
+      discovery, seedIds, seedNames, excluded, genreAllowed, accessToken, budget, maximum, !include.length);
+    if (resolved.length || discovery.similarQueue.length) return resolved;
+  }
   const genres = [...new Set(seeds.flatMap((artist) =>
     (Array.isArray(artist.genres) ? artist.genres : [])
       .filter((genre) => typeof genre === "string" && genre.trim())
       .map((genre) => genre.trim())))].slice(0, 6);
   if (!genres.length) {
+    if (discovery.similarityCandidates) return [];
     throw new Error("Spotify non fornisce generi per gli artisti ascoltati; non è possibile trovare proposte affidabili.");
   }
-  const excluded = new Set([...excludedNames, ...customExcluded]
-    .map((name) => name.trim().replace(/\s+/g, " ").toLocaleLowerCase()).filter(Boolean));
   const candidates = discovery.candidates ||= new Map();
   const pages = discovery.genrePages ||= genres.map((genre) => ({ genre, offset: 0, exhausted: false }));
   const processed = discovery.processedArtistIds ||= new Set();
@@ -2877,15 +2970,8 @@ async function findSpotifySimilarArtists(seeds, excludedNames, customExcluded, f
     page.exhausted = !response.artists.next || !response.artists.items.length || page.offset >= 50;
     discovery.genreCursor = (index + 1) % pages.length;
   }
-  const include = filters.includedGenres.map((value) => value.toLocaleLowerCase());
-  const exclude = filters.excludedGenres.map((value) => value.toLocaleLowerCase());
-  const matches = (genre, terms, mode) => mode === "contains"
-    ? terms.some((term) => genre.toLocaleLowerCase().includes(term))
-    : terms.includes(genre.toLocaleLowerCase());
   const ranked = [...candidates.values()]
-    .filter((artist) => !processed.has(artist.id) && (!include.length || artist.genres.some((genre) =>
-      matches(genre, include, filters.includedGenresMatch)))
-      && !artist.genres.some((genre) => matches(genre, exclude, filters.excludedGenresMatch)))
+    .filter((artist) => !processed.has(artist.id) && artist.sharedGenres.size && genreAllowed(artist.genres))
     .sort((left, right) => right.sharedGenres.size - left.sharedGenres.size
       || right.popularity - left.popularity || left.name.localeCompare(right.name));
   discovery.availableArtistIds = ranked.map((artist) => artist.id);
@@ -2893,12 +2979,15 @@ async function findSpotifySimilarArtists(seeds, excludedNames, customExcluded, f
 }
 
 async function spotifyAlbumsForArtist(artist, accessToken, budget) {
+  // A 10-track sample is one Spotify request (search pages hold at most 10 items).
   const parameters = new URLSearchParams({
     q: `artist:${JSON.stringify(artist.name)}`,
     type: "track",
-    limit: "50",
+    limit: "10",
   });
-  const response = await spotifySearchRequest(parameters, accessToken, budget);
+  const response = Array.isArray(artist.prefetchedTracks)
+    ? { tracks: { items: artist.prefetchedTracks } }
+    : await spotifySearchRequest(parameters, accessToken, budget);
   if (!Array.isArray(response?.tracks?.items)) {
     throw new Error(`Spotify non ha restituito i brani per ${artist.name}.`);
   }
@@ -2933,6 +3022,7 @@ async function spotifyAlbumsForArtist(artist, accessToken, budget) {
       spotifyPopularity: Math.round(score / count),
       spotifyTrackSample: count,
       spotifyRelatedArtist: artist.name,
+      spotifySimilarTo: Array.isArray(artist.similarTo) ? artist.similarTo : [],
       spotifyArtistId: artist.id,
       spotifyTracks: tracks,
       coverUrl: album.images?.[0]?.url || "",
@@ -2967,7 +3057,9 @@ async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
     const topTracks = await readSpotifyTopTracks(request.period, accessToken, budget);
     const filters = spotifyDiscoveryFilters();
     const customExcluded = new Set(filters.excludedArtists.map((value) => value.toLocaleLowerCase()));
-    const seeds = topArtists.filter((artist) => !customExcluded.has(artist.name.toLocaleLowerCase())).slice(0, 5);
+    const references = topArtists.filter((artist) => !customExcluded.has(artist.name.toLocaleLowerCase()))
+      .map((artist, index) => ({ ...artist, weight: 50 - index }));
+    const seeds = references.slice(0, 5);
     if (!seeds.length) throw new Error("Nessun artista Spotify di partenza corrisponde ai filtri.");
     const knownAlbums = new Set();
     for (const track of topTracks) {
@@ -2977,7 +3069,7 @@ async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
         knownAlbums.add(spotifySuggestionAlbumKey(artist, track.album.name));
       }
     }
-    discovery = { artists: [], albums: [], nextArtist: 0, knownAlbums, seeds,
+    discovery = { artists: [], albums: [], nextArtist: 0, knownAlbums, seeds, references: references.slice(0, 12),
       excludedNames, filters, seedCount: seeds.length, trackCount: topTracks.length,
       candidates: new Map(), processedArtistIds: new Set(), genrePages: null };
   }
@@ -3023,11 +3115,12 @@ async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
       ? spotifyDiscoveryPlaylistPreview(selected, playlistRequest).artists.length : selected.length;
     targetReached = validCount >= (playlistRequest?.artistCount || maximum);
     if (partialReason || targetReached) break;
-    if (!discovery.genrePages?.some((page) => !page.exhausted)
+    if (!discovery.genrePages?.some((page) => !page.exhausted) && !discovery.similarQueue?.length
         && !discovery.availableArtistIds?.some((id) => !discovery.processedArtistIds.has(id))) break;
   }
   const hasMore = !targetReached && Boolean(partialReason) && (
     discovery.nextArtist < discovery.artists.length
+    || discovery.similarQueue?.length
     || !discovery.genrePages
     || discovery.genrePages.some((page) => !page.exhausted)
     || discovery.availableArtistIds?.some((id) => !discovery.processedArtistIds.has(id)));
@@ -3035,6 +3128,8 @@ async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
     albums: selected,
     seedCount: discovery.seedCount,
     similarArtistCount: discovery.candidates.size,
+    similarityCandidates: discovery.similarityCandidates || 0,
+    similarityNote: discovery.similarityNote || "",
     candidateCount: discovery.albums.length,
     trackCount: discovery.trackCount,
     exclusionCount: excludedNames.length,
@@ -3107,7 +3202,10 @@ async function loadSpotifyAlbumSuggestions(request, accessToken) {
   renderSpotifyAlbumSuggestions(result.albums);
   const { discogs } = result;
   status.textContent = `Spotify · ${result.trackCount} brani campionati · ${result.seedCount} artisti di partenza · `
-    + `${result.similarArtistCount} artisti simili · ${result.albums.length}/${result.candidateCount} album nuovi`
+    + `${result.similarArtistCount} artisti simili`
+    + (result.similarityCandidates ? ` (grafo Last.fm: ${result.similarityCandidates})` : " (per genere)")
+    + ` · ${result.albums.length}/${result.candidateCount} album nuovi`
+    + (result.similarityNote ? ` · ${result.similarityNote}` : "")
     + (result.exclusionCount ? ` · ${result.exclusionCount} artisti esclusi` : "")
     + ` · Discogs ${discogs.rated}/${discogs.attempted} album valutati`
     + (discogs.limited ? " · budget Discogs raggiunto" : "")
@@ -3149,14 +3247,14 @@ async function suggestSpotifyAlbums(button) {
 }
 
 async function loadTopArtistPlaylistPreview(request, accessToken) {
-  const { artistCount, tracksPerArtist, timeRange } = request;
+  const { artistCount, tracksPerArtist } = request;
   if (!Number.isInteger(artistCount) || artistCount < 1 || artistCount > 50
-      || !Number.isInteger(tracksPerArtist) || tracksPerArtist < 1 || tracksPerArtist > 10
-      || !["short_term", "medium_term", "long_term"].includes(timeRange)) {
-    throw new Error("Scegli da 1 a 50 artisti, da 1 a 10 brani per artista e un periodo valido.");
+      || !Number.isInteger(tracksPerArtist) || tracksPerArtist < 1 || tracksPerArtist > 10) {
+    throw new Error("Scegli da 1 a 50 artisti e da 1 a 10 brani per artista.");
   }
+  // Stessi input di Suggerimenti Spotify, così le due schede restano coerenti.
   const suggestionRequest = {
-    period: timeRange,
+    period: $("#spotifySuggestionPeriod").value,
     exclusion: $("#spotifySuggestionExclusion").value,
   };
   const key = JSON.stringify([accessToken, request, suggestionRequest, spotifyDiscoveryFilters(), state.albums]);
@@ -3164,7 +3262,7 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
     ? playlistDiscoveryContinuation.discovery : null;
   const result = await buildSpotifyAlbumSuggestions(
     suggestionRequest, accessToken, $("#playlistBuilderStatus"), {
-      maximum: Math.max(10, artistCount), continuation, excludeCollectionAlbums: false,
+      maximum: Math.max(10, artistCount), continuation,
       playlistRequest: request,
     });
   playlistDiscoveryContinuation = result.continuation ? { key, discovery: result.continuation } : null;
@@ -3246,7 +3344,6 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
 function setPlaylistBuilderBusy(busy) {
   $("#playlistArtistCount").disabled = busy;
   $("#playlistTracksPerArtist").disabled = busy;
-  $("#playlistTimeRange").disabled = busy;
   $("#playlistBuilderName").disabled = busy;
   $("#playlistPreviewButton").disabled = busy;
   $("#playlistCreateButton").disabled = busy || !topArtistPlaylistPreview?.tracks.length;
@@ -3261,7 +3358,6 @@ async function beginPlaylistBuilderPreview() {
     const request = {
       artistCount: Number($("#playlistArtistCount").value),
       tracksPerArtist: Number($("#playlistTracksPerArtist").value),
-      timeRange: $("#playlistTimeRange").value,
     };
     const token = await spotifyAccessToken();
     if (!token || sessionStorage.getItem("accord-spotify-playlist-builder-authorized") !== "1") {
