@@ -1,5 +1,55 @@
 # Accord · Raccolta album PWA
 
+## Novità PWA 1.4.0
+
+- Nei dettagli, artista, generi, tag e collezioni sono pulsanti: applicano
+  un filtro locale **esatto**, senza ricerche online. **Torna alla vista
+  precedente** ripristina ricerca, filtri, ordinamento, layout, selezione
+  e scorrimento. Il filtro esatto è incluso nelle viste salvate; filtro e
+  percorso di ritorno restano nel riavvio richiesto da Aggiorna ora.
+  La raccolta attuale non usa paginazione.
+- La modifica multipla prepara un'anteprima con album realmente cambiati,
+  invariati e tutti i valori prima/dopo. Solo **Conferma queste modifiche
+  locali** scrive i dati; cambiare campi, selezione, raccolta o bozze
+  richiede una nuova anteprima. Aggiungi/Rimuovi mantengono le operazioni
+  incrementali; gli album con bozze interessate vanno prima risolti.
+- **Vista e altro → Uniforma etichette locali** propone varianti come
+  `Power Metal`/`power-metal` separatamente per generi, tag e collezioni.
+  Scegli etichetta finale e album, poi verifica l'anteprima esatta e conferma.
+  Nessuna fusione automatica; il genere principale mantiene il proprio ruolo.
+- **Gestisci copertine offline** legge i byte effettivi dei file IndexedDB,
+  anche per immagini non più associate a un album. Non è una stima dello
+  spazio totale su disco: overhead, immagini solo online e icone della PWA
+  non sono inclusi. Rimozione singola/totale con conferma; raccolta,
+  preferenze, bozze, cronologia Last.fm e repository restano intatti.
+  Una preferenza locale impedisce il download immediato delle immagini
+  rimosse, anche dopo riapertura/sincronizzazione. Per riattivarle usa
+  esplicitamente **Carica copertine mancanti online**; le miniature
+  sincronizzate possono poi essere riscaricate con **Sincronizza**.
+- Le schede mostrano **Bozza locale**; **Bozze locali** permette di
+  riprendere senza ricerche automatiche o scartare con conferma. Le bozze
+  di album rimossi sono visibili e scartabili, non applicate ad altri album.
+- Importazione, anteprima/creazione playlist e sincronizzazione hanno
+  guardie in memoria contro invii concorrenti, con feedback immediato.
+  Un'anteprima playlist inviata viene consumata anche in caso di esito
+  incerto: verifica prima Spotify, senza ripetizioni automatiche. Un errore
+  di sincronizzazione annulla anche eventuali invii automatici accodati.
+- Messaggi e **Attività** offrono copia della diagnostica oscurata e,
+  quando pertinenti, collegamenti alle preferenze, bozze o copertine fallite.
+  La copia contiene esclusivamente prodotto/versione, fase tecnica,
+  codici HTTP di errore e conteggi aggregati di album, bozze e copertine
+  fallite. Non include messaggi grezzi, nomi di album/artisti, URL,
+  credenziali o contenuti personali. I messaggi visualizzati restano
+  informativi, con token/chiavi noti e parametri sensibili oscurati:
+  non copiarli manualmente come diagnostica.
+
+Nessun nuovo endpoint, polling o traffico Spotify. Restano invariati cache
+HTTP, budget e cooldown condiviso `429`/`Retry-After`, senza retry delle
+scritture dall'esito incerto. Documentazione verificata:
+[rate limit Spotify](https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
+Prove d'installazione e verifiche OAuth reali restano dipendenti dal browser
+e dalla configurazione dell'app Spotify; i test locali non le simulano integralmente.
+
 ## Novità PWA 1.3.0
 
 - Stato e voto modificabili direttamente sulle schede, anche da tastiera e

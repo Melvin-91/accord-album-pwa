@@ -66,11 +66,13 @@ import {
   albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
   normalizeAccessibility, portablePreferences, adjacentAlbumIds, spotifyAlbumIntent,
   playlistPreviewStatistics, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
+  exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
+  normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
 } from "./ui.mjs";
 
 const qosAlbum = (id, fields = {}) => validateAlbum({ id, name: `Album ${id}`, artist: "Band",
   url: `https://open.spotify.com/album/${id}`, year: "2026", status: "queued", rating: null,
-  genres: [], ...fields });
+  genres: [], primary_genre: "", tags: [], collections: [], cover_sha256: null, ...fields });
 
 test("accessibility and portable preferences allow only local non-secret settings", () => {
   assert.deepEqual(normalizeAccessibility(null), { textScale: "normal", contrast: "standard", density: "touch" });
@@ -322,7 +324,7 @@ test("shared offline navigation uses only the active version shell without reque
     self: { location: { origin: "https://example.test", href: "https://example.test/pwa/sw.js" },
       addEventListener: (event, listener) => { handlers[event] = listener; } },
     caches: { open: async (key) => {
-      assert.equal(key, "accord-album-pwa-v1.3.0");
+      assert.equal(key, "accord-album-pwa-v1.4.0");
       return { match: async (file) => file === "./index.html" ? shell : undefined, put: () => { stored += 1; } };
     } },
     fetch: async () => { requests += 1; return { ok: false }; },
@@ -339,7 +341,7 @@ test("shared offline navigation uses only the active version shell without reque
 });
 
 test("update guard blocks drafts, open editing dialogs, and current work but permits already-persisted local albums", () => {
-  const context = { qol: { drafts: {} }, busyActivitySelectors: ["#syncButton"],
+  const context = { commandGuard: createCommandGuard(), qol: { drafts: {} }, busyActivitySelectors: ["#syncButton"],
     document: { querySelectorAll: () => context.dialogs }, dialogs: [],
     busy: false, $: () => ({ disabled: context.busy }),
     state: { albums: [qosAlbum("a")], base: [] } };
@@ -354,6 +356,9 @@ test("update guard blocks drafts, open editing dialogs, and current work but per
   assert.equal(guard(), false);
   context.busy = true;
   assert.equal(guard(), true);
+  context.busy = false;
+  context.commandGuard.acquire("playlist-write");
+  assert.equal(guard(), true, "writes block reload even when another button is enabled");
 });
 
 test("quick edits refuse existing drafts and otherwise use one local commit without network", () => {
@@ -387,6 +392,8 @@ test("explicit update action persists view and preview before activation, never 
     persistDetailsDraft: () => true, updateHasUnsavedWork: () => blocked,
     saveState: () => { saves += 1; }, collectionViewSelectors: ["#searchInput", "#sortOrder"],
     selectedAlbumIds: new Set(["a"]), window: { scrollY: 123 },
+    localFacet: { field: "artist", value: "Band" },
+    facetReturnViews: [{ fields: { "#searchInput": "before" }, scroll: 50, selected: ["a"], facet: null }],
     topArtistPlaylistPreview: { tracks: [{ uri: "t1" }] },
     sessionStorage: { setItem: (_key, value) => { snapshot = JSON.parse(value); } } };
   runInNewContext(appFunction('$("#applyUpdateButton").addEventListener("click"', '\ninitializeCollectionQol();'), context);
@@ -406,6 +413,8 @@ test("explicit update action persists view and preview before activation, never 
   assert.equal(snapshot.scrollY, 123);
   assert.deepEqual(snapshot.selectedIds, ["a"]);
   assert.deepEqual(snapshot.playlist.preview, { tracks: [{ uri: "t1" }] });
+  assert.deepEqual(snapshot.facet, { field: "artist", value: "Band" });
+  assert.equal(snapshot.facetReturnViews[0].fields["#searchInput"], "before");
   assert.equal(context.updateChosen, true);
 });
 
@@ -417,6 +426,7 @@ test("activity center reads the shared Spotify deadline locally and bounds its i
   const context = { localStorage: { getItem: (key) => {
     assert.equal(key, "accord-spotify-rate-limit-until-v1"); reads += 1; return Date.now() + 60000;
   } }, activityStatusNodes: [], busyActivitySelectors: ["#syncButton"], activityEntries: events,
+    safeDiagnostics: (value) => value,
     document: { createElement: fakeQolElement }, $: (selector) => nodes[selector],
     fetch: () => { throw new Error("Unexpected network"); },
     setInterval: () => { throw new Error("Unexpected polling"); } };
@@ -536,7 +546,7 @@ test("sync previews do not write before approval and reject local edits made dur
     let writes = 0, saves = 0, errors = [];
     const state = { albums: [record], base: [] };
     const context = {
-      state, JSON, Uint8Array, Map, Date, albumChanges,
+      state, JSON, Uint8Array, Map, Date, albumChanges, commandGuard: createCommandGuard(),
       $: () => ({ disabled: false }),
       credentials: () => ({ owner: "owner", token: "not-a-real-token" }),
       readRemote: async () => ({ albums: [], covers: new Map(), coverArchive: new Uint8Array(), branch: "main" }),
@@ -611,6 +621,445 @@ function appFunction(start, end) {
   return uiAppSource.slice(beginning, ending);
 }
 
+test("exact local facets match whole artists and labels, never substrings or another label type", () => {
+  const album = qosAlbum("a", { artist: "Power Metal Band", genres: ["Power Metal"],
+    tags: ["power-metal"], collections: ["Favorites"] });
+  assert.equal(normalizeAlbumFacet(undefined), null);
+  assert.deepEqual(normalizeAlbumFacet({ field: "artist", value: album.artist, token: "not-portable" }),
+    { field: "artist", value: album.artist });
+  assert.throws(() => normalizeAlbumFacet({ field: "name", value: album.name }), /non valido/);
+  assert.equal(exactAlbumFacet(album, null), true);
+  for (const [field, value] of [["artist", album.artist], ["genres", "Power Metal"],
+    ["tags", "power-metal"], ["collections", "Favorites"]]) {
+    assert.equal(exactAlbumFacet(album, { field, value }), true);
+  }
+  for (const [field, value] of [["artist", "Metal"], ["genres", "Metal"], ["genres", "power metal"],
+    ["tags", "Power Metal"], ["collections", "Favorite"], ["name", album.name]]) {
+    assert.equal(exactAlbumFacet(album, { field, value }), false);
+  }
+});
+
+test("detail facet navigation is local and Back restores search, filters, sort, layout, selection and scroll", () => {
+  const selectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+  const elements = new Map(selectors.map((selector, index) => [selector, { value: `value${index}`, focus() {} }]));
+  const callbacks = {};
+  const element = (selector) => {
+    if (!elements.has(selector)) elements.set(selector, { dataset: {}, addEventListener: (event, fn) => { callbacks[`${selector}:${event}`] = fn; },
+      focus() {}, close() {}, scrollIntoView() {} });
+    return elements.get(selector);
+  };
+  element("#pinnedOnlyInput").checked = true;
+  element("#collectionFilters").open = true;
+  const original = Object.fromEntries(selectors.map((selector) => [selector, element(selector).value]));
+  let scroll = null, renders = 0;
+  const context = { $: element, collectionViewSelectors: selectors, facetReturnViews: [],
+    selectedAlbumIds: new Set(["a", "b"]), localFacet: null, navigatingToFacet: false,
+    collectionPreferences: { layout: original["#collectionLayout"] }, state: {},
+    window: { scrollY: 540, scrollTo: (_x, y) => { scroll = y; } },
+    persistDetailsDraft: () => true, activateViewTab() {}, render: () => { renders += 1; },
+    requestAnimationFrame: (fn) => fn(), refreshGenreFilters() {}, saveState() {},
+    saveCollectionPreferences: (preferences) => { context.collectionPreferences = preferences; },
+    fetch: () => assert.fail("local navigation must not fetch"),
+  };
+  const source = appFunction("function openLocalFacet(", "\nfunction updateSelectionToolbar(");
+  const open = runInNewContext(`${source}\nopenLocalFacet`, context);
+  open("artist", "Band");
+  assert.equal(context.localFacet.value, "Band");
+  assert.equal(context.facetReturnViews.length, 1);
+  assert.equal(element("#searchInput").value, "");
+  assert.equal(element("#pinnedOnlyInput").checked, false);
+  element("#collectionLayout").value = "compact";
+  context.collectionPreferences.layout = "compact";
+  context.selectedAlbumIds.clear();
+  callbacks["#facetBackButton:click"]();
+  assert.deepEqual(Object.fromEntries(selectors.map((selector) => [selector, element(selector).value])), original);
+  assert.equal(context.localFacet, null);
+  assert.deepEqual([...context.selectedAlbumIds], ["a", "b"]);
+  assert.equal(context.collectionPreferences.layout, original["#collectionLayout"]);
+  assert.equal(element("#pinnedOnlyInput").checked, true);
+  assert.equal(element("#collectionFilters").open, true);
+  assert.equal(scroll, 540);
+  assert.equal(renders, 2);
+  context.persistDetailsDraft = () => false;
+  open("tags", "blocked");
+  assert.equal(context.facetReturnViews.length, 0, "a failed draft save blocks leaving details");
+});
+
+test("batch review counts actual changes and preserves incremental lists and primary genre without mutating input", () => {
+  const albums = [qosAlbum("a", { genres: ["Metal", "Power Metal"], primary_genre: "Power Metal", tags: ["New"] }),
+    qosAlbum("b", { tags: ["Old"] }), qosAlbum("c")];
+  const before = JSON.stringify(albums);
+  const review = prepareAlbumReview(albums, new Set(["a", "b"]),
+    (album) => validateAlbum({ ...album, ...batchAlbumChanges(album, { tags: ["New"] }, "add") }));
+  assert.deepEqual({ selected: review.selected, changed: review.changed, unchanged: review.unchanged },
+    { selected: 2, changed: 1, unchanged: 1 });
+  assert.deepEqual(review.changes.map(({ id, fields }) => ({ id, fields })), [{ id: "b", fields: ["tags"] }]);
+  assert.deepEqual(review.changes[0].before.tags, ["Old"]);
+  assert.deepEqual(review.changes[0].after.tags, ["Old", "New"]);
+  assert.equal(review.next[0].primary_genre, "Power Metal");
+  assert.equal(review.next[2], albums[2]);
+  assert.equal(JSON.stringify(albums), before);
+  assert.doesNotThrow(() => assertAlbumReviewCurrent(review, albums));
+  assert.throws(() => assertAlbumReviewCurrent(review, [...albums, qosAlbum("d")]), /cambiata/);
+  assert.throws(() => prepareAlbumReview(albums, new Set(["missing"]), (album) => album), /Selezione cambiata/);
+  assert.throws(() => prepareAlbumReview(albums, new Set(["a", "b"]),
+    (album) => validateAlbum({ ...album, rating: 7 })), /voto/);
+  assert.equal(JSON.stringify(albums), before);
+});
+
+test("normalization proposes only equivalent variants per field and applies only selected albums preserving primary role", () => {
+  const albums = [
+    qosAlbum("a", { genres: ["Heavy Metal", "Power Metal"], primary_genre: "Heavy Metal", tags: ["power-metal"] }),
+    qosAlbum("b", { genres: ["power-metal", "Rock"], primary_genre: "power-metal", tags: ["Power Metal"],
+      collections: ["My_List"] }),
+    qosAlbum("c", { genres: ["Power Metal"], collections: ["my list"] }),
+  ];
+  const before = JSON.stringify(albums);
+  const proposals = labelNormalizationProposals(albums);
+  assert.deepEqual(proposals.map((entry) => entry.field), ["genres", "tags", "collections"]);
+  const proposal = proposals[0];
+  assert.deepEqual(new Set(proposal.labels), new Set(["Power Metal", "power-metal"]));
+  assert.deepEqual(proposal.albumIds, ["a", "b", "c"]);
+  const review = prepareAlbumReview(albums, new Set(["a", "b"]),
+    (album) => normalizeAlbumLabels(album, proposal.field, proposal.labels, "Power metal", validateAlbum));
+  assert.equal(review.changed, 2);
+  assert.equal(review.unchanged, 0);
+  assert.equal(review.next[0].primary_genre, "Heavy Metal");
+  assert.equal(review.next[1].primary_genre, "Power metal");
+  assert.deepEqual(review.next[1].genres, ["Power metal", "Rock"]);
+  assert.deepEqual(review.next[1].tags, ["Power Metal"], "other label types remain untouched");
+  assert.equal(review.next[2], albums[2]);
+  const deduped = normalizeAlbumLabels(qosAlbum("d", { genres: ["Power Metal", "power-metal"], primary_genre: "power-metal" }),
+    "genres", proposal.labels, "Power Metal", validateAlbum);
+  assert.deepEqual(deduped.genres, ["Power Metal"]);
+  assert.equal(deduped.primary_genre, "Power Metal");
+  const noop = prepareAlbumReview(albums, new Set(["a", "c"]),
+    (album) => normalizeAlbumLabels(album, "genres", proposal.labels, "Power Metal", validateAlbum));
+  assert.equal(noop.changed, 0);
+  assert.equal(noop.unchanged, 2);
+  assert.throws(() => normalizeAlbumLabels(albums[0], "genres", proposal.labels, "  ", validateAlbum), /etichetta finale/);
+  assert.equal(JSON.stringify(albums), before);
+});
+
+function localUiElement(tag = "div") {
+  return { tag, children: [], events: {}, textContent: "", disabled: false,
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; },
+    setAttribute() {},
+    addEventListener(event, callback) { this.events[event] = callback; },
+    close() { this.closed = true; }, remove() { this.removed = true; }, showModal() { this.open = true; } };
+}
+
+test("review UI requires explicit confirmation, rejects stale albums or drafts, and prevents duplicate local commits", () => {
+  const before = qosAlbum("a");
+  const state = { albums: [before] }, qol = { drafts: {} };
+  const form = localUiElement("form"), dialog = localUiElement("dialog"), error = localUiElement("p");
+  let saves = 0, renders = 0;
+  const ids = new Set(["a"]);
+  const build = () => prepareAlbumReview(state.albums, ids, (album) => validateAlbum({ ...album, status: "liked" }));
+  const context = { document: { createElement: localUiElement }, state, qol, assertAlbumReviewCurrent,
+    changesText: (changes) => `${changes[0]?.before.status} -> ${changes[0]?.after.status}`,
+    safeDiagnostics: (value) => value, appendErrorActions() {},
+    commitLocalRestore: (_storage, _key, current, next) => { saves += 1; Object.assign(current, next); },
+    localStorage: {}, STORAGE_KEY: "collection", rememberLocalChanges() {},
+    render: () => { renders += 1; }, showFeedback() {} };
+  const attach = runInNewContext(`${appFunction("function appendAlbumReview(", "\nfunction openLabelNormalization(")}\nappendAlbumReview`, context);
+  attach(form, dialog, build, error);
+  const submit = () => form.events.submit({ preventDefault() {} });
+  const confirm = form.children.find((node) => node.textContent === "Conferma queste modifiche locali");
+  const preview = form.children.find((node) => node.tag === "pre");
+  assert.equal(confirm.disabled, true);
+  submit();
+  assert.equal(saves, 0);
+  assert.match(preview.textContent, /1 selezionati · 1 realmente modificati · 0 invariati/);
+  assert.match(preview.textContent, /queued -> liked/);
+  state.albums = [validateAlbum({ ...before, rating: 4 })];
+  confirm.events.click();
+  assert.equal(saves, 0);
+  assert.match(error.textContent, /cambiata/);
+  submit();
+  qol.drafts["edit:a"] = {};
+  confirm.events.click();
+  assert.equal(saves, 0);
+  assert.match(error.textContent, /bozze cambiati/);
+  submit();
+  assert.equal(confirm.disabled, true);
+  assert.match(error.textContent, /bozze locali/);
+  qol.drafts = {};
+  submit();
+  form.events.input();
+  assert.equal(confirm.disabled, true);
+  submit();
+  confirm.events.click();
+  confirm.events.click();
+  assert.equal(saves, 1);
+  assert.equal(renders, 1);
+  assert.equal(dialog.closed, true);
+  assert.equal(state.albums[0].status, "liked");
+});
+
+test("cover inventory measures exact payload bytes and refuses unknown sizes rather than estimating", () => {
+  const buffer = new Uint8Array(13).buffer;
+  assert.deepEqual(coverStorageInventory([{ id: "a", data: buffer }, { id: "b", data: new Uint8Array(buffer, 3, 5) },
+    { id: "c", data: new Blob([new Uint8Array(7)]) }]),
+  [{ id: "a", bytes: 13 }, { id: "b", bytes: 5 }, { id: "c", bytes: 7 }]);
+  assert.throws(() => coverStorageInventory([{ id: "a", data: { size: 9000 } }]), /non verificabile/);
+});
+
+test("cover removal changes only covers and suppression, preserving albums, preferences, drafts and Last.fm history", async () => {
+  const saved = new Map([["collection", "albums"], ["preferences", "prefs"], ["qol", "drafts"],
+    ["spotify-cooldown", "9999999999999"]]);
+  const covers = new Map([["a", new Uint8Array(7)], ["b", new Uint8Array(11)]]);
+  const history = { scrobbles: [{ id: "kept" }] };
+  const scopes = [];
+  const localStorage = { getItem: (key) => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value), removeItem: (key) => saved.delete(key) };
+  const database = { transaction(storeName, mode) {
+    scopes.push([storeName, mode]);
+    const transaction = { objectStore: (name) => {
+      assert.equal(name, "covers");
+      return { delete: (id) => covers.delete(id) };
+    } };
+    queueMicrotask(() => transaction.oncomplete());
+    return transaction;
+  } };
+  const context = { localStorage, COVER_REMOVALS_KEY: "removed", COVER_STORE: "covers",
+    openCoverDatabase: async () => database, Set, JSON };
+  const source = `${appFunction("function removedCoverIds(", "\nasync function getCoverInventory(")}
+    ${appFunction("async function removeCachedCovers(", "\nasync function openCoverStorageManager(")}`;
+  const remove = runInNewContext(`${source}\nremoveCachedCovers`, context);
+  await remove(new Set(["a"]));
+  assert.deepEqual([...covers.keys()], ["b"]);
+  assert.deepEqual(JSON.parse(saved.get("removed")), ["a"]);
+  await remove(new Set(["a", "b"]));
+  assert.equal(covers.size, 0);
+  assert.deepEqual(JSON.parse(saved.get("removed")), ["a", "b"]);
+  assert.deepEqual([...saved].filter(([key]) => key !== "removed"), [
+    ["collection", "albums"], ["preferences", "prefs"], ["qol", "drafts"], ["spotify-cooldown", "9999999999999"],
+  ]);
+  assert.deepEqual(history, { scrobbles: [{ id: "kept" }] });
+  assert.deepEqual(scopes, [["covers", "readwrite"], ["covers", "readwrite"]]);
+  context.removedCoverIds = () => new Set(["a"]);
+  context.openCoverDatabase = () => assert.fail("removed covers must not be recached even by sync");
+  const cache = runInNewContext(`${appFunction("async function cacheCover(", "\nasync function cacheLastFmHistory(")}\ncacheCover`, context);
+  await cache("a", new Uint8Array(7));
+});
+
+test("removed covers are not downloaded by local renders or later automatic online renders", async () => {
+  const placeholder = { textContent: "" };
+  const card = { dataset: { albumId: "a" }, querySelector: () => placeholder };
+  const context = { $: () => ({ children: [card] }), removedCoverIds: () => new Set(["a"]),
+    getCachedCover: () => assert.fail("removed cover must not be read"),
+    enqueueCollectionCover: () => assert.fail("removed cover must not cause network"),
+    coverRenderGeneration: 1, updateCollectionCoverNotice() {}, setSyncState() {},
+    showMessage: (_title, message) => assert.fail(message) };
+  const render = runInNewContext(`${appFunction("async function renderCovers(", "\nfunction collectionCoverTaskIsCurrent(")}\nrenderCovers`, context);
+  await render([{ id: "a", cover_sha256: "hash" }], 1, false);
+  await render([{ id: "a", cover_sha256: "hash" }], 1, true);
+  assert.match(placeholder.textContent, /rimossa/);
+});
+
+test("command guard is acquired synchronously, distinguishes commands, and releases explicitly", () => {
+  const guard = createCommandGuard();
+  assert.equal(guard.isBusy(), false);
+  assert.equal(guard.acquire("import"), true);
+  assert.equal(guard.acquire("import"), false);
+  assert.equal(guard.acquire("write"), true);
+  guard.release("import");
+  assert.equal(guard.isBusy(), true);
+  assert.equal(guard.acquire("import"), true);
+  guard.release("import");
+  guard.release("write");
+  assert.equal(guard.isBusy(), false);
+});
+
+test("playlist import rejects concurrent invocation before token lookup and gives immediate status", async () => {
+  let resolveToken, tokens = 0, imports = 0;
+  const messages = [], button = { disabled: false };
+  const context = { commandGuard: createCommandGuard(), $: () => button,
+    spotifyAccessToken: () => { tokens += 1; return new Promise((resolve) => { resolveToken = resolve; }); },
+    setSyncState: (message) => messages.push(message), showFeedback: (message) => messages.push(message),
+    runPlaylistImport: async () => { imports += 1; }, showMessage: (_title, message) => assert.fail(message) };
+  const run = runInNewContext(`${appFunction("async function importSpotifyPlaylist(", "\nasync function startSpotifyAuthorization(")}\nimportSpotifyPlaylist`, context);
+  const first = run("playlist");
+  assert.equal(button.disabled, true);
+  assert.match(messages[0], /in corso/);
+  await run("playlist");
+  assert.equal(tokens, 1);
+  assert.equal(imports, 0);
+  assert.match(messages[1], /già in corso/);
+  resolveToken("not-a-real-token");
+  await first;
+  assert.equal(imports, 1);
+  assert.equal(button.disabled, false);
+  assert.equal(context.commandGuard.isBusy(), false);
+});
+
+test("playlist creation submits once and consumes the preview on success or uncertain failure", async () => {
+  for (const failure of [false, true]) {
+    let resolveToken, writes = 0;
+    const elements = new Map([["#playlistBuilderName", { value: "Discovery" }], ["#playlistBuilderStatus", { textContent: "" }]]);
+    const context = { commandGuard: createCommandGuard(), topArtistPlaylistPreview: { tracks: [{ uri: "spotify:track:a" }] },
+      $: (selector) => elements.get(selector), setPlaylistBuilderBusy() {}, showFeedback() {}, showMessage() {},
+      safeDiagnostics: (value) => value, sessionStorage: { getItem: () => "1" },
+      spotifyAccessToken: () => new Promise((resolve) => { resolveToken = resolve; }),
+      createTopArtistPlaylist: async () => { writes += 1; if (failure) throw new Error("Network outcome unknown");
+        return { playlist: { name: "Discovery" }, tracks: 1 }; } };
+    const run = runInNewContext(`${appFunction("async function beginPlaylistBuilderCreation(", "\nasync function searchMusicBrainzAlbums(")}\nbeginPlaylistBuilderCreation`, context);
+    const first = run();
+    await run();
+    resolveToken("token");
+    await first;
+    await run();
+    assert.equal(writes, 1);
+    assert.equal(context.topArtistPlaylistPreview, null);
+    assert.equal(context.commandGuard.isBusy(), false);
+    if (failure) assert.match(elements.get("#playlistBuilderStatus").textContent, /Nessun tentativo automatico/);
+  }
+});
+
+test("sync entry point blocks overlapping writes, releases on failure, and never retries uncertain work", async () => {
+  let release, operations = 0, feedback = 0;
+  const context = { commandGuard: createCommandGuard(), automaticSyncQueued: false,
+    showFeedback: () => { feedback += 1; }, credentials: () => ({}),
+    performSync: () => { operations += 1; return new Promise((_resolve, reject) => { release = reject; }); },
+    queueMicrotask: () => assert.fail("uncertain writes must not be retried") };
+  const run = runInNewContext(`${appFunction("async function sync(", "\nasync function performSync(")}\nsync`, context);
+  const first = run();
+  await run();
+  assert.equal(operations, 1);
+  assert.equal(feedback, 1);
+  release(new Error("uncertain outcome"));
+  await assert.rejects(first, /uncertain outcome/);
+  assert.equal(operations, 1);
+  assert.equal(context.commandGuard.isBusy(), false);
+});
+
+test("draft badges and list identify each album; resume is local and discard requires confirmation", () => {
+  const body = localUiElement("body");
+  const indicators = [{ hidden: true }, { hidden: true }];
+  const albumCards = ["a", "b"].map((id, index) => ({ dataset: { albumId: id }, querySelector: () => indicators[index] }));
+  const draftButton = {}, resumed = [];
+  let confirmed = false, writes = 0, manualResumes = 0;
+  const qol = { drafts: { "edit:a": { ".rating-input": "4" }, manual: {}, "edit:removed": {} } };
+  const context = { document: { createElement: localUiElement, body }, qol,
+    state: { albums: [qosAlbum("a"), qosAlbum("b")] },
+    $: (selector) => selector === "#draftListButton" ? draftButton
+      : selector === "#albumList" ? { children: albumCards } : { click: () => { manualResumes += 1; } },
+    window: { confirm: () => confirmed }, activateViewTab() {},
+    openAlbumDetails: (id) => resumed.push(id),
+    clearAlbumDraft: (key) => { writes += 1; delete qol.drafts[key]; return true; },
+    fetch: () => assert.fail("draft list and resume must not fetch"),
+  };
+  const functions = runInNewContext(`${appFunction("function refreshDraftIndicators(", "\nfunction suggestionNotSnoozed(")}
+    \n({refreshDraftIndicators, openDraftList})`, context);
+  functions.refreshDraftIndicators();
+  assert.equal(draftButton.textContent, "Bozze locali (3)");
+  assert.deepEqual(indicators.map((entry) => entry.hidden), [false, true]);
+  functions.openDraftList();
+  const dialog = body.children[0], list = dialog.children[1];
+  assert.equal(list.children.length, 3);
+  assert.match(list.children[0].children[0].textContent, /Album a/);
+  assert.equal(list.children[2].children[1].disabled, true, "removed albums cannot resume into another album");
+  list.children[0].children[1].events.click();
+  assert.deepEqual(resumed, ["a"]);
+  assert.equal(writes, 0);
+  list.children[0].children[2].events.click();
+  assert.equal(writes, 0, "dismissed confirmation preserves draft");
+  confirmed = true;
+  list.children[0].children[2].events.click();
+  assert.equal(writes, 1);
+  assert.equal(qol.drafts["edit:a"], undefined);
+  list.children[0].children[1].events.click();
+  assert.equal(manualResumes, 1);
+  functions.refreshDraftIndicators();
+  assert.deepEqual(indicators.map((entry) => entry.hidden), [true, true]);
+  assert.equal(context.state.albums[0].rating, null);
+});
+
+test("failed cover deletion restores suppression and never touches collection storage", async () => {
+  const saved = new Map([["removed", '["kept"]'], ["collection", "unchanged"], ["qol", "drafts"]]);
+  const context = { COVER_STORE: "covers", COVER_REMOVALS_KEY: "removed", Set, JSON,
+    localStorage: { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value),
+      removeItem: (key) => saved.delete(key) },
+    openCoverDatabase: async () => ({ transaction: (name, mode) => {
+      assert.equal(name, "covers");
+      assert.equal(mode, "readwrite");
+      throw new Error("storage unavailable");
+    } }) };
+  const source = `${appFunction("function removedCoverIds(", "\nasync function getCoverInventory(")}
+    ${appFunction("async function removeCachedCovers(", "\nasync function openCoverStorageManager(")}`;
+  const remove = runInNewContext(`${source}\nremoveCachedCovers`, context);
+  await assert.rejects(remove(new Set(["a"])), /storage unavailable/);
+  assert.deepEqual([...saved], [["removed", '["kept"]'], ["collection", "unchanged"], ["qol", "drafts"]]);
+});
+
+test("actionable errors offer redacted copy, settings and canonical playlist review without starting requests", async () => {
+  const actions = localUiElement(), copied = [], opened = [];
+  const context = { document: { createElement: localUiElement }, collectionCoverFailures: new Map(),
+    safeDiagnostics: (value) => redactDiagnostics(value, ["saved-secret"]),
+    technicalDiagnostics, state: { albums: [qosAlbum("a")] }, qol: { drafts: {} },
+    navigator: { clipboard: { writeText: async (value) => copied.push(value) } },
+    showFeedback() {}, openSettings: () => opened.push("settings"), credentials: () => ({}),
+    fetch: () => assert.fail("error actions must not fetch automatically") };
+  const append = runInNewContext(`${appFunction("function appendErrorActions(", "\nfunction openSettings(")}\nappendErrorActions`, context);
+  const id = "a".repeat(22);
+  append(actions, `Sessione Spotify: playlist incompleta https://open.spotify.com/playlist/${id}?token=saved-secret`);
+  assert.equal(actions.children.length, 3);
+  await actions.children[0].events.click();
+  assert.equal(copied.length, 1);
+  assert.equal(copied[0].includes("saved-secret"), false);
+  actions.children[1].events.click();
+  assert.deepEqual(opened, ["settings"]);
+  assert.equal(actions.children[2].href, `https://open.spotify.com/playlist/${id}`);
+  assert.equal(actions.children[2].rel, "noopener noreferrer");
+});
+
+test("copied diagnostics allow only technical metadata, never album, artist, password URL, token or user text", async () => {
+  const album = qosAlbum("a", { name: "Private Album Title", artist: "Private Artist Name" });
+  const raw = `HTTP 403: ${album.artist} · ${album.name}; private personal notes `
+    + "https://private-user:private-password@private.example/PrivateAlbum?token=private-token#private-fragment "
+    + "access_token=private-token";
+  const copied = [], actions = localUiElement();
+  const context = { document: { createElement: localUiElement }, collectionCoverFailures: new Map(),
+    safeDiagnostics: (value) => redactDiagnostics(value, ["private-token"]), technicalDiagnostics,
+    state: { albums: [album] }, qol: { drafts: { "edit:a": { notes: "private draft content" } } },
+    navigator: { clipboard: { writeText: async (value) => copied.push(value) } },
+    showFeedback() {}, credentials: () => ({}), openSettings() {},
+  };
+  const append = runInNewContext(`${appFunction("function appendErrorActions(", "\nfunction openSettings(")}\nappendErrorActions`, context);
+  append(actions, raw);
+  await actions.children[0].events.click();
+  assert.deepEqual(JSON.parse(copied[0]), { product: "Accord PWA", version: "1.4.0",
+    stage: "message", httpStatuses: [403], counts: { albums: 1, drafts: 1, failedCovers: 0 } });
+  for (const secret of [album.name, album.artist, "private personal notes", "private-user", "private-password",
+    "private.example", "PrivateAlbum", "private-token", "private-fragment", "private draft content", "https://"]) {
+    assert.equal(copied[0].includes(secret), false, secret);
+  }
+  assert.ok(context.safeDiagnostics(raw).includes(album.name), "runtime display remains informative");
+  assert.ok(context.safeDiagnostics(raw).includes(album.artist));
+  assert.deepEqual(JSON.parse(technicalDiagnostics({ stage: "Private Album Title", httpStatuses: [403, "private-token", 403, 200],
+    counts: { albums: 1, drafts: "private content", failedCovers: -1, notes: "private notes" },
+    rawMessage: raw, token: "private-token" })),
+  { product: "Accord PWA", version: "1.4.0", stage: "message", httpStatuses: [403], counts: { albums: 1 } });
+});
+
+test("diagnostics redact saved secrets, token shapes, authorization headers and URL credentials, queries and fragments", () => {
+  const text = redactDiagnostics('HTTP 403 Bearer abc123\naccess_token="my-token" refresh_token=refresh-value '
+    + 'api_key=api-secret client_secret=client-secret ghp_123456 github_pat_xyz '
+    + 'https://user:pass@example.test/path?code=private#token private-saved-key',
+  ["private-saved-key"]);
+  for (const secret of ["abc123", "my-token", "refresh-value", "api-secret", "client-secret", "ghp_123456",
+    "github_pat_xyz", "user:pass", "code=private", "#token", "private-saved-key"]) {
+    assert.equal(text.includes(secret), false, secret);
+  }
+  assert.match(text, /HTTP 403/);
+  assert.match(text, /https:\/\/example.test\/path\?\[redatto\]#\[redatto\]/);
+  assert.equal(redactDiagnostics("Authorization: Basic very-private\nCookie: session=private").includes("very-private"), false);
+  assert.equal(redactDiagnostics("Authorization: Basic very-private\nCookie: session=private").includes("session=private"), false);
+});
+
 test("album persistence rolls back the collection on storage failure", () => {
   const previous = [{ id: "a", status: "queued" }];
   const state = { albums: previous };
@@ -633,8 +1082,9 @@ test("reset clears all local filters including pinned-only without changing save
   elements.set("#pinnedOnlyInput", { checked: true });
   const state = { sortOrder: "manual", manualOrder: ["b", "a"] };
   let renders = 0;
-  runInNewContext(`${appFunction("function resetCollectionFilters(", "\nfunction updateSelectionToolbar(")}\nresetCollectionFilters();`, {
+  runInNewContext(`${appFunction("function resetCollectionFilters(", "\nfunction openLocalFacet(")}\nresetCollectionFilters();`, {
     $: (id) => elements.get(id), state, render: () => { renders += 1; },
+    localFacet: { field: "artist", value: "Band" },
     fetch: () => assert.fail("filters must not fetch"),
   });
   assert.equal(renders, 1);
@@ -668,7 +1118,7 @@ test("local cover rendering never enqueues catalog work, while explicit loading 
   const queued = [];
   const context = {
     $: () => ({ children: cards }), getCachedCover: async () => null,
-    coverRenderGeneration: 1,
+    coverRenderGeneration: 1, removedCoverIds: () => new Set(),
     enqueueCollectionCover: (task) => queued.push(task.album.id),
     collectionCoverFailures: new Map(), updateCollectionCoverNotice() {},
     setSyncState() {}, showMessage: (_title, message) => assert.fail(message),
@@ -694,11 +1144,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=64", "style.css?v=24"]) {
+  for (const file of ["app.mjs?v=65", "style.css?v=25"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=38", "ui.mjs?v=3"]) {
+  for (const file of ["core.mjs?v=38", "ui.mjs?v=4"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

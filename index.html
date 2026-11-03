@@ -11,14 +11,14 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=24">
-    <title>Accord v1.3.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=25">
+    <title>Accord v1.4.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.3.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">v1.4.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -62,6 +62,9 @@
               <button id="statisticsButton" type="button">Statistiche locali</button>
               <button id="syncChangesButton" type="button">Modifiche da sincronizzare</button>
               <button id="offlineStatusButton" type="button">Disponibilita' offline</button>
+              <button id="coverStorageButton" type="button">Gestisci copertine offline</button>
+              <button id="draftListButton" type="button">Bozze locali</button>
+              <button id="normalizeLabelsButton" type="button">Uniforma etichette locali…</button>
               <button id="backupButton" type="button">Scarica backup locale JSON</button>
               <label>Ripristina backup JSON <input id="restoreBackupInput" type="file" accept=".json,application/json"></label>
               <label>Viste salvate <select id="savedCollectionView"><option value="">Scegli vista</option></select></label>
@@ -76,6 +79,8 @@
       </section>
 
       <div class="collection-search">
+        <button id="facetBackButton" type="button" hidden>← Torna alla vista precedente</button>
+        <p id="facetSummary" role="status" hidden></p>
         <label class="search">Cerca nella raccolta · solo su questo dispositivo
           <input id="searchInput" type="search" placeholder="Album, artista o genere" autocomplete="off">
         </label>
@@ -471,6 +476,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=64"></script>
+    <script type="module" src="app.mjs?v=65"></script>
   </body>
 </html>

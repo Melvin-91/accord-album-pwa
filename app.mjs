@@ -57,7 +57,9 @@ import {
   albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
   normalizeAccessibility, adjacentAlbumIds, spotifyAlbumIntent, playlistPreviewStatistics,
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
-} from "./ui.mjs?v=3";
+  exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
+  normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
+} from "./ui.mjs?v=4";
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -152,6 +154,11 @@ let detailsAlbumId = null;
 let detailsReturnFocus = null;
 let feedbackTimer;
 let automaticSyncQueued = false;
+const commandGuard = createCommandGuard();
+const COVER_REMOVALS_KEY = "accord-cover-removals-v1";
+let localFacet = null;
+const facetReturnViews = [];
+let navigatingToFacet = false;
 $("#sortOrder").value = state.sortOrder;
 $("#collectionLayout").value = collectionPreferences.layout;
 $("#albumList").dataset.layout = collectionPreferences.layout;
@@ -227,8 +234,10 @@ async function getCachedCover(id) {
 }
 
 async function cacheCover(id, data) {
+  if (removedCoverIds().has(id)) return;
   const database = await openCoverDatabase();
   return new Promise((resolve, reject) => {
+    if (removedCoverIds().has(id)) { resolve(); return; }
     const transaction = database.transaction(COVER_STORE, "readwrite");
     const request = transaction.objectStore(COVER_STORE).put({ id, data: data.slice().buffer });
     transaction.oncomplete = () => resolve();
@@ -521,8 +530,88 @@ function setSyncState(message) {
 
 function showMessage(title, message) {
   $("#messageTitle").textContent = title;
-  $("#messageBody").textContent = message;
+  $("#messageBody").textContent = safeDiagnostics(message);
+  $("#messageDialog .error-actions")?.remove();
+  const actions = document.createElement("div");
+  actions.className = "qol-actions error-actions";
+  appendErrorActions(actions, `${title} ${message}`, () => $("#messageDialog").close());
+  $("#messageDialog").append(actions);
   $("#messageDialog").showModal();
+}
+
+function safeDiagnostics(text) {
+  const secrets = [];
+  for (const storage of [localStorage, sessionStorage]) {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (/(?:token|api-key|verifier|oauth-state|client-id)/i.test(key)) secrets.push(storage.getItem(key));
+    }
+  }
+  return redactDiagnostics(text, secrets);
+}
+
+function appendErrorActions(container, message, close = () => {}, stage = "message") {
+  message = safeDiagnostics(message);
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copia diagnostica oscurata";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(technicalDiagnostics({
+        stage,
+        httpStatuses: [...message.matchAll(/\bHTTP\s+([45]\d{2})\b/gi)].map((match) => Number(match[1])),
+        counts: { albums: state.albums.length, drafts: Object.keys(qol.drafts).length,
+          failedCovers: collectionCoverFailures.size },
+      }));
+      showFeedback("Diagnostica oscurata copiata");
+    } catch (error) { showFeedback(`Copia non riuscita: ${error.message}. Il messaggio visualizzato può contenere dati personali: non condividerlo come diagnostica.`, true); }
+  });
+  container.append(copy);
+  if (/configur|autorizza|sessione|credenzial|token|client id|redirect|permess|HTTP (?:401|403)/i.test(message)) {
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.textContent = "Apri preferenze e collegamenti";
+    settings.addEventListener("click", () => { close(); openSettings(); });
+    container.append(settings);
+  }
+  if (/bozz/i.test(message)) {
+    const drafts = document.createElement("button");
+    drafts.type = "button";
+    drafts.textContent = "Rivedi bozze locali";
+    drafts.addEventListener("click", () => { close(); openDraftList(); });
+    container.append(drafts);
+  }
+  const playlist = message.match(/https:\/\/open\.spotify\.com\/playlist\/([A-Za-z0-9]{22})\b/)
+    || message.match(/ID playlist: ([A-Za-z0-9]{22})\b/);
+  if (playlist || /playlist/i.test(message) && /esito|incomplet|non completat/i.test(message)) {
+    const review = document.createElement("a");
+    review.href = playlist ? `https://open.spotify.com/playlist/${playlist[1]}` : "https://open.spotify.com/collection/playlists";
+    review.target = "_blank";
+    review.rel = "noopener noreferrer";
+    review.textContent = "Rivedi playlist in Spotify ↗";
+    container.append(review);
+  }
+  if (/sincronizzazione|repository GitHub/i.test(message) && credentials().owner) {
+    const review = document.createElement("a");
+    review.href = `https://github.com/${encodeURIComponent(credentials().owner)}/${REPOSITORY}`;
+    review.target = "_blank";
+    review.rel = "noopener noreferrer";
+    review.textContent = "Verifica file nel repository GitHub ↗";
+    container.append(review);
+  }
+  if (collectionCoverFailures.size) {
+    const review = document.createElement("button");
+    review.type = "button";
+    review.textContent = "Rivedi copertine non riuscite";
+    review.addEventListener("click", () => {
+      close();
+      showMessage("Copertine da rivedere", [...collectionCoverFailures].map(([id, reason]) => {
+        const album = state.albums.find((record) => record.id === id);
+        return `${album ? `${album.artist} · ${album.name}` : id}: ${reason}`;
+      }).join("\n") + "\nNessun nuovo tentativo automatico. Usa Carica copertine o Sincronizza solo dopo la verifica.");
+    });
+    container.append(review);
+  }
 }
 
 function openSettings() {
@@ -642,6 +731,7 @@ $("#disconnectSpotify").addEventListener("click", () => {
 });
 
 function showFeedback(message, error = false) {
+  message = safeDiagnostics(message);
   if ($("#settingsDialog").open) {
     $("#settingsFeedback").textContent = message;
     $("#settingsFeedback").hidden = false;
@@ -681,10 +771,11 @@ function setAlbumPins(ids, pinned) {
 function collectionHasFilters() {
   return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
     "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
-    || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value);
+    || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value) || Boolean(localFacet);
 }
 
 function resetCollectionFilters() {
+  localFacet = null;
   for (const selector of ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
     "#statusFilter", "#collectionFilter", "#tagFilter"]) $(selector).value = "";
   $("#pinnedOnlyInput").checked = false;
@@ -692,6 +783,46 @@ function resetCollectionFilters() {
   render();
   $("#searchInput").focus();
 }
+
+function openLocalFacet(field, value) {
+  if (!persistDetailsDraft()) return;
+  facetReturnViews.push({
+    fields: Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value])),
+    pinned: $("#pinnedOnlyInput").checked, facet: localFacet, scroll: window.scrollY,
+    selected: [...selectedAlbumIds], filtersOpen: $("#collectionFilters").open,
+  });
+  navigatingToFacet = true;
+  $("#albumDetailsDialog").close();
+  for (const selector of collectionViewSelectors) {
+    if (!["#sortOrder", "#collectionLayout"].includes(selector)) $(selector).value = "";
+  }
+  $("#pinnedOnlyInput").checked = false;
+  localFacet = { field, value };
+  activateViewTab($("#collectionTab"));
+  render();
+  $("#facetBackButton").focus();
+  $("#collectionPanel").scrollIntoView();
+}
+
+$("#facetBackButton").addEventListener("click", () => {
+  const previous = facetReturnViews.pop();
+  if (!previous) return;
+  localFacet = previous.facet;
+  for (const [selector, value] of Object.entries(previous.fields)) $(selector).value = value;
+  refreshGenreFilters();
+  $("#secondaryGenreFilter").value = previous.fields["#secondaryGenreFilter"];
+  $("#pinnedOnlyInput").checked = previous.pinned;
+  $("#collectionFilters").open = previous.filtersOpen;
+  selectedAlbumIds = new Set(previous.selected);
+  const layout = previous.fields["#collectionLayout"];
+  if (collectionPreferences.layout !== layout) saveCollectionPreferences({ ...collectionPreferences, layout });
+  $("#albumList").dataset.layout = layout;
+  state.sortOrder = previous.fields["#sortOrder"];
+  saveState();
+  render();
+  $("#searchInput").focus({ preventScroll: true });
+  requestAnimationFrame(() => window.scrollTo(0, previous.scroll));
+});
 
 function updateSelectionToolbar() {
   const count = selectedAlbumIds.size;
@@ -728,6 +859,21 @@ function openAlbumDetails(id, returnFocus = document.activeElement) {
   detailsReturnFocus = returnFocus;
   $("#albumDetailsTitle").textContent = album.name;
   $("#albumDetailsMeta").textContent = `${album.artist} · ${album.year || "Anno sconosciuto"}`;
+  $("#albumDetailsDialog .album-facets")?.remove();
+  const facets = document.createElement("div");
+  facets.className = "qol-actions album-facets";
+  facets.setAttribute("aria-label", "Esplora la raccolta locale per etichetta esatta");
+  for (const [field, values] of [["artist", [album.artist]], ["genres", album.genres],
+    ["tags", album.tags], ["collections", album.collections]]) {
+    for (const value of values) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `${{ artist: "Artista", genres: "Genere", tags: "Tag", collections: "Collezione" }[field]}: ${value}`;
+      button.addEventListener("click", () => openLocalFacet(field, value));
+      facets.append(button);
+    }
+  }
+  $("#albumDetailsMeta").after(facets);
   $("#albumDetailsError").hidden = true;
   const fields = template.content.querySelector(".album-fields").cloneNode(true);
   fields.hidden = false;
@@ -800,6 +946,12 @@ $("#albumDetailsForm").addEventListener("submit", (event) => {
   }
 });
 $("#albumDetailsDialog").addEventListener("close", () => {
+  if (navigatingToFacet) {
+    navigatingToFacet = false;
+    detailsAlbumId = null;
+    $("#facetBackButton").focus({ preventScroll: true });
+    return;
+  }
   const target = detailsReturnFocus;
   const id = detailsAlbumId;
   detailsAlbumId = null;
@@ -835,21 +987,14 @@ $("#selectVisibleButton").addEventListener("click", () => {
 $("#bulkStatus").addEventListener("change", updateSelectionToolbar);
 $("#applyBulkStatus").addEventListener("click", () => {
   if (!selectedAlbumIds.size || !$("#bulkStatus").value) return;
-  try {
-    const count = selectedAlbumIds.size;
-    commitAlbumChanges(selectedAlbumIds, { status: $("#bulkStatus").value });
-    selectedAlbumIds.clear();
-    $("#bulkStatus").value = "";
-    render();
-    showFeedback(`Stato aggiornato per ${count} album`);
-  } catch (error) {
-    showFeedback(`Modifiche non salvate: ${error.message}`, true);
-  }
+  openBulkEditor({ status: $("#bulkStatus").value });
 });
 $("#pinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, true));
 $("#unpinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, false));
 $("#loadCoversButton").addEventListener("click", () => {
   $("#viewMenu").open = false;
+  try { localStorage.removeItem(COVER_REMOVALS_KEY); }
+  catch (error) { showFeedback(`Copertine non riattivate: ${error.message}`, true); return; }
   render({ remoteCovers: true });
 });
 document.addEventListener("click", (event) => {
@@ -923,6 +1068,7 @@ for (const selector of ["#albumDetailsDialog", "#commandDialog"]) {
   $(selector).addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.preventDefault();
+    if (selector === "#albumDetailsDialog" && !persistDetailsDraft()) return;
     $(selector).close();
   });
 }
@@ -1036,8 +1182,12 @@ function render(options = {}) {
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
     : filteredAlbums;
   const pins = new Set(collectionPreferences.pinnedIds);
-  const albums = $("#pinnedOnlyInput").checked
+  const pinnedAlbums = $("#pinnedOnlyInput").checked
     ? sortedAlbums.filter((album) => pins.has(album.id)) : sortedAlbums;
+  const albums = pinnedAlbums.filter((album) => exactAlbumFacet(album, localFacet));
+  $("#facetBackButton").hidden = !facetReturnViews.length;
+  $("#facetSummary").hidden = !localFacet;
+  $("#facetSummary").textContent = localFacet ? `Filtro locale esatto · ${localFacet.field}: ${localFacet.value}` : "";
   visibleAlbums = albums;
   selectedAlbumIds = visibleSelection(selectedAlbumIds, albums);
   updateSelectionToolbar();
@@ -1091,6 +1241,11 @@ function render(options = {}) {
     card.querySelector(".album-details-button").addEventListener("click", (event) => openAlbumDetails(album.id, event.currentTarget));
     if (manualSorting) card.classList.add("manual-sortable");
     card.querySelector(".album-title").textContent = album.name;
+    const draftBadge = document.createElement("span");
+    draftBadge.className = "draft-indicator";
+    draftBadge.textContent = "Bozza locale";
+    draftBadge.hidden = !qol.drafts[`edit:${album.id}`];
+    card.querySelector(".album-heading").append(draftBadge);
     card.querySelector(".album-meta").textContent =
       `${album.artist} · ${album.year || "Anno sconosciuto"} · ${labels[album.status]}`;
     card.querySelector(".album-extra").textContent = [
@@ -1103,7 +1258,7 @@ function render(options = {}) {
     card.querySelector(".cover-placeholder").textContent = album.cover_sha256
       ? "Premi Sincronizza per scaricare"
       : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
-    if (!options.remoteCovers && previousCovers.has(album.id)) {
+    if (!options.remoteCovers && previousCovers.has(album.id) && !removedCoverIds().has(album.id)) {
       card.querySelector(".cover-frame").replaceWith(previousCovers.get(album.id));
       card.classList.add("has-cover");
     }
@@ -1178,6 +1333,10 @@ async function renderCovers(albums, generation, remoteCovers = false) {
     for (const [index, album] of albums.entries()) {
       const card = cards.get(album.id);
       if (!card) continue;
+      if (removedCoverIds().has(album.id)) {
+        card.querySelector(".cover-placeholder").textContent = "Copertina rimossa su questo dispositivo";
+        continue;
+      }
       if (card.classList.contains("has-cover")) continue;
       const enqueue = () => {
         if (remoteCovers) enqueueCollectionCover({ album, card, generation });
@@ -3389,6 +3548,8 @@ function renderTopArtistPlaylistPreview(preview) {
 }
 
 async function createTopArtistPlaylist(name, preview, accessToken) {
+  if (!commandGuard.acquire("playlist-write")) throw new Error("Creazione playlist già in corso. Nessuna seconda scrittura avviata.");
+  try {
   if (!name || name.length > 100 || !preview || !Array.isArray(preview.tracks)
       || !preview.tracks.length || preview.tracks.length > 500) {
     throw new Error("Nome o anteprima playlist non validi.");
@@ -3416,6 +3577,7 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
       + (url ? ` Apri la playlist e verifica i brani: ${url}` : ` ID playlist: ${playlist.id}`));
   }
   return { playlist, tracks: uris.length };
+  } finally { commandGuard.release("playlist-write"); }
 }
 
 function setPlaylistBuilderBusy(busy) {
@@ -3427,6 +3589,7 @@ function setPlaylistBuilderBusy(busy) {
 }
 
 async function beginPlaylistBuilderPreview() {
+  if (!commandGuard.acquire("playlist-builder")) { showFeedback("Operazione playlist già in corso"); return; }
   topArtistPlaylistPreview = null;
   $("#playlistBuilderPreview").replaceChildren();
   setPlaylistBuilderBusy(true);
@@ -3447,6 +3610,7 @@ async function beginPlaylistBuilderPreview() {
     $("#playlistBuilderStatus").textContent = `Anteprima non riuscita: ${error.message}`;
   } finally {
     setPlaylistBuilderBusy(false);
+    commandGuard.release("playlist-builder");
   }
 }
 
@@ -3457,24 +3621,30 @@ async function beginPlaylistBuilderCreation() {
     $("#playlistBuilderStatus").textContent = "Inserisci un nome playlist (massimo 100 caratteri).";
     return;
   }
+  if (!commandGuard.acquire("playlist-builder")) { showFeedback("Operazione playlist già in corso · nessuna seconda scrittura"); return; }
+  const preview = topArtistPlaylistPreview;
   setPlaylistBuilderBusy(true);
   $("#playlistBuilderStatus").textContent = "Creo la playlist privata e aggiungo i brani...";
   try {
     const token = await spotifyAccessToken();
     if (!token || sessionStorage.getItem("accord-spotify-playlist-builder-authorized") !== "1") {
-      await startSpotifyAuthorization(JSON.stringify({ name, preview: topArtistPlaylistPreview }), "playlist-create");
+      await startSpotifyAuthorization(JSON.stringify({ name, preview }), "playlist-create");
       return;
     }
-    const result = await createTopArtistPlaylist(name, topArtistPlaylistPreview, token);
+    topArtistPlaylistPreview = null;
+    const result = await createTopArtistPlaylist(name, preview, token);
     $("#playlistBuilderStatus").textContent =
       `Playlist privata creata: ${result.playlist.name || name} · ${result.tracks} brani.`;
     showMessage("Playlist Spotify creata",
       `${result.playlist.name || name}: ${result.tracks} brani aggiunti. La playlist è privata.`
       + (result.playlist.external_urls?.spotify ? ` ${result.playlist.external_urls.spotify}` : ""));
   } catch (error) {
-    $("#playlistBuilderStatus").textContent = `Creazione playlist non riuscita: ${error.message}`;
+    topArtistPlaylistPreview = null;
+    $("#playlistBuilderStatus").textContent = `Creazione non completata: ${safeDiagnostics(error.message)}. Prima di un nuovo invio verifica le playlist in Spotify: l'esito potrebbe essere parziale. Nessun tentativo automatico. Prepara una nuova anteprima solo dopo la verifica.`;
+    showMessage("Rivedi esito playlist Spotify", $("#playlistBuilderStatus").textContent);
   } finally {
     setPlaylistBuilderBusy(false);
+    commandGuard.release("playlist-builder");
   }
 }
 
@@ -3727,6 +3897,7 @@ function saveCollectionQol(next) {
     if (qol.loadError) throw new Error(`Preferenze precedenti non sovrascritte: ${qol.loadError}`);
     localStorage.setItem(QOL_KEY, JSON.stringify(next));
     Object.assign(qol, next);
+    refreshDraftIndicators();
     $("#qolStorageError").hidden = true;
     return true;
   } catch (error) {
@@ -3808,11 +3979,67 @@ function restoreManualAlbumDraft() {
 function restoreDetailsDraft(id) {
   const draft = qol.drafts[`edit:${id}`];
   if (!draft) return;
-  for (const [selector, value] of Object.entries(draft)) {
+  for (const selector of detailsDraftSelectors) {
+    const value = draft[selector];
     const field = $("#albumDetailsFields").querySelector(selector);
     if (field && typeof value === "string") field.value = value;
   }
   showFeedback("Bozza album ripristinata. Premi Salva per applicarla.");
+}
+
+function refreshDraftIndicators() {
+  $("#draftListButton").textContent = `Bozze locali (${Object.keys(qol.drafts).length})`;
+  for (const card of $("#albumList").children) {
+    const indicator = card.querySelector(".draft-indicator");
+    if (indicator) indicator.hidden = !qol.drafts[`edit:${card.dataset.albumId}`];
+  }
+}
+
+function openDraftList() {
+  const dialog = document.createElement("dialog");
+  const title = document.createElement("h2");
+  title.textContent = "Bozze solo su questo dispositivo";
+  dialog.setAttribute("aria-label", title.textContent);
+  const list = document.createElement("div");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Chiudi";
+  close.addEventListener("click", () => dialog.close());
+  const renderDrafts = () => {
+    list.replaceChildren();
+    for (const key of Object.keys(qol.drafts)) {
+      const album = key.startsWith("edit:") ? state.albums.find((record) => record.id === key.slice(5)) : null;
+      const row = document.createElement("div");
+      row.className = "qol-actions";
+      const caption = document.createElement("span");
+      caption.textContent = key === "manual" ? "Ricerca album non completata"
+        : album ? `${album.artist} · ${album.name}` : `Album non più presente (${key})`;
+      const resume = document.createElement("button");
+      resume.type = "button";
+      resume.textContent = "Riprendi";
+      resume.disabled = key !== "manual" && !album;
+      resume.addEventListener("click", () => {
+        dialog.close();
+        if (key === "manual") $("#manualAlbumButton").click();
+        else { activateViewTab($("#collectionTab")); openAlbumDetails(album.id, $("#draftListButton")); }
+      });
+      const discard = document.createElement("button");
+      discard.type = "button";
+      discard.textContent = "Scarta…";
+      discard.addEventListener("click", () => {
+        if (!window.confirm(`Scartare definitivamente la bozza "${caption.textContent}"? L'album salvato non cambia.`)) return;
+        if (clearAlbumDraft(key)) renderDrafts();
+      });
+      row.append(caption, resume, discard);
+      list.append(row);
+    }
+    if (!list.children.length) list.textContent = "Nessuna bozza locale.";
+  };
+  dialog.append(title, list, close);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  renderDrafts();
+  dialog.showModal();
 }
 
 function suggestionNotSnoozed(album) {
@@ -3903,12 +4130,13 @@ function pickLocalAlbum() {
   dialog.showModal();
 }
 
-function openBulkEditor() {
+function openBulkEditor(initialValues = {}) {
   if (!selectedAlbumIds.size) return;
   const ids = new Set(selectedAlbumIds);
   const dialog = document.createElement("dialog");
   const heading = document.createElement("h2");
   heading.textContent = `Modifica ${ids.size} album`;
+  dialog.setAttribute("aria-label", heading.textContent);
   const form = document.createElement("form");
   const controls = new Map();
   for (const [key, caption] of [["status", "Stato"], ["rating", "Voto (vuoto = nessun voto)"],
@@ -3924,6 +4152,10 @@ function openBulkEditor() {
     if (key === "status") for (const [value, label] of Object.entries(labels)) field.add(new Option(label, value));
     else if (key === "rating") { field.type = "number"; field.min = "0.5"; field.max = "5"; field.step = "0.5"; }
     else field.placeholder = "Valori separati da virgole";
+    if (Object.hasOwn(initialValues, key)) {
+      enabled.checked = true;
+      field.value = initialValues[key];
+    }
     field.addEventListener("input", () => { enabled.checked = true; });
     row.append(captionText, enabled, field);
     form.append(row);
@@ -3936,17 +4168,12 @@ function openBulkEditor() {
   }
   const error = document.createElement("p");
   error.setAttribute("role", "alert");
-  const save = document.createElement("button");
-  save.type = "submit";
-  save.textContent = "Applica campi spuntati";
   const close = document.createElement("button");
   close.type = "button";
   close.textContent = "Annulla";
   close.addEventListener("click", () => dialog.close());
-  form.append(mode, error, save, close);
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    try {
+  form.append(mode, error);
+  appendAlbumReview(form, dialog, () => {
       const values = {};
       for (const [key, { enabled, field }] of controls) {
         if (!enabled.checked) continue;
@@ -3954,22 +4181,257 @@ function openBulkEditor() {
           : field.value.split(",").map((value) => value.trim()).filter(Boolean);
       }
       if (!Object.keys(values).length) throw new Error("Spunta almeno un campo.");
-      const next = state.albums.map((album) => ids.has(album.id)
-        ? validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value) }) : album);
-      if (!window.confirm(`Applicare ${Object.keys(values).join(", ")} a ${ids.size} album?`)) return;
-      const previous = state.albums;
-      state.albums = next;
-      try { saveState(); } catch (failure) { state.albums = previous; throw failure; }
-      rememberLocalChanges(ids);
-      dialog.close();
-      render();
-      showFeedback(`${ids.size} album modificati localmente`);
-    } catch (failure) { error.textContent = failure.message; }
-  });
+      return prepareAlbumReview(state.albums, ids,
+        (album) => validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value) }));
+  }, error);
+  form.append(close);
   dialog.append(heading, form);
   document.body.append(dialog);
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
   dialog.showModal();
+}
+
+function appendAlbumReview(form, dialog, buildReview, error) {
+  let review = null;
+  let draftSnapshot = "";
+  const preview = document.createElement("pre");
+  preview.className = "qol-details";
+  preview.setAttribute("role", "status");
+  const prepare = document.createElement("button");
+  prepare.type = "submit";
+  prepare.textContent = "Prepara anteprima · nessuna scrittura";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.textContent = "Conferma queste modifiche locali";
+  confirm.disabled = true;
+  const errorActions = document.createElement("div");
+  errorActions.className = "qol-actions";
+  const showError = (failure) => {
+    error.textContent = safeDiagnostics(failure.message);
+    errorActions.replaceChildren();
+    appendErrorActions(errorActions, error.textContent, () => dialog.close(), "local-review");
+  };
+  const invalidate = () => {
+    review = null;
+    confirm.disabled = true;
+    preview.textContent = "Selezione o campi cambiati: prepara una nuova anteprima.";
+  };
+  form.addEventListener("input", invalidate);
+  form.addEventListener("change", invalidate);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    confirm.disabled = true;
+    review = null;
+    try {
+      const proposed = buildReview();
+      const editing = proposed.changes.filter((change) => qol.drafts[`edit:${change.id}`]);
+      if (editing.length) throw new Error(`${editing.length} album hanno bozze locali. Riprendile o scartale da Bozze locali prima di procedere.`);
+      review = proposed;
+      draftSnapshot = JSON.stringify(qol.drafts);
+      preview.textContent = `${review.selected} selezionati · ${review.changed} realmente modificati · ${
+        review.unchanged} invariati.\nNessuna scrittura eseguita.\n\n${changesText(review.changes) || "Nessuna differenza."}`;
+      confirm.disabled = !review.changed;
+      error.textContent = "";
+      errorActions.replaceChildren();
+    } catch (failure) { showError(failure); }
+  });
+  confirm.addEventListener("click", () => {
+    if (confirm.disabled) return;
+    confirm.disabled = true;
+    try {
+      if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+      assertAlbumReviewCurrent(review, state.albums);
+      if (JSON.stringify(qol.drafts) !== draftSnapshot
+          || JSON.stringify(buildReview().next) !== JSON.stringify(review.next)) {
+        throw new Error("Campi, selezione o bozze cambiati: rigenera l'anteprima.");
+      }
+      commitLocalRestore(localStorage, STORAGE_KEY, state, { ...state, albums: review.next });
+      rememberLocalChanges(new Set(review.changes.map((change) => change.id)));
+      dialog.close();
+      render();
+      showFeedback(`${review.changed} album modificati localmente · ${review.unchanged} invariati`);
+    } catch (failure) { showError(failure); }
+  });
+  form.append(prepare, preview, confirm, errorActions);
+}
+
+function openLabelNormalization() {
+  const proposals = labelNormalizationProposals(state.albums);
+  if (!proposals.length) {
+    showMessage("Etichette locali", "Nessuna variante equivalente rilevata tra generi, tag e collezioni. Nessuna fusione eseguita.");
+    return;
+  }
+  const dialog = document.createElement("dialog");
+  const title = document.createElement("h2");
+  title.textContent = "Uniforma etichette · solo proposte locali";
+  dialog.setAttribute("aria-label", title.textContent);
+  const notice = document.createElement("p");
+  notice.textContent = "Scegli una proposta, l'etichetta finale e gli album. Non vengono uniti album o tipi diversi di etichette. Il ruolo del genere principale viene conservato.";
+  const form = document.createElement("form");
+  const proposalLabel = document.createElement("label");
+  proposalLabel.textContent = "Varianti rilevate";
+  const select = document.createElement("select");
+  proposals.forEach((proposal, index) => select.add(new Option(
+    `${{ genres: "Generi", tags: "Tag", collections: "Collezioni" }[proposal.field]}: ${proposal.labels.join(" / ")}`, String(index))));
+  proposalLabel.append(select);
+  const finalLabel = document.createElement("label");
+  finalLabel.textContent = "Etichetta finale";
+  const final = document.createElement("input");
+  final.type = "text";
+  final.maxLength = 80;
+  final.required = true;
+  finalLabel.append(final);
+  const albums = document.createElement("fieldset");
+  const error = document.createElement("p");
+  error.setAttribute("role", "alert");
+  const refresh = () => {
+    const proposal = proposals[Number(select.value)];
+    final.value = proposal.labels[0];
+    const legend = document.createElement("legend");
+    legend.textContent = "Album da includere";
+    albums.replaceChildren(legend);
+    for (const id of proposal.albumIds) {
+      const album = state.albums.find((record) => record.id === id);
+      if (!album) continue;
+      const label = document.createElement("label");
+      label.className = "check";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = id;
+      checkbox.checked = true;
+      label.append(checkbox, `${album.artist} · ${album.name} · ${album[proposal.field].join(", ")}`);
+      albums.append(label);
+    }
+  };
+  select.addEventListener("change", refresh);
+  refresh();
+  form.append(proposalLabel, finalLabel, albums, error);
+  appendAlbumReview(form, dialog, () => {
+    const ids = new Set([...albums.querySelectorAll("input:checked")].map((input) => input.value));
+    if (!ids.size) throw new Error("Seleziona almeno un album.");
+    const proposal = proposals[Number(select.value)];
+    return prepareAlbumReview(state.albums, ids,
+      (album) => normalizeAlbumLabels(album, proposal.field, proposal.labels, final.value, validateAlbum));
+  }, error);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Annulla";
+  close.addEventListener("click", () => dialog.close());
+  form.append(close);
+  dialog.append(title, notice, form);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.showModal();
+}
+
+function removedCoverIds() {
+  const value = JSON.parse(localStorage.getItem(COVER_REMOVALS_KEY) || "[]");
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string")) {
+    throw new Error("Preferenza copertine rimosse non valida. Nessun download riattivato.");
+  }
+  return new Set(value);
+}
+
+async function getCoverInventory() {
+  const database = await openCoverDatabase();
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(COVER_STORE, "readonly").objectStore(COVER_STORE).getAll();
+    request.onsuccess = () => {
+      try { resolve(coverStorageInventory(request.result)); }
+      catch (error) { reject(error); }
+    };
+    request.onerror = () => reject(new Error(`Impossibile misurare le copertine: ${request.error?.message || "errore IndexedDB"}`));
+  });
+}
+
+async function removeCachedCovers(ids) {
+  const database = await openCoverDatabase();
+  const previous = localStorage.getItem(COVER_REMOVALS_KEY);
+  localStorage.setItem(COVER_REMOVALS_KEY, JSON.stringify([...new Set([...removedCoverIds(), ...ids])]));
+  try {
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(COVER_STORE, "readwrite");
+      const store = transaction.objectStore(COVER_STORE);
+      for (const id of ids) store.delete(id);
+      transaction.oncomplete = () => resolve();
+      transaction.onabort = () => reject(new Error(`Eliminazione copertine interrotta: ${transaction.error?.message || "transazione annullata"}`));
+      transaction.onerror = () => reject(new Error(`Eliminazione copertine non riuscita: ${transaction.error?.message || "errore IndexedDB"}`));
+    });
+  } catch (error) {
+    if (previous === null) localStorage.removeItem(COVER_REMOVALS_KEY);
+    else localStorage.setItem(COVER_REMOVALS_KEY, previous);
+    throw error;
+  }
+}
+
+async function openCoverStorageManager() {
+  const dialog = document.createElement("dialog");
+  const title = document.createElement("h2");
+  title.textContent = "Copertine offline · spazio locale";
+  dialog.setAttribute("aria-label", title.textContent);
+  const notice = document.createElement("p");
+  notice.textContent = "Misuro i byte effettivi dei file copertina salvati, non lo spazio totale su disco o l'overhead IndexedDB. La rimozione non cambia album, preferenze, bozze, cronologia Last.fm o file GitHub. Le copertine rimosse non vengono ricaricate da sole, neppure alla sincronizzazione: usa esplicitamente Carica copertine mancanti online per riattivarle.";
+  const summary = document.createElement("p");
+  summary.setAttribute("role", "status");
+  const list = document.createElement("div");
+  const all = document.createElement("button");
+  all.type = "button";
+  all.textContent = "Rimuovi tutte le immagini della raccolta…";
+  all.disabled = true;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "Chiudi";
+  close.addEventListener("click", () => dialog.close());
+  let inventory = [];
+  let busy = false;
+  const refresh = async () => {
+    inventory = await getCoverInventory();
+    summary.textContent = `${inventory.length} copertine salvate · ${inventory.reduce((total, entry) => total + entry.bytes, 0).toLocaleString()} byte effettivi di immagini. Le immagini solo online e le icone dell'app non sono incluse.`;
+    list.replaceChildren();
+    for (const entry of inventory) {
+      const album = state.albums.find((record) => record.id === entry.id);
+      const row = document.createElement("div");
+      row.className = "qol-actions";
+      const caption = document.createElement("span");
+      caption.textContent = `${album ? `${album.artist} · ${album.name}` : entry.id} · ${entry.bytes.toLocaleString()} byte`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Rimuovi immagine…";
+      remove.addEventListener("click", () => void removeImages(new Set([entry.id]), caption.textContent));
+      row.append(caption, remove);
+      list.append(row);
+    }
+    all.disabled = false;
+  };
+  const removeImages = async (ids, description) => {
+    if (busy) { showFeedback("Rimozione immagini già in corso"); return; }
+    if (!window.confirm(`Rimuovere ${description}? Album, preferenze e bozze restano intatti. Nessun download automatico.`)) return;
+    busy = true;
+    all.disabled = true;
+    list.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    try {
+      await removeCachedCovers(ids);
+      collectionCoverRemoteIds.clear();
+      render();
+      await refresh();
+      void updateOfflineReadiness();
+      showFeedback("Immagini rimosse. Raccolta, preferenze e bozze conservate.");
+    } catch (error) { summary.textContent = `Rimozione non completata: ${error.message}`; }
+    finally {
+      busy = false;
+      all.disabled = false;
+      list.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  };
+  all.addEventListener("click", () => void removeImages(
+    new Set([...inventory.map((entry) => entry.id), ...state.albums.map((album) => album.id)]),
+    `tutte le immagini della raccolta (${inventory.length} file salvati, ${inventory.reduce((sum, entry) => sum + entry.bytes, 0)} byte)`));
+  dialog.append(title, notice, summary, all, list, close);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.showModal();
+  try { await refresh(); }
+  catch (error) { summary.textContent = `Dimensione non disponibile: ${error.message}. Nessuna stima presentata.`; }
 }
 
 async function updateOfflineReadiness() {
@@ -3993,21 +4455,21 @@ async function updateOfflineReadiness() {
         registration.active.postMessage({ type: "accord-offline-status" }, [channel.port2]);
       });
     }
-    const database = await openCoverDatabase();
-    const coverIds = await new Promise((resolve, reject) => {
-      const request = database.transaction(COVER_STORE, "readonly").objectStore(COVER_STORE).getAllKeys();
-      request.onsuccess = () => resolve(new Set(request.result));
-      request.onerror = () => reject(new Error("Impossibile contare le copertine offline"));
-    });
+    const inventory = await getCoverInventory();
+    const coverIds = new Set(inventory.map((entry) => entry.id));
     const count = state.albums.filter((album) => coverIds.has(album.id)).length;
     notice.textContent = `App offline: ${appReady ? "cache installata" : "non ancora pronta"} · copertine salvate: ${
-      count}/${state.albums.length} · ${navigator.onLine ? "rete rilevata (servizi non verificati)" : "offline: Spotify, Last.fm e GitHub non disponibili"}. Ricerca e modifiche locali restano disponibili.`;
+      count}/${state.albums.length} · ${inventory.reduce((total, entry) => total + entry.bytes, 0).toLocaleString()} byte effettivi di immagini · ${navigator.onLine ? "rete rilevata (servizi non verificati)" : "offline: Spotify, Last.fm e GitHub non disponibili"}. Ricerca e modifiche locali restano disponibili.`;
   } catch (error) {
     notice.textContent = `Verifica offline non riuscita: ${error.message}. Disponibilita' non confermata.`;
   }
 }
 
 function initializeCollectionQol() {
+  refreshDraftIndicators();
+  $("#draftListButton").addEventListener("click", openDraftList);
+  $("#normalizeLabelsButton").addEventListener("click", openLabelNormalization);
+  $("#coverStorageButton").addEventListener("click", () => void openCoverStorageManager());
   refreshSavedCollectionViews();
   refreshSuggestionHistory();
   updateLocalSyncSummary();
@@ -4038,6 +4500,7 @@ function initializeCollectionQol() {
     if (!name?.trim()) return;
     const view = Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value]));
     view.pinnedOnly = $("#pinnedOnlyInput").checked;
+    view.facet = localFacet;
     if (saveCollectionQol({ ...qol, views: { ...qol.views, [name.trim()]: view } })) refreshSavedCollectionViews();
   });
   $("#deleteCollectionViewButton").addEventListener("click", () => {
@@ -4050,6 +4513,8 @@ function initializeCollectionQol() {
   $("#savedCollectionView").addEventListener("change", () => {
     const view = qol.views[$("#savedCollectionView").value];
     if (!view) return;
+    try { localFacet = normalizeAlbumFacet(view.facet); }
+    catch (error) { showFeedback(`Vista non applicata: ${error.message}`, true); return; }
     for (const selector of collectionViewSelectors) {
       if (typeof view[selector] === "string") $(selector).value = view[selector];
       if (selector === "#primaryGenreFilter") refreshGenreFilters();
@@ -4069,6 +4534,7 @@ function initializeCollectionQol() {
   discardManual.type = "button";
   discardManual.textContent = "Scarta bozza";
   discardManual.addEventListener("click", () => {
+    if (!window.confirm("Scartare definitivamente la bozza di ricerca locale?")) return;
     if (!clearAlbumDraft("manual")) return;
     $("#manualAlbumSource").value = "spotify";
     for (const selector of manualDraftSelectors.slice(1)) $(selector).value = "";
@@ -4083,6 +4549,7 @@ function initializeCollectionQol() {
   discardDetails.textContent = "Scarta bozza e ricarica album";
   discardDetails.addEventListener("click", () => {
     const id = detailsAlbumId;
+    if (!window.confirm("Scartare definitivamente la bozza e ricaricare l'album salvato?")) return;
     if (!clearAlbumDraft(`edit:${id}`)) return;
     openAlbumDetails(id, detailsReturnFocus);
   });
@@ -4388,7 +4855,9 @@ async function runPlaylistImport(input, accessToken) {
 }
 
 async function importSpotifyPlaylist(input, accessToken = null) {
+  if (!commandGuard.acquire("playlist-import")) { showFeedback("Importazione playlist già in corso"); return; }
   $("#playlistImportButton").disabled = true;
+  setSyncState("Importazione playlist in corso…");
   try {
     const token = accessToken || await spotifyAccessToken();
     if (!token) {
@@ -4408,6 +4877,7 @@ async function importSpotifyPlaylist(input, accessToken = null) {
     showMessage("Errore importazione Spotify", error.message);
   } finally {
     $("#playlistImportButton").disabled = false;
+    commandGuard.release("playlist-import");
   }
 }
 
@@ -4904,6 +5374,18 @@ function chooseConflicts(conflicts) {
 }
 
 async function sync(choices = {}) {
+  if (!commandGuard.acquire("sync")) { showFeedback("Sincronizzazione già in corso · nessun secondo invio"); return; }
+  try { await performSync(choices); }
+  finally {
+    commandGuard.release("sync");
+    if (automaticSyncQueued && credentials().owner && credentials().token) {
+      automaticSyncQueued = false;
+      queueMicrotask(() => void sync());
+    }
+  }
+}
+
+async function performSync(choices = {}) {
   const { owner, token } = credentials();
   if (!owner || !token) {
     openSettings();
@@ -4926,7 +5408,7 @@ async function sync(choices = {}) {
       setSyncState(`${merged.conflicts.length} conflitto${merged.conflicts.length === 1 ? "" : "i"}`);
       const resolutions = await chooseConflicts(merged.conflicts);
       if (!resolutions) return;
-      await sync(resolutions);
+      await performSync(resolutions);
       return;
     }
     const outgoing = albumChanges(remote.albums, merged.albums);
@@ -4974,14 +5456,11 @@ async function sync(choices = {}) {
     render();
     setSyncState(`Sincronizzati ${merged.albums.length} album${historySyncNote} · aggiornato ${new Date().toLocaleTimeString()}`);
   } catch (error) {
+    automaticSyncQueued = false;
     setSyncState("Sincronizzazione non riuscita");
-    showMessage("Errore di sincronizzazione", error.message);
+    showMessage("Errore di sincronizzazione", `${error.message}\nNessun nuovo invio automatico. Se la scrittura ha avuto esito incerto, verifica i file nel repository GitHub e le modifiche locali prima di avviare una nuova sincronizzazione.`);
   } finally {
     $("#syncButton").disabled = false;
-    if (automaticSyncQueued && credentials().owner && credentials().token) {
-      automaticSyncQueued = false;
-      queueMicrotask(() => void sync());
-    }
   }
 }
 
@@ -5285,7 +5764,7 @@ function renderActivity() {
     return item;
   }), ...current.map((node) => {
     const item = document.createElement("li");
-    item.textContent = node.textContent;
+    item.textContent = safeDiagnostics(node.textContent);
     return item;
   }));
   $("#activityHistory").replaceChildren(...activityEntries.map((entry) => {
@@ -5295,6 +5774,7 @@ function renderActivity() {
   }));
 }
 function recordActivity(text) {
+  text = safeDiagnostics(text);
   if (!text || activityEntries[0]?.endsWith(` · ${text}`)) return;
   activityEntries.unshift(`${new Date().toLocaleTimeString()} · ${text}`);
   activityEntries.splice(30);
@@ -5320,7 +5800,16 @@ document.addEventListener("click", (event) => {
 window.addEventListener("storage", (event) => {
   if (event.key === "accord-spotify-rate-limit-until-v1" && $("#activityDialog").open) renderActivity();
 });
-$("#activityButton").addEventListener("click", () => { renderActivity(); $("#activityDialog").showModal(); });
+$("#activityButton").addEventListener("click", () => {
+  renderActivity();
+  $("#activityDialog .error-actions")?.remove();
+  const actions = document.createElement("div");
+  actions.className = "qol-actions error-actions";
+  appendErrorActions(actions, activityStatusNodes.filter((node) => !node.hidden)
+    .map((node) => node.textContent).concat(activityEntries).join("\n"), () => $("#activityDialog").close(), "activity");
+  $("#activityDialog").append(actions);
+  $("#activityDialog").showModal();
+});
 $("#closeActivityButton").addEventListener("click", () => $("#activityDialog").close());
 
 let waitingUpdate = null;
@@ -5338,6 +5827,7 @@ $("#showUpdateButton").addEventListener("click", () => {
   $("#activityDialog").close();
 });
 function updateHasUnsavedWork() {
+  if (commandGuard.isBusy()) return true;
   return Object.keys(qol.drafts).length > 0
     || [...document.querySelectorAll("dialog")].some((dialog) => dialog.open && dialog.id !== "activityDialog")
     || busyActivitySelectors.some((selector) => $(selector).disabled);
@@ -5352,7 +5842,8 @@ $("#applyUpdateButton").addEventListener("click", () => {
       pinnedOnly: $("#pinnedOnlyInput").checked, scrollY: window.scrollY,
       playlist: { name: $("#playlistBuilderName").value, artists: $("#playlistArtistCount").value,
         tracks: $("#playlistTracksPerArtist").value, preview: topArtistPlaylistPreview },
-      openSpotify: $("#openSpotifyInput").value, selectedIds: [...selectedAlbumIds] };
+      openSpotify: $("#openSpotifyInput").value, selectedIds: [...selectedAlbumIds],
+      facet: localFacet, facetReturnViews };
     sessionStorage.setItem("accord-update-view-v1", JSON.stringify(session));
     updateChosen = true;
     $("#applyUpdateButton").disabled = true;
@@ -5372,6 +5863,14 @@ const updateView = sessionStorage.getItem("accord-update-view-v1");
 if (updateView) {
   try {
     const saved = JSON.parse(updateView);
+    localFacet = normalizeAlbumFacet(saved.facet);
+    if (Array.isArray(saved.facetReturnViews)) {
+      for (const view of saved.facetReturnViews) {
+        if (!view || typeof view.fields !== "object" || !Array.isArray(view.selected)
+            || !Number.isFinite(view.scroll)) throw new Error("Cronologia dei filtri locali non valida.");
+        facetReturnViews.push({ ...view, facet: normalizeAlbumFacet(view.facet) });
+      }
+    }
     refreshGenreFilters();
     refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
     refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");

@@ -126,6 +126,116 @@ export function batchAlbumChanges(album, values, mode = "replace") {
   return result;
 }
 
+export function exactAlbumFacet(album, facet) {
+  if (!facet) return true;
+  return facet.field === "artist" ? album.artist === facet.value
+    : ["genres", "tags", "collections"].includes(facet.field)
+      && album[facet.field].includes(facet.value);
+}
+
+export function normalizeAlbumFacet(value) {
+  if (value === null || value === undefined) return null;
+  if (!["artist", "genres", "tags", "collections"].includes(value?.field)
+      || typeof value.value !== "string" || !value.value) throw new Error("Filtro locale esatto non valido.");
+  return { field: value.field, value: value.value };
+}
+
+export function prepareAlbumReview(albums, ids, transform) {
+  const selected = albums.filter((album) => ids.has(album.id));
+  if (selected.length !== ids.size) throw new Error("Selezione cambiata: riapri l'anteprima.");
+  const next = albums.map((album) => ids.has(album.id) ? transform(album) : album);
+  const changes = albumChanges(albums, next);
+  return { snapshot: JSON.stringify(albums), next, changes,
+    selected: selected.length, changed: changes.length, unchanged: selected.length - changes.length };
+}
+
+export function assertAlbumReviewCurrent(review, albums) {
+  if (!review || review.snapshot !== JSON.stringify(albums)) {
+    throw new Error("La raccolta è cambiata. Rigenera l'anteprima prima di confermare.");
+  }
+}
+
+export function labelNormalizationProposals(albums) {
+  const proposals = [];
+  for (const field of ["genres", "tags", "collections"]) {
+    const groups = new Map();
+    for (const album of albums) for (const label of album[field]) {
+      const key = label.normalize("NFKC").toLocaleLowerCase().trim().replace(/[-_\s]+/g, " ");
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(label);
+    }
+    for (const labels of groups.values()) if (labels.size > 1) {
+      const variants = [...labels].sort((a, b) => a.localeCompare(b));
+      proposals.push({ field, labels: variants,
+        albumIds: albums.filter((album) => album[field].some((label) => labels.has(label))).map((album) => album.id) });
+    }
+  }
+  return proposals;
+}
+
+export function normalizeAlbumLabels(album, field, variants, finalLabel, validate) {
+  if (!["genres", "tags", "collections"].includes(field)) throw new Error("Tipo etichetta non valido.");
+  const label = finalLabel.trim().replace(/\s+/g, " ");
+  if (!label || label.length > 80) throw new Error("Scegli un'etichetta finale da 1 a 80 caratteri.");
+  const affected = new Set(variants);
+  const values = album[field].map((value) => affected.has(value) ? label : value);
+  const changes = { [field]: values };
+  if (field === "genres") {
+    changes.primary_genre = affected.has(album.primary_genre) ? label : album.primary_genre;
+  }
+  return validate({ ...album, ...changes });
+}
+
+export function coverStorageInventory(records) {
+  return records.map(({ id, data }) => {
+    const bytes = data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? data.byteLength
+      : typeof Blob !== "undefined" && data instanceof Blob ? data.size : null;
+    if (bytes === null) throw new Error(`Dimensione della copertina ${id} non verificabile.`);
+    return { id, bytes };
+  });
+}
+
+export function createCommandGuard() {
+  const pending = new Set();
+  return {
+    acquire(key) {
+      if (pending.has(key)) return false;
+      pending.add(key);
+      return true;
+    },
+    release(key) { pending.delete(key); },
+    isBusy() { return pending.size > 0; },
+  };
+}
+
+export function technicalDiagnostics({ stage, httpStatuses = [], counts = {} } = {}) {
+  const stages = new Set(["message", "activity", "local-review"]);
+  const statuses = [...new Set(httpStatuses.filter((status) =>
+    Number.isInteger(status) && status >= 400 && status <= 599))].sort((a, b) => a - b);
+  const safeCounts = {};
+  for (const key of ["albums", "drafts", "failedCovers"]) {
+    if (Number.isSafeInteger(counts[key]) && counts[key] >= 0) safeCounts[key] = counts[key];
+  }
+  return JSON.stringify({ product: "Accord PWA", version: "1.4.0",
+    stage: stages.has(stage) ? stage : "message", httpStatuses: statuses, counts: safeCounts }, null, 2);
+}
+
+export function redactDiagnostics(value, secrets = []) {
+  let text = String(value);
+  for (const secret of secrets.filter((entry) => typeof entry === "string" && entry.length)) {
+    text = text.split(secret).join("[redatto]");
+  }
+  return text.replace(/https?:\/\/[^\s<>"']+/gi, (url) => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.origin}${parsed.pathname}${parsed.search ? "?[redatto]" : ""}${parsed.hash ? "#[redatto]" : ""}`;
+    } catch { return "[URL redatto]"; }
+  }).replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, "$1[redatto]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redatto]")
+    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+/g, "[redatto]")
+    .replace(/((?:access_token|refresh_token|client_secret|api_key|authorization|token|code_verifier|password)\s*["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi, "$1[redatto]");
+}
+
 export function normalizeAccessibility(value = {}) {
   return {
     textScale: ["normal", "large", "larger"].includes(value?.textScale) ? value.textScale : "normal",

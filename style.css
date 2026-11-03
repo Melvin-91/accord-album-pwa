@@ -297,6 +297,15 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   .collections-field input, .tags-field input { min-width: 0; }
 }
 
+.draft-indicator { display: inline-block; border: 1px solid var(--accent, #f8b952); border-radius: 6px; padding: 2px 6px; font-size: .75rem; color: var(--accent, #f8b952); }
+.draft-indicator[hidden] { display: none; }
+.album-facets { margin-block: 12px; }
+.album-facets button { white-space: normal; text-align: left; }
+dialog .check, dialog .qol-actions > span { overflow-wrap: anywhere; min-width: 0; }
+dialog select { min-width: 0; }
+#facetSummary { overflow-wrap: anywhere; }
+fieldset { min-width: 0; }
+
 @media (max-width: 400px) {
   .brand h1 { font-size: .875rem; }
   .album-card { grid-template-columns: 20px 48px minmax(0, 1fr); }
