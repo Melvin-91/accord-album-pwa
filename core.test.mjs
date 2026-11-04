@@ -324,7 +324,7 @@ test("shared offline navigation uses only the active version shell without reque
     self: { location: { origin: "https://example.test", href: "https://example.test/pwa/sw.js" },
       addEventListener: (event, listener) => { handlers[event] = listener; } },
     caches: { open: async (key) => {
-      assert.equal(key, "accord-album-pwa-v1.4.1");
+      assert.equal(key, "accord-album-pwa-v1.5.0");
       return { match: async (file) => file === "./index.html" ? shell : undefined, put: () => { stored += 1; } };
     } },
     fetch: async () => { requests += 1; return { ok: false }; },
@@ -631,11 +631,22 @@ test("each collection filter gesture has exactly one render listener", () => {
     } };
   runInNewContext(appFunction('$("#searchInput").addEventListener', "\nfunction clearSpotifySession("), context);
   for (const [id, control] of controls) {
+    if (id === "#searchInput") continue;
     const before = renders;
     control.dispatchEvent(new Event("input"));
     control.dispatchEvent(new Event("change"));
     assert.equal(renders - before, 1, `${id} renders once per gesture`);
   }
+});
+
+test("collection search waits for 150ms of idle typing before rendering", () => {
+  const source = appFunction("let searchRenderTimer;", "\nfor (const input of [$(\"#primaryGenreFilter\")");
+  assert.match(source, /clearTimeout\(searchRenderTimer\)/);
+  assert.match(source, /searchRenderTimer = setTimeout\(\(\) => render\(\), 150\)/);
+});
+
+test("album Spotify links target the installed Spotify app", () => {
+  assert.match(uiAppSource, /link\.href = `spotify:album:\$\{album\.id\}`;/);
 });
 
 test("exact local facets match whole artists and labels, never substrings or another label type", () => {
@@ -1161,7 +1172,7 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=66", "style.css?v=25"]) {
+  for (const file of ["app.mjs?v=67", "style.css?v=25"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }

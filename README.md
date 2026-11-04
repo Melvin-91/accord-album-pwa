@@ -1,5 +1,13 @@
 # Accord · Raccolta album PWA
 
+## Novità PWA 1.5.0
+
+- La ricerca nella raccolta attende una breve pausa di digitazione prima di
+  aggiornare i risultati, evitando render ripetuti mentre scrivi.
+- **Apri in Spotify** usa il collegamento nativo dell'album sul dispositivo;
+  se Spotify è installato e associato, il sistema può avviarlo anche quando è
+  chiuso. Non viene aperto il web player.
+
 ## Correzioni PWA 1.4.1
 
 - I filtri non attivano piu' due render per la stessa scelta; le schede

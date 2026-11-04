@@ -154,6 +154,7 @@ let visibleAlbums = [];
 let detailsAlbumId = null;
 let detailsReturnFocus = null;
 let feedbackTimer;
+let searchRenderTimer;
 let automaticSyncQueued = false;
 const commandGuard = createCommandGuard();
 const COVER_REMOVALS_KEY = "accord-cover-removals-v1";
@@ -1164,6 +1165,8 @@ function refreshGenreFilters() {
 }
 
 function render(options = {}) {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = undefined;
   finishManualDrag(false);
   ensureManualOrder();
   refreshGenreFilters();
@@ -1275,7 +1278,7 @@ function render(options = {}) {
     card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
     const link = card.querySelector(".spotify-link");
-    link.href = album.url;
+    link.href = `spotify:album:${album.id}`;
     const orderControls = card.querySelector(".manual-order-controls");
     orderControls.hidden = !manualSorting;
     if (manualSorting) {
@@ -4618,7 +4621,10 @@ function updateAlbum(id, changes) {
   }
 }
 
-$("#searchInput").addEventListener("input", render);
+$("#searchInput").addEventListener("input", () => {
+  clearTimeout(searchRenderTimer);
+  searchRenderTimer = setTimeout(() => render(), 150);
+});
 for (const input of [$("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
   $("#collectionFilter"), $("#tagFilter")]) {
   input.addEventListener("change", render);
