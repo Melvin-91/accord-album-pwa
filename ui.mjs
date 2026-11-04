@@ -19,6 +19,19 @@ export function prepareAlbumUpdates(albums, selectedIds, changes, validate) {
     ? validate({ ...album, ...changes }) : album);
 }
 
+export function prepareAlbumRemoval(albums, selectedIds) {
+  const ids = new Set(selectedIds);
+  if ([...ids].some((id) => !albums.some((album) => album.id === id))) {
+    throw new Error("La selezione è cambiata. Aggiorna la raccolta prima di rimuovere gli album.");
+  }
+  return albums.filter((album) => !ids.has(album.id));
+}
+
+export function formatSyncSummary(summary) {
+  return `Verso GitHub: ${summary.toGitHub} · verso questo dispositivo: ${summary.toDevice} · `
+    + `invariati: ${summary.unchanged} · conflitti risolti: ${summary.conflictsResolved}`;
+}
+
 export function localCommandResults(query, commands, albums, limit = 30) {
   const terms = String(query || "").normalize("NFKC").toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const matches = (value) => terms.every((term) => value.normalize("NFKC").toLocaleLowerCase().includes(term));
@@ -47,6 +60,19 @@ export function duplicateAlbumGroups(albums) {
     groups.get(key).push(album);
   }
   return [...groups.values()].filter((group) => group.length > 1);
+}
+
+export function collectionAuditSummary(albums, coveredIds = new Set()) {
+  const duplicateGroups = duplicateAlbumGroups(albums);
+  return {
+    total: albums.length,
+    duplicateGroups: duplicateGroups.map((group) => group.map((album) => album.id)),
+    duplicateIds: [...new Set(duplicateGroups.flatMap((group) => group.map((album) => album.id)))].sort(),
+    missingCoverIds: albums.filter((album) => !coveredIds.has(album.id)).map((album) => album.id).sort(),
+    missingYearIds: albums.filter((album) => !String(album.year || "").trim()).map((album) => album.id).sort(),
+    missingGenreIds: albums.filter((album) => !(album.genres || []).length && !album.primary_genre)
+      .map((album) => album.id).sort(),
+  };
 }
 
 export function albumFieldChanges(before, after) {

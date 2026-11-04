@@ -59,7 +59,10 @@ import {
 } from "./core.mjs";
 import {
   localCommandResults,
+  collectionAuditSummary,
+  formatSyncSummary,
   normalizeCollectionPreferences,
+  prepareAlbumRemoval,
   prepareAlbumUpdates,
   visibleSelection,
   editionTitle, duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch,
@@ -83,6 +86,17 @@ test("accessibility and portable preferences allow only local non-secret setting
   assert.deepEqual(preferences, { textScale: "large", contrast: "standard", density: "touch", layout: "compact", pinnedIds: ["a"] });
 });
 
+test("dialogs fit the viewport, keep primary actions visible and avoid horizontal scrolling", () => {
+  const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+  assert.match(css, /dialog \{[^}]*max-height: calc\(100dvh - 24px\);[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
+  assert.match(css, /dialog form \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/);
+  assert.match(css, /\.dialog-scroll \{[^}]*overflow-x: hidden; overflow-y: auto;/);
+  assert.match(css, /\.dialog-footer \{[^}]*border-top:/);
+  assert.match(css, /\.qol-comparison-scroll \{[^}]*overflow-x: hidden;/);
+  assert.doesNotMatch(css, /\.qol-conflict-table \{[^}]*min-width:/);
+  assert.doesNotMatch(css, /overflow-x:\s*auto/);
+});
+
 test("details neighbors follow only the supplied filtered sorted visible list, without wrapping", () => {
   const albums = ["c", "a", "b"].map((id) => ({ id }));
   assert.deepEqual(adjacentAlbumIds(albums, "a"), { previous: "c", next: "b" });
@@ -90,6 +104,34 @@ test("details neighbors follow only the supplied filtered sorted visible list, w
   assert.deepEqual(adjacentAlbumIds(albums, "b"), { previous: "a", next: null });
   assert.deepEqual(adjacentAlbumIds(albums, "missing"), { previous: null, next: null });
   assert.deepEqual(adjacentAlbumIds([], "a"), { previous: null, next: null });
+});
+
+test("local collection audit summarizes duplicates, offline covers, and missing metadata", () => {
+  const albums = [
+    qosAlbum("a", { name: "Album", year: "", genres: [] }),
+    qosAlbum("b", { name: "Album (Deluxe)", genres: [] }),
+    qosAlbum("c", { name: "Other", genres: ["Metal"] }),
+  ];
+  assert.deepEqual(collectionAuditSummary(albums, new Set(["a", "c"])), {
+    total: 3,
+    duplicateGroups: [["a", "b"]],
+    duplicateIds: ["a", "b"],
+    missingCoverIds: ["b"],
+    missingYearIds: ["a"],
+    missingGenreIds: ["a", "b"],
+  });
+});
+
+test("bulk removal validates the selected IDs and leaves unselected albums unchanged", () => {
+  const albums = [qosAlbum("a"), qosAlbum("b"), qosAlbum("c")];
+  assert.deepEqual(prepareAlbumRemoval(albums, new Set(["b"])), [albums[0], albums[2]]);
+  assert.deepEqual(prepareAlbumRemoval(albums, new Set()), albums);
+  assert.throws(() => prepareAlbumRemoval(albums, new Set(["missing"])), /selezione è cambiata/i);
+});
+
+test("sync summary reports both directions, unchanged albums, and resolved conflicts", () => {
+  assert.equal(formatSyncSummary({ toGitHub: 2, toDevice: 1, unchanged: 7, conflictsResolved: 1 }),
+    "Verso GitHub: 2 · verso questo dispositivo: 1 · invariati: 7 · conflitti risolti: 1");
 });
 
 test("detail draft persistence keeps albums separate, clears unchanged drafts, and exposes write failure", () => {
@@ -319,12 +361,15 @@ test("shared offline navigation uses only the active version shell without reque
   const handlers = {};
   let requests = 0, stored = 0, response;
   const shell = { body: "current shell" };
+  const version = readFileSync(new URL("./index.html", import.meta.url), "utf8")
+    .match(/<span class="app-version">v(\d+\.\d+\.\d+)<\/span>/)?.[1];
+  assert.ok(version);
   runInNewContext(readFileSync(new URL("./sw.js", import.meta.url), "utf8"), {
     URL,
     self: { location: { origin: "https://example.test", href: "https://example.test/pwa/sw.js" },
       addEventListener: (event, listener) => { handlers[event] = listener; } },
     caches: { open: async (key) => {
-      assert.equal(key, "accord-album-pwa-v1.4.1");
+      assert.equal(key, `accord-album-pwa-v${version}`);
       return { match: async (file) => file === "./index.html" ? shell : undefined, put: () => { stored += 1; } };
     } },
     fetch: async () => { requests += 1; return { ok: false }; },
@@ -393,6 +438,7 @@ test("explicit update action persists view and preview before activation, never 
     saveState: () => { saves += 1; }, collectionViewSelectors: ["#searchInput", "#sortOrder"],
     selectedAlbumIds: new Set(["a"]), window: { scrollY: 123 },
     localFacet: { field: "artist", value: "Band" },
+    appliedCollectionSearch: "committed",
     facetReturnViews: [{ fields: { "#searchInput": "before" }, scroll: 50, selected: ["a"], facet: null }],
     topArtistPlaylistPreview: { tracks: [{ uri: "t1" }] },
     sessionStorage: { setItem: (_key, value) => { snapshot = JSON.parse(value); } } };
@@ -415,6 +461,7 @@ test("explicit update action persists view and preview before activation, never 
   assert.deepEqual(snapshot.playlist.preview, { tracks: [{ uri: "t1" }] });
   assert.deepEqual(snapshot.facet, { field: "artist", value: "Band" });
   assert.equal(snapshot.facetReturnViews[0].fields["#searchInput"], "before");
+  assert.equal(snapshot.appliedSearch, "committed");
   assert.equal(context.updateChosen, true);
 });
 
@@ -546,7 +593,7 @@ test("sync previews do not write before approval and reject local edits made dur
     let writes = 0, saves = 0, errors = [];
     const state = { albums: [record], base: [] };
     const context = {
-      state, JSON, Uint8Array, Map, Date, albumChanges, commandGuard: createCommandGuard(),
+      state, JSON, Uint8Array, Map, Date, albumChanges, formatSyncSummary, commandGuard: createCommandGuard(),
       $: () => ({ disabled: false }),
       credentials: () => ({ owner: "owner", token: "not-a-real-token" }),
       readRemote: async () => ({ albums: [], covers: new Map(), coverArchive: new Uint8Array(), branch: "main" }),
@@ -560,7 +607,7 @@ test("sync previews do not write before approval and reject local edits made dur
       },
       writeRemote: async () => { writes += 1; },
       saveState: () => { saves += 1; }, render() {}, setSyncState() {}, updateLocalSyncSummary() {},
-      saveCollectionQol() {}, qol: {}, automaticSyncQueued: false,
+      saveCollectionQol() { return true; }, qol: {}, automaticSyncQueued: false,
       showMessage: (_title, message) => errors.push(message),
     };
     await runInNewContext(`${source}\nsync();`, context);
@@ -631,11 +678,37 @@ test("each collection filter gesture has exactly one render listener", () => {
     } };
   runInNewContext(appFunction('$("#searchInput").addEventListener', "\nfunction clearSpotifySession("), context);
   for (const [id, control] of controls) {
+    if (id === "#searchInput") continue;
     const before = renders;
     control.dispatchEvent(new Event("input"));
     control.dispatchEvent(new Event("change"));
     assert.equal(renders - before, 1, `${id} renders once per gesture`);
   }
+});
+
+test("collection search applies only when Enter is pressed", () => {
+  const search = new EventTarget();
+  search.value = "Artist";
+  let renders = 0;
+  const context = { appliedCollectionSearch: "", render: () => { renders += 1; },
+    $: () => search };
+  const source = appFunction("function applyCollectionSearch()", "\nfor (const input of [$(\"#primaryGenreFilter\")");
+  runInNewContext(source, context);
+  search.dispatchEvent(new Event("input"));
+  assert.equal(renders, 0);
+  assert.equal(context.appliedCollectionSearch, "");
+  const enter = new Event("keydown", { cancelable: true });
+  Object.defineProperty(enter, "key", { value: "Enter" });
+  search.dispatchEvent(enter);
+  assert.equal(enter.defaultPrevented, true);
+  assert.equal(renders, 1);
+  assert.equal(context.appliedCollectionSearch, "Artist");
+  assert.match(appFunction("function render(options = {})", "\nasync function renderCovers"),
+    /search: appliedCollectionSearch/);
+});
+
+test("album Spotify links target the installed Spotify app", () => {
+  assert.match(uiAppSource, /link\.href = `spotify:album:\$\{album\.id\}`;/);
 });
 
 test("exact local facets match whole artists and labels, never substrings or another label type", () => {
@@ -672,6 +745,7 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   let scroll = null, renders = 0;
   const context = { $: element, collectionViewSelectors: selectors, facetReturnViews: [],
     selectedAlbumIds: new Set(["a", "b"]), localFacet: null, navigatingToFacet: false,
+    appliedCollectionSearch: original["#searchInput"],
     collectionPreferences: { layout: original["#collectionLayout"] }, state: {},
     window: { scrollY: 540, scrollTo: (_x, y) => { scroll = y; } },
     persistDetailsDraft: () => true, activateViewTab() {}, render: () => { renders += 1; },
@@ -953,6 +1027,89 @@ test("sync entry point blocks overlapping writes, releases on failure, and never
   assert.equal(context.commandGuard.isBusy(), false);
 });
 
+test("sync applies a directional summary and records the number of resolved conflicts", async () => {
+  const local = qosAlbum("local");
+  const remoteOnly = qosAlbum("remote");
+  const button = { disabled: false };
+  const statuses = [];
+  let savedSummary;
+  const context = {
+    credentials: () => ({ owner: "owner", token: "token" }),
+    $: () => button,
+    setSyncState: (message) => statuses.push(message),
+    showMessage: (_title, message) => assert.fail(message),
+    showFeedback: () => assert.fail("Unexpected feedback"),
+    state: { albums: [local], base: [local], loadError: null },
+    remote: { albums: [remoteOnly], covers: new Map(), coverArchive: new Uint8Array(),
+      coversSha: null, sha: null, branch: "main", legacyStatusesFound: false },
+    readRemote: async () => context.remote,
+    threeWayMerge: () => ({ albums: [local, remoteOnly], conflicts: [] }),
+    albumChanges,
+    confirmSyncChanges: async () => true,
+    getCachedCover: async () => null,
+    cacheCover: async () => {},
+    encodeCoverArchive: async () => new Uint8Array(),
+    writeRemote: async () => {},
+    writeRemoteCovers: async () => assert.fail("No cover write expected"),
+    saveState() {},
+    saveCollectionQol: (value) => { savedSummary = value.lastSyncSummary; return true; },
+    qol: {},
+    updateLocalSyncSummary() {},
+    render() {},
+    formatSyncSummary,
+  };
+  context.$ = (selector) => selector === "#syncButton" ? button : assert.fail(selector);
+  const run = runInNewContext(`${appFunction("async function performSync(", '\n$("#syncButton")')}\nperformSync`, context);
+  await run({}, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(savedSummary)), {
+    toGitHub: 1, toDevice: 1, unchanged: 0, conflictsResolved: 2,
+  });
+  assert.match(statuses.at(-1), /Verso GitHub: 1 · verso questo dispositivo: 1 · invariati: 0 · conflitti risolti: 2/);
+  assert.equal(button.disabled, false);
+});
+
+test("sync explicitly reports a confirmed partial write and does not retry it", async () => {
+  const local = qosAlbum("local", { cover_sha256: "0".repeat(64) });
+  const remote = { albums: [], covers: new Map(), coverArchive: new Uint8Array([2]),
+    coversSha: null, sha: null, branch: "main", legacyStatusesFound: false };
+  const button = { disabled: false };
+  const messages = [], writes = [];
+  let saved = 0;
+  const context = {
+    credentials: () => ({ owner: "owner", token: "token" }),
+    $: (selector) => selector === "#syncButton" ? button : assert.fail(selector),
+    setSyncState: () => {},
+    showMessage: (title, message) => messages.push({ title, message }),
+    state: { albums: [local], base: [local], loadError: null },
+    readRemote: async () => remote,
+    threeWayMerge: () => ({ albums: [local], conflicts: [] }),
+    albumChanges,
+    confirmSyncChanges: async () => true,
+    getCachedCover: async () => new Uint8Array([5]),
+    cacheCover: async () => {},
+    crypto: { subtle: { digest: async () => new Uint8Array(32).buffer } },
+    encodeCoverArchive: async () => new Uint8Array([1]),
+    writeRemoteCovers: async () => { writes.push("covers"); },
+    writeRemote: async () => { writes.push("albums"); throw new Error("album write failed"); },
+    saveState: () => { saved += 1; },
+    saveCollectionQol: () => true,
+    qol: {},
+    updateLocalSyncSummary() {},
+    render() {},
+    automaticSyncQueued: true,
+  };
+  const run = runInNewContext(`${appFunction("async function performSync(", '\n$("#syncButton")')}\nperformSync`, context);
+  await run();
+  assert.deepEqual(writes, ["covers", "albums"]);
+  assert.equal(saved, 0);
+  assert.equal(context.automaticSyncQueued, false);
+  assert.equal(messages[0].title, "Sincronizzazione parziale");
+  assert.match(messages[0].message, /GitHub ha confermato: copertine/);
+  assert.match(messages[0].message, /La raccolta locale non è stata aggiornata/);
+  assert.match(messages[0].message, /Nessun nuovo invio automatico/);
+  assert.equal(button.disabled, false);
+});
+
 test("draft badges and list identify each album; resume is local and discard requires confirmation", () => {
   const body = localUiElement("body");
   const indicators = [{ hidden: true }, { hidden: true }];
@@ -1111,7 +1268,7 @@ test("reset clears all local filters including pinned-only without changing save
 });
 
 test("contextual selection actions are hidden until an album is selected", () => {
-  const elements = new Map(["#selectionToolbar", "#selectionCount", "#applyBulkStatus", "#bulkStatus"]
+  const elements = new Map(["#selectionToolbar", "#selectionCount", "#removeSelectedButton", "#applyBulkStatus", "#bulkStatus"]
     .map((id) => [id, { value: "" }]));
   const context = { $: (id) => elements.get(id), selectedAlbumIds: new Set() };
   const body = appFunction("function updateSelectionToolbar(", "\nfunction commitAlbumChanges(");
@@ -1157,15 +1314,58 @@ test("PWA release version matches the title, visible badge and offline cache", (
   assert.ok(sw.includes(`const CACHE = "accord-album-pwa-v${version}";`));
 });
 
+test("deployable document resolves its local app, stylesheet, manifest and modules", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const stylesheet = html.match(/<link rel="stylesheet" href="([^"]+)"/)?.[1];
+  const manifest = html.match(/<link rel="manifest" href="([^"]+)"/)?.[1];
+  const appModule = html.match(/<script type="module" src="([^"]+)"/)?.[1];
+  assert.ok(stylesheet, "The document must link its stylesheet");
+  assert.ok(manifest, "The document must link its install manifest");
+  assert.ok(appModule, "The document must load its application module");
+  for (const resource of [stylesheet, manifest, appModule]) {
+    assert.doesNotThrow(() => readFileSync(new URL(resource.split("?")[0], import.meta.url)), `${resource} must exist`);
+  }
+  for (const [, modulePath] of app.matchAll(/from\s+["'](\.\/[^"']+)["']/g)) {
+    assert.doesNotThrow(() => readFileSync(new URL(modulePath.split("?")[0], import.meta.url)), `${modulePath} must exist`);
+  }
+  assert.match(app, /navigator\.serviceWorker\.register\(["']\.\/sw\.js["']\)/);
+});
+
+test("deployable icons and service-worker pre-cache assets exist relative to the PWA root", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
+  const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
+  const workerFiles = sw.match(/const FILES = \[([\s\S]*?)\];/)?.[1];
+  assert.ok(workerFiles, "The service worker must declare its offline shell");
+
+  const referencedAssets = new Set([
+    ...[...html.matchAll(/(?:href|src)="((?:\.\.\/|\.\/)?assets\/[^"]+)"/g)].map((match) => match[1]),
+    ...manifest.icons.map((icon) => icon.src),
+  ]);
+  const precachedAssets = new Set(
+    [...workerFiles.matchAll(/"((?:\.\.\/|\.\/)?assets\/[^"]+)"/g)].map((match) => match[1]),
+  );
+  assert.ok(referencedAssets.size > 0, "The document and manifest must declare local icons");
+  assert.ok(precachedAssets.size > 0, "The service worker must pre-cache local assets");
+  for (const asset of referencedAssets) {
+    assert.doesNotThrow(() => readFileSync(new URL(asset, import.meta.url)), `${asset} must exist`);
+    assert.ok(precachedAssets.has(asset), `${asset} must be pre-cached`);
+  }
+  for (const asset of precachedAssets) {
+    assert.doesNotThrow(() => readFileSync(new URL(asset, import.meta.url)), `${asset} must exist`);
+  }
+});
+
 test("offline shell versions include every local module and responsive dialogs keep native modality", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=66", "style.css?v=25"]) {
+  for (const file of ["app.mjs?v=70", "style.css?v=26"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=39", "ui.mjs?v=5"]) {
+  for (const file of ["core.mjs?v=39", "ui.mjs?v=6"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

@@ -1,5 +1,24 @@
 # Accord · Raccolta album PWA
 
+## Correzione PWA 1.7.2
+
+- La copia servita da `/pwa/` usa riferimenti alle icone e al pre-cache
+  relativi alla cartella degli asset superiore, evitando il fallimento
+  dell'installazione offline per richieste a percorsi inesistenti.
+
+## Novità PWA 1.6.0
+
+- La ricerca nella raccolta parte solo quando premi Invio; digitare o
+  modificare altri filtri non avvia ricerche intermedie.
+
+## Novità PWA 1.5.0
+
+- La ricerca nella raccolta attende una breve pausa di digitazione prima di
+  aggiornare i risultati, evitando render ripetuti mentre scrivi.
+- **Apri in Spotify** usa il collegamento nativo dell'album sul dispositivo;
+  se Spotify è installato e associato, il sistema può avviarlo anche quando è
+  chiuso. Non viene aperto il web player.
+
 ## Correzioni PWA 1.4.1
 
 - I filtri non attivano piu' due render per la stessa scelta; le schede
@@ -393,9 +412,10 @@ L'audit ha corretto il bypass della coda/cooldown nelle due POST OAuth e la
 durata eccessiva della cache quando la risposta aveva già un'età `Age`/`Date`.
 I test riproducono questi casi con fetch, clock, attesa, storage e Web Locks
 simulati, oltre ai casi preesistenti di cache, paginazione, deduplicazione e
-scritture. Non richiedono account né richieste Spotify reali:
-`node --check app.mjs`, `node --check core.mjs`, `node --check sw.js`,
-`node --test core.test.mjs`.
+scritture. Non richiedono account né richieste Spotify reali. La copia desktop
+si verifica indipendentemente dal workflow Pages con
+`node --check app.mjs`, `node --check core.mjs`, `node --check ui.mjs`,
+`node --check sw.js` e `node --test core.test.mjs`, eseguiti da questa cartella.
 
 La [documentazione rate limit](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)
 descrive una finestra mobile di 30 secondi, ma **non pubblica una soglia
@@ -410,12 +430,9 @@ nessun endpoint rimosso viene usato come aggiramento.
 Abilita GitHub Pages in **Settings → Pages**, scegliendo **GitHub Actions**
 come sorgente. Il workflow pubblica i file statici a ogni push al branch
 `main`. Dopo il deploy, apri `https://Melvin-91.github.io/accord-album-pwa/`.
-Il workflow del repository pubblico carica la sua radice: le copie dei file
-PWA nella radice e nella sottocartella `pwa` devono restare allineate,
-preservando i differenti percorsi relativi delle icone.
-Prima della pubblicazione esegui `node --check app.mjs`,
-`node --check core.mjs` e `node --test core.test.mjs` dalla cartella PWA;
-i test verificano anche il numero di richieste concorrenti, pagine e batch.
+Il workflow del repository Pages verifica la radice e la sottocartella `pwa`
+del repository canonico, non questa copia desktop. Le suite usano percorsi
+relativi e non sono intercambiabili senza verificarne la compatibilità.
 
 ## Primo uso sul telefono
 
