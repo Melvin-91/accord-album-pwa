@@ -1,6 +1,15 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
+
+export function musicAlbumLink(album, service) {
+  if (!["spotify", "tidal"].includes(service)) throw new Error("Servizio musicale non valido.");
+  const query = encodeURIComponent(`${album.artist} ${album.name}`.trim());
+  if (service === "tidal") return /^tidal:[1-9][0-9]*$/.test(album.id)
+    ? `https://tidal.com/browse/album/${tidalAlbumId(album.id)}`
+    : `https://tidal.com/search?q=${query}`;
+  return /^[A-Za-z0-9]+$/.test(album.id) ? `spotify:album:${album.id}` : `spotify:search:${query}`;
+}
 const COOLDOWN = "accord-tidal-cooldown-until-v1";
 const PENDING = "accord-tidal-pkce-v1";
 const TOKEN = "accord-tidal-token-v1";
@@ -28,6 +37,7 @@ const PUBLIC_PATHS = [
   [/^searchResults(?:\/[^/]+\/relationships\/(albums|artists|tracks|playlists))?$/, ["GET"]],
   [/^userCollectionAlbums\/me$/, ["GET"]],
   [/^userCollectionAlbums\/me\/relationships\/items$/, ["GET", "POST", "DELETE"]],
+  [/^userCollectionPlaylists\/me\/relationships\/items$/, ["GET"]],
   [/^playlists$/, ["GET", "POST"]],
   [/^playlists\/[A-Za-z0-9-]+$/, ["GET", "PATCH", "DELETE"]],
   [/^playlists\/[A-Za-z0-9-]+\/relationships\/items$/, ["GET", "POST", "PATCH", "DELETE"]],
@@ -58,7 +68,9 @@ export function tidalAlbumId(value) {
 export function tidalPlaylistId(value) {
   const text = String(value || "").trim();
   if (/^[A-Za-z0-9-]+$/.test(text)) return text;
-  const url = new URL(text);
+  let url;
+  try { url = new URL(text); }
+  catch { throw new Error("Inserisci un ID o link playlist TIDAL valido."); }
   const match = url.pathname.match(/^\/(?:browse\/)?playlist\/([A-Za-z0-9-]+)\/?$/);
   if (url.protocol !== "https:" || !["tidal.com", "www.tidal.com"].includes(url.host)
       || url.username || url.password || !match) throw new Error("Link playlist TIDAL non valido.");

@@ -65,8 +65,8 @@ import {
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
 } from "./ui.mjs?v=9";
-import { createMusicServiceGate } from "./tidal.mjs?v=1";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=3";
+import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=2";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=5";
 
 const musicService = createMusicServiceGate(localStorage);
 
@@ -1050,11 +1050,22 @@ $("#applyBulkStatus").addEventListener("click", () => {
 });
 $("#pinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, true));
 $("#unpinSelectedButton").addEventListener("click", () => setAlbumPins(selectedAlbumIds, false));
-$("#loadCoversButton").addEventListener("click", () => {
+$("#loadCoversButton").addEventListener("click", async () => {
   $("#viewMenu").open = false;
   try { localStorage.removeItem(COVER_REMOVALS_KEY); }
   catch (error) { showFeedback(`Copertine non riattivate: ${error.message}`, true); return; }
-  render({ remoteCovers: true });
+  if (musicService.service === "tidal") {
+    const button = $("#loadCoversButton"), serviceEpoch = musicService.epoch;
+    button.disabled = true;
+    try {
+      const artwork = await tidalUI.loadArtwork(visibleAlbums.filter((album) => !collectionCoverImageUrls.has(album.id)));
+      musicService.assert("tidal", serviceEpoch);
+      if (!artwork) return;
+      for (const [id, url] of artwork) collectionCoverImageUrls.set(id, url);
+      render();
+    } catch (error) { showFeedback(error.message, true); }
+    finally { button.disabled = false; }
+  } else render({ remoteCovers: true });
 });
 document.addEventListener("click", (event) => {
   if (!$("#viewMenu").contains(event.target)) $("#viewMenu").open = false;
@@ -1328,7 +1339,8 @@ function render(options = {}) {
     coverImage.referrerPolicy = "no-referrer";
     card.querySelector(".cover-placeholder").textContent = album.cover_sha256
       ? "Premi Sincronizza per scaricare"
-      : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
+      : musicService.service === "tidal" ? "Copertina TIDAL non caricata · usa Vista e altro"
+        : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
     if (!options.remoteCovers && previousCovers.has(album.id) && !removedCoverIds().has(album.id)) {
       card.querySelector(".cover-frame").replaceWith(previousCovers.get(album.id));
       card.classList.add("has-cover");
@@ -1344,8 +1356,8 @@ function render(options = {}) {
     card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
     const link = card.querySelector(".album-player-link");
-    const tidalAlbum = album.id.startsWith("tidal:");
-    const albumLink = tidalAlbum ? album.url : `spotify:album:${album.id}`;
+    const tidalAlbum = musicService.service === "tidal";
+    const albumLink = musicAlbumLink(album, musicService.service);
     link.hidden = !albumLink;
     if (albumLink) link.href = albumLink;
     link.target = "_self";
@@ -1481,7 +1493,8 @@ async function renderCovers(albums, generation, remoteCovers = false) {
       }, { once: true });
       image.addEventListener("error", () => {
         if (generation !== coverRenderGeneration) return;
-        card.querySelector(".cover-placeholder").textContent = "Cerco una copertina online…";
+        card.querySelector(".cover-placeholder").textContent = musicService.service === "tidal"
+          ? "Copertina TIDAL non caricata · usa Vista e altro" : "Cerco una copertina online…";
         card.classList.add("cover-error");
         collectionCoverFailures.set(album.id, "La miniatura sincronizzata non è leggibile come immagine.");
         enqueue();
@@ -5318,13 +5331,13 @@ async function finishSpotifyAuthorization() {
 }
 
 $("#playlistImportButton").addEventListener("click", () => {
-  if (musicService.service === "tidal") { activateViewTab($("#playlistBuilderTab")); return; }
+  if (musicService.service === "tidal") { tidalUI.openImport(); return; }
   $("#playlistInput").value = "";
   $("#playlistDialog").showModal();
 });
 
 $("#manualAlbumButton").addEventListener("click", () => {
-  if (musicService.service === "tidal") { activateViewTab($("#collectionTab")); $("#tidalAlbumQuery").focus(); return; }
+  if (musicService.service === "tidal") { tidalUI.openCatalog(); return; }
   $("#manualAlbumSource").value = "lastfm";
   $("#manualAlbumQuery").value = "";
   $("#manualAlbumArtist").value = "";
@@ -5904,9 +5917,20 @@ function openSpotifyAlbumIntent(input) {
   }
   $("#manualAlbumStatus").textContent = "Album non presente localmente. Premi Cerca per autorizzare la ricerca Spotify; nessuna richiesta ancora eseguita.";
 }
+function openTidalAlbumIntent(input) {
+  const id = tidalAlbumId(input), album = state.albums.find((record) => record.id === `tidal:${id}`);
+  if (album) { activateViewTab($("#collectionTab")); openAlbumDetails(album.id); }
+  else {
+    tidalUI.openCatalog(`https://tidal.com/browse/album/${id}`);
+    showFeedback("Album non presente localmente. Premi Leggi album dal link / ID: nessuna richiesta avviata.");
+  }
+}
 $("#openSpotifyForm").addEventListener("submit", (event) => {
   event.preventDefault();
-  try { openSpotifyAlbumIntent($("#openSpotifyInput").value); }
+  try {
+    if (musicService.service === "tidal") openTidalAlbumIntent($("#openSpotifyInput").value);
+    else openSpotifyAlbumIntent($("#openSpotifyInput").value);
+  }
   catch (error) { showFeedback(error.message, true); }
 });
 
@@ -5918,6 +5942,11 @@ function receiveSharedAlbum() {
   for (const key of keys) url.searchParams.delete(key);
   history.replaceState(history.state, "", url);
   try {
+    if (musicService.service === "tidal") {
+      const link = input.match(/https:\/\/(?:www\.)?tidal\.com\/(?:browse\/)?album\/[1-9][0-9]*(?:[/?#][^\s]*)?/)?.[0] || input;
+      openTidalAlbumIntent(link);
+      return;
+    }
     const intent = spotifyAlbumIntent(input);
     $("#openSpotifyInput").value = intent.url;
     if (state.albums.some((album) => album.id === intent.id)) openSpotifyAlbumIntent(intent.url);
@@ -6178,8 +6207,9 @@ if (updateView) {
   } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
 }
 const incomingShare = ["share_url", "share_text", "share_title"].some((key) => new URL(location.href).searchParams.has(key));
-initializeTidalUI({
+const tidalUI = initializeTidalUI({
   gate: musicService,
+  selectView: (view) => activateViewTab(view === "collection" ? $("#collectionTab") : $("#playlistBuilderTab")),
   addAlbum: (album, artwork) => {
     const record = validateAlbum(album);
     if (artwork) collectionCoverImageUrls.set(record.id, artwork);
@@ -6188,6 +6218,9 @@ initializeTidalUI({
     return added;
   },
   changed: () => {
+    const name = musicService.service === "tidal" ? "TIDAL" : "Spotify";
+    $("#openMusicAlbumLabel").textContent = `Apri link album ${name} · prima cerca sul dispositivo`;
+    $("#openSpotifyInput").placeholder = `Incolla un link album ${name}`;
     collectionCoverQueue.length = 0;
     suggestionCoverQueue.length = 0;
     collectionCoverObserver?.disconnect();

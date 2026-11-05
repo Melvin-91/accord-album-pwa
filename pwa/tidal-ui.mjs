@@ -1,6 +1,6 @@
 import {
-  createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=1";
+  TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
+} from "./tidal.mjs?v=2";
 
 const CLIENT = "accord-tidal-client-id-v1";
 const element = (tag, text, attributes = {}) => {
@@ -23,7 +23,7 @@ const selection = (parent, label, values) => {
   wrapper.append(select); parent.append(wrapper); return select;
 };
 
-export function initializeTidalUI({ gate, addAlbum, changed }) {
+export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {} }) {
   const epoch = () => gate.epoch;
   const transport = createTidalTransport({
     storage: localStorage, writeStorage: localStorage, active: () => gate.service === "tidal",
@@ -39,6 +39,10 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
   const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"]]);
   provider.id = "musicService"; provider.value = gate.service;
   serviceBox.append(element("p", "La raccolta locale è unica; il servizio scelto cambia solo le funzioni online.", { class: "summary" }));
+  const capabilities = element("p",
+    "TIDAL: catalogo, preferiti, importazione e gestione playlist, album simili e mix ufficiali. Classifiche e cronologia Spotify non vengono usate come dati TIDAL. Il browser non può controllare l'app TIDAL Windows; Last.fm e i dati locali restano separati.",
+    { class: "summary", id: "tidalCapabilities" });
+  serviceBox.append(capabilities);
   const configuration = element("fieldset", "", { class: "preference-group", id: "tidalConfiguration" });
   configuration.append(element("legend", "TIDAL · accesso con PKCE"));
   const client = input(configuration, "Client ID dell’app TIDAL (non Client Secret)",
@@ -53,7 +57,8 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
     href: "https://developer.tidal.com/", target: "_blank", rel: "noopener noreferrer",
   });
   configuration.append(portal);
-  configuration.append(element("p", "Abilita Authorization Code + PKCE e gli scope user.read, search.read, collection.read/write, playlists.read/write, recommendations.read. Nessun backend o secret. I token restano nella sessione di questo browser; il Client ID resta sul dispositivo.", { class: "notice" }));
+  configuration.append(element("p", `Abilita Authorization Code + PKCE e gli scope ${TIDAL_SCOPES}. Nessun backend o secret. I token restano nella sessione di questo browser; il Client ID resta sul dispositivo.`, { class: "notice" }));
+  configuration.append(element("p", "Se il portale mostra Allowed scopes: None, l’app non dispone dei permessi richiesti da Accord. Abilitali nelle impostazioni dell’app; se non sono modificabili, contatta il supporto TIDAL Developer. L’errore 1002 prima del login va verificato nel portale: salvare il Client ID qui non abilita i permessi. Non inserire Client Secret o password e non ripetere automaticamente il collegamento.", { class: "notice", id: "tidalAuthorizationHelp" }));
   const authStatus = element("p", "", { id: "tidalAuthStatus", role: "status", class: "summary" });
   configuration.append(authStatus);
   const saveClient = button(configuration, "Salva Client ID", () => {
@@ -65,7 +70,7 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
   const connect = button(configuration, "Collega / autorizza TIDAL", () => run(async () => {
     localStorage.setItem(CLIENT, client.value.trim());
     location.assign(await auth.authorize(client.value.trim(), location.href));
-  }), "primary");
+  }, authStatus), "primary");
   connect.id = "tidalConnectButton";
   const disconnect = button(configuration, "Scollega TIDAL", () => {
     auth.disconnect(); clearPreview(); results.replaceChildren(); status.textContent = "Sessione TIDAL rimossa.";
@@ -102,6 +107,21 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
   favoriteDetails.append(element("summary", "Mostra altre azioni"));
   button(favoriteDetails, "Leggi i miei album preferiti · anteprima importazione", () => read("collection"));
   library.append(collectionDetails, favoriteDetails);
+  const importDetails = element("details", "", { class: "tidal-playlist-import" });
+  importDetails.append(element("summary", "Importa album da una playlist TIDAL"));
+  const importControls = element("div", "", { class: "tidal-controls" });
+  const importPlaylist = input(importControls, "Playlist TIDAL da importare · ID o link", "", { maxlength: "300" });
+  importPlaylist.id = "tidalImportPlaylist";
+  importDetails.append(importControls);
+  button(importDetails, "Elenca playlist TIDAL da importare", () => read("importPlaylists"));
+  button(importDetails, "Anteprima album della playlist TIDAL", () => read("importPlaylist"), "primary");
+  importPlaylist.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void read("importPlaylist"); }
+  });
+  importDetails.append(element("p",
+    "Scegli una playlist salvata oppure incolla il link. Leggi l’anteprima e seleziona gli album da aggiungere: nessuna scrittura remota o sincronizzazione automatica.",
+    { class: "summary" }));
+  library.append(importDetails);
 
   const suggestionsHeading = element("div", "", { class: "tidal-panel-heading" });
   suggestionsHeading.append(element("p", "SCOPERTA MUSICALE", { class: "eyebrow" }),
@@ -237,6 +257,8 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
   function updateService() {
     gate.select(provider.value);
     const tidal = gate.service === "tidal";
+    capabilities.hidden = !tidal;
+    document.getElementById("playlistImportButton").textContent = `Importa playlist ${tidal ? "TIDAL" : "Spotify"}…`;
     for (const section of sections) section.hidden = !tidal;
     for (const id of ["suggestionsPanel", "playlistBuilderPanel"]) {
       for (const child of document.getElementById(id).children) if (!child.dataset.tidalPanel) child.hidden = tidal;
@@ -254,12 +276,12 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
       updateService();
     }
   });
-  async function run(action) {
+  async function run(action, errorOutput = status) {
     if (busy) return;
     busy = true;
     for (const section of sections) section.setAttribute("aria-busy", "true");
-    try { gate.assert("tidal"); await action(); }
-    catch (error) { status.textContent = error.message; }
+    try { gate.assert("tidal"); return await action(); }
+    catch (error) { errorOutput.textContent = error.message; }
     finally { busy = false; for (const section of sections) section.removeAttribute("aria-busy"); }
   }
   function catalogPath(path, include) {
@@ -272,6 +294,8 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
       refreshSelectionControls();
       if (["search", "album", "collection"].includes(action)) collectionDetails.open = true;
       if (!/^[A-Za-z]{2}$/.test(country.value)) throw new Error("Immetti un codice paese ISO di due lettere.");
+      const requestedPlaylist = ["playlist", "importPlaylist"].includes(action)
+        ? tidalPlaylistId(action === "importPlaylist" ? importPlaylist.value : playlist.value) : null;
       const token = await auth.access(client.value.trim()); gate.assert("tidal", current);
       let path, label = "", playlistId = null;
       if (action === "search") {
@@ -286,16 +310,13 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
       } else if (action === "collection") {
         path = "userCollectionAlbums/me/relationships/items?include=items.artists,items.coverArt";
         label = "Album preferiti TIDAL";
-      } else if (action === "playlist") {
-        playlistId = tidalPlaylistId(playlist.value);
+      } else if (["playlist", "importPlaylist"].includes(action)) {
+        playlistId = requestedPlaylist;
         path = catalogPath(`playlists/${playlistId}/relationships/items`, "items.albums.artists,items.albums.coverArt");
         label = `Playlist TIDAL ${playlistId}`;
-      } else if (action === "playlists") {
-        const profile = await transport.request("users/me", token); gate.assert("tidal", current);
-        if (!profile.data?.id) throw new Error("Profilo TIDAL senza ID utente.");
-        path = catalogPath("playlists", "owners");
-        path += `&${new URLSearchParams({ "filter[owners.id]": profile.data.id })}`;
-        label = "Le mie playlist TIDAL";
+      } else if (["playlists", "importPlaylists"].includes(action)) {
+        path = "userCollectionPlaylists/me/relationships/items?include=items";
+        label = "Playlist della raccolta TIDAL";
       } else if (source.value === "similarAlbums") {
         path = catalogPath(`albums/${tidalAlbumId(seed.value)}/relationships/similarAlbums`, "similarAlbums.artists,similarAlbums.coverArt");
         label = "Somiglianza album ufficiale TIDAL (non ascolti)";
@@ -352,6 +373,7 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
         ];
       }
       if (playlistId) lastPlaylist = playlistId;
+      if (action === "importPlaylist") otherRows = [];
       for (const row of [...albumRows, ...otherRows].slice(0, 250)) {
         const resource = row.resource;
         if (row.album) {
@@ -370,7 +392,10 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
           item.append(element("a", "Apri in TIDAL ↗", { href: `https://tidal.com/browse/${singular}/${encodeURIComponent(resource.id)}`, target: "_blank", rel: "noopener noreferrer", class: "tidal-result-link" }));
         }
         if (resource.type === "artists") button(item, "Album dell’artista", () => readArtist(resource.id));
-        if (resource.type === "playlists") button(item, "Usa questa playlist", () => { playlist.value = resource.id; read("playlist"); });
+        if (resource.type === "playlists") button(item, "Usa questa playlist", () => {
+          if (action === "importPlaylists") { importPlaylist.value = resource.id; return read("importPlaylist"); }
+          playlist.value = resource.id; return read("playlist");
+        });
         rows.push(row); results.append(item);
       }
       if (!rows.length) results.append(element("p", "Nessun risultato TIDAL disponibile per questa ricerca.", { class: "summary" }));
@@ -455,7 +480,37 @@ export function initializeTidalUI({ gate, addAlbum, changed }) {
     const callbackUrl = location.href;
     run(async () => {
       if (await auth.finish(callbackUrl)) authStatus.textContent = "TIDAL collegato. Scegli una lettura: nessuna scrittura ripresa automaticamente.";
-    }).finally(() => history.replaceState(null, "", `${location.pathname}${location.hash}`));
+    }, authStatus).finally(() => history.replaceState(null, "", `${location.pathname}${location.hash}`));
   }
-  return { auth, transport };
+  function openImport() {
+    gate.assert("tidal"); selectView("collection");
+    importDetails.open = true; moveOutput(); importPlaylist.focus();
+  }
+  function openCatalog(value = "") {
+    gate.assert("tidal"); selectView("collection");
+    collectionDetails.open = true; query.value = value; moveOutput(); query.focus();
+  }
+  async function loadArtwork(albums) {
+    return run(async () => {
+      selectView("collection"); moveOutput();
+      const ids = [...new Set(albums.filter((album) => /^tidal:[1-9][0-9]*$/.test(album.id)).map((album) => album.id))];
+      if (!ids.length) {
+        status.textContent = "Nessun album TIDAL da verificare. Nessuna richiesta inviata.";
+        return new Map();
+      }
+      const current = epoch(), token = await auth.access(client.value.trim());
+      const documents = [];
+      for (const id of ids.slice(0, 10)) {
+        gate.assert("tidal", current);
+        documents.push(await transport.request(catalogPath(`albums/${tidalAlbumId(id)}`, "artists,coverArt"), token));
+      }
+      gate.assert("tidal", current);
+      const artwork = tidalAlbumArtwork(documents);
+      status.textContent = `Copertine TIDAL disponibili: ${artwork.size}. `
+        + (ids.length > 10 ? "Risultato PARZIALE: massimo 10 album per richiesta manuale. " : "")
+        + "Solo album TIDAL; nessuna ricerca Spotify o sostituzione delle edizioni.";
+      return artwork;
+    });
+  }
+  return { auth, transport, openImport, openCatalog, loadArtwork };
 }

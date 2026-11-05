@@ -1,5 +1,32 @@
 # Accord · Raccolta album PWA
 
+## Novita' PWA 1.12.0 · Musica segue il servizio scelto
+
+- **Importa playlist TIDAL** nella raccolta: elenca le playlist salvate
+  oppure incolla un link/ID, leggi l'anteprima e seleziona gli album da
+  importare. I duplicati non sovrascrivono i dati locali; nessuna
+  scrittura remota o sincronizzazione GitHub automatica.
+- Apri album, aggiunta, link incollati/condivisi e pulsanti importazione
+  seguono il selettore. Un album di un altro catalogo apre una ricerca
+  nel servizio scelto, senza riciclare gli ID.
+- Recupero manuale copertine dei soli album TIDAL visualizzati, massimo
+  dieci per operazione con segnalazione del limite e cooldown comune.
+- Suggerimenti TIDAL: mix e somiglianze ufficiali, non statistiche
+  Spotify. La PWA non controlla il player Windows; Last.fm e i dati
+  locali restano distinti. Nessuna modifica alle chiavi di storage.
+
+## Correzione PWA 1.11.3 · Diagnostica account TIDAL
+
+- TIDAL resta nelle stesse **Preferenze e collegamenti** di Spotify e
+  Last.fm. Gli errori di collegamento vengono mostrati in questa finestra,
+  non nella scheda musica sottostante.
+- La guida spiega **Allowed scopes: None** e l'errore **1002** prima del
+  login: il Client ID salvato localmente non concede permessi all'app.
+  Abilitare nel portale TIDAL `user.read`, `search.read`, `collection.read`,
+  `collection.write`, `playlists.read`, `playlists.write`, `recommendations.read`.
+  Se non sono modificabili, rivolgersi al supporto TIDAL Developer.
+  Restano invariati PKCE, redirect esatto, cooldown e nessun retry automatico.
+
 ## Correzione PWA 1.11.2 · Aggiunta manuale locale
 
 - Anche l'aggiunta manuale da Spotify e l'abbinamento da Last.fm o

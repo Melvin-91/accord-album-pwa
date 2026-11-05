@@ -23,6 +23,7 @@ class Node {
     this.listeners.get(name).push(listener);
   }
   async dispatch(name) { for (const listener of this.listeners.get(name) || []) await listener({ target: this }); }
+  focus() { this.focused = true; }
   append(...nodes) {
     for (const node of nodes) {
       if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node);
@@ -59,7 +60,7 @@ const playlistDocument = {
       relationships: { albums: { data: [{ type: "albums", id: "123" }] } } }],
 };
 
-async function uiFixture(run) {
+async function uiFixture(run, albumResponse = albumDocument) {
   const root = new Node("main"), tabs = new Node("nav"), existing = new Map();
   const settingsDialog = new Node("dialog"), settingsScroll = new Node("div");
   settingsDialog.append(settingsScroll);
@@ -76,7 +77,7 @@ async function uiFixture(run) {
   const selectedTab = new Node("button"); selectedTab.setAttribute("aria-controls", "collectionPanel");
   const walk = (node = root) => [node, ...node.children.flatMap((child) => walk(child))];
   const find = (text) => {
-    const found = walk().find((node) => node._text === text || node.textContent === text);
+    const found = walk().find((node) => node._text === text) || walk().find((node) => node.textContent === text);
     assert.ok(found, `UI element: ${text}`); return found;
   };
   const field = (label) => find(label).children[0];
@@ -101,8 +102,12 @@ async function uiFixture(run) {
       calls.push({ url: String(url), ...options });
       assert.match(String(url), /^https:\/\/openapi\.tidal\.com\/v2\//);
       const path = new URL(url).pathname;
-      let document = albumDocument;
-      if (path.includes("NoMatch")) document = { data: [] };
+      let document = albumResponse;
+      if (path === "/v2/userCollectionPlaylists/me/relationships/items") document = {
+        data: [{ type: "playlists", id: "playlist-one" }],
+        included: [{ type: "playlists", id: "playlist-one", attributes: { name: "Saved TIDAL playlist" } }],
+      };
+      else if (path.includes("NoMatch")) document = { data: [] };
       if (options.method === "POST" && path === "/v2/playlists") document = { data: { type: "playlists", id: "created-id" } };
       else if (options.method !== "GET") return new Response(null, { status: 204 });
       else if (path.includes("Mixes/me")) document = { data: { type: "userDailyMixes", id: "me" },
@@ -115,8 +120,10 @@ async function uiFixture(run) {
   for (const [key, value] of Object.entries(overrides)) Object.defineProperty(globalThis, key, { configurable: true, value, writable: true });
   try {
     const gate = createMusicServiceGate(local);
-    initializeTidalUI({ gate, addAlbum: (album) => { imported.push(album); return true; }, changed() {} });
-    await run({ root, walk, find, field, local, session, calls, imported, gate, existing });
+    const views = [];
+    const ui = initializeTidalUI({ gate, addAlbum: (album) => { imported.push(album); return true; },
+      changed() {}, selectView: (view) => views.push(view) });
+    await run({ root, walk, find, field, local, session, calls, imported, gate, existing, ui, views });
   } finally {
     for (const [key, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
@@ -166,6 +173,125 @@ test("the collection stays available on TIDAL, configuration shares account sett
     await f.find("Importa album selezionati nella raccolta locale").dispatch("click");
     assert.equal(f.imported.length, 1); assert.equal(f.imported[0].id, "tidal:123");
     assert.equal(f.calls.length, 1);
+  });
+});
+
+test("dedicated TIDAL playlist import opens in collection without requests, lists saved playlists and imports only previewed albums", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    assert.match(f.existing.get("playlistImportButton").textContent, /TIDAL/);
+    f.ui.openImport();
+    assert.deepEqual(f.views, ["collection"]);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.field("Playlist TIDAL da importare · ID o link").focused, true);
+    assert.equal(f.find("Importa album da una playlist TIDAL").parent.open, true);
+    await f.find("Elenca playlist TIDAL da importare").dispatch("click");
+    assert.equal(f.calls.length, 1);
+    assert.match(f.calls[0].url, /userCollectionPlaylists\/me\/relationships\/items/);
+    await f.find("Usa questa playlist").dispatch("click");
+    assert.equal(f.calls.length, 2);
+    assert.match(f.calls[1].url, /playlists\/playlist-one\/relationships\/items/);
+    const cards = f.walk().filter((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
+    assert.equal(cards.length, 1, "duplicate track occurrences import one album");
+    cards[0].children[0].children[0].checked = true;
+    await cards[0].children[0].children[0].dispatch("change");
+    await f.find("Importa album selezionati nella raccolta locale").dispatch("click");
+    assert.equal(f.imported.length, 1);
+    assert.equal(f.imported[0].id, "tidal:123");
+    assert.equal(f.calls.length, 2, "local import performs no remote writes or additional reads");
+    assert.ok(f.calls.every((call) => call.method === "GET"));
+    assert.equal(f.session.getItem("accord-spotify-access-token"), "preserved-session");
+    f.field("Servizio musicale").value = "spotify";
+    await f.field("Servizio musicale").dispatch("change");
+    assert.match(f.existing.get("playlistImportButton").textContent, /Spotify/);
+    assert.throws(() => f.ui.openImport(), /cambiato/);
+  });
+});
+
+test("TIDAL playlist import supports pasted links and respects the shared cooldown before any read", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    f.ui.openImport();
+    f.field("Playlist TIDAL da importare · ID o link").value = "https://tidal.com/browse/playlist/playlist-one";
+    f.local.setItem("accord-tidal-cooldown-until-v1", String(Date.now() + 60000));
+    await f.find("Anteprima album della playlist TIDAL").dispatch("click");
+    assert.equal(f.calls.length, 0);
+    assert.match(f.walk().find((node) => node.attributes.id === "tidalStatus").textContent, /attend|limite|429/i);
+    assert.equal(f.imported.length, 0);
+  });
+});
+
+test("TIDAL add-album command opens the actual catalog controls without requesting Spotify", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    f.ui.openCatalog("https://tidal.com/browse/album/123");
+    assert.deepEqual(f.views, ["collection"]);
+    assert.equal(f.field("Titolo, artista o link album TIDAL").value, "https://tidal.com/browse/album/123");
+    assert.equal(f.field("Titolo, artista o link album TIDAL").focused, true);
+    assert.equal(f.calls.length, 0);
+    await f.find("Leggi album dal link / ID").dispatch("click");
+    assert.equal(f.calls.length, 1);
+    assert.match(f.calls[0].url, /albums\/123/);
+  });
+});
+
+test("manual TIDAL cover lookup is bounded, deduplicated and never resolves Spotify identifiers", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    const empty = await f.ui.loadArtwork([{ id: "spotify123" }]);
+    assert.equal(empty.size, 0);
+    assert.equal(f.calls.length, 0);
+    const albums = [{ id: "tidal:123" }, ...Array.from({ length: 11 }, (_, i) => ({ id: `tidal:${i + 1}` }))];
+    const artwork = await f.ui.loadArtwork([...albums, albums[0], { id: "spotify123" }]);
+    assert.equal(artwork.get("tidal:123"), "https://resources.tidal.com/images/test.jpg");
+    assert.equal(f.calls.length, 10);
+    assert.ok(f.calls.every((call) => call.method === "GET" && /\/albums\/[1-9][0-9]*\?/.test(call.url)));
+    assert.match(f.walk().find((node) => node.attributes.id === "tidalStatus").textContent, /PARZIALE/);
+    f.local.setItem("accord-tidal-cooldown-until-v1", String(Date.now() + 60000));
+    await f.ui.loadArtwork(albums);
+    assert.equal(f.calls.length, 10);
+  }, {
+    data: albumDocument.data,
+    included: [
+      { ...albumDocument.included[0], relationships: { ...albumDocument.included[0].relationships,
+        coverArt: { data: { type: "artworks", id: "cover" } } } },
+      albumDocument.included[1],
+      { type: "artworks", id: "cover", attributes: {
+        files: [{ href: "https://resources.tidal.com/images/test.jpg", meta: { width: 320 } }] } },
+    ],
+  });
+});
+
+test("shared account settings explain provider scope restrictions without authorizing or making API requests", async () => {
+  await uiFixture(async (f) => {
+    const help = f.walk(f.existing.get("settingsDialog")).find(
+      (node) => node.getAttribute("id") === "tidalAuthorizationHelp");
+    assert.ok(help);
+    assert.match(help.textContent, /Allowed scopes: None/);
+    assert.match(help.textContent, /1002/);
+    assert.match(help.textContent, /supporto TIDAL Developer/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.local.getItem("accord-spotify-client-id"), "preserved");
+    assert.equal(f.session.getItem("accord-spotify-access-token"), "preserved-session");
+  });
+});
+
+test("TIDAL authorization failures remain visible inside the shared account settings", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    const accountNodes = f.walk(f.existing.get("settingsDialog"));
+    accountNodes.find((node) => node.id === "tidalClientIdInput").value = "";
+    await accountNodes.find((node) => node.id === "tidalConnectButton").dispatch("click");
+    const accountStatus = accountNodes.find(
+      (node) => node.attributes.id === "tidalAuthStatus");
+    assert.match(accountStatus.textContent, /Client ID/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.session.getItem("accord-spotify-access-token"), "preserved-session");
   });
 });
 

@@ -4,7 +4,7 @@ import { webcrypto } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import {
-  TIDAL_SCOPES, tidalApiUrl, tidalAlbumId, tidalPlaylistId, createMusicServiceGate,
+  TIDAL_SCOPES, tidalApiUrl, tidalAlbumId, tidalPlaylistId, createMusicServiceGate, musicAlbumLink,
   createTidalTransport, createTidalAuth, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
 } from "./tidal.mjs";
 import { validateAlbum, validateDocument, encodeCoverArchive, decodeCoverArchive } from "./core.mjs";
@@ -15,6 +15,18 @@ const storage = () => {
   return { getItem: (key) => map.get(key) ?? null, setItem: (key, value) => map.set(key, String(value)),
     removeItem: (key) => map.delete(key), map };
 };
+
+test("collection album links always follow the selected provider without mixing catalog identifiers", () => {
+  const spotify = { id: "abc123", name: "An Album", artist: "An Artist" };
+  const tidal = { ...spotify, id: "tidal:123" };
+  assert.equal(musicAlbumLink(tidal, "tidal"), "https://tidal.com/browse/album/123");
+  assert.equal(musicAlbumLink(spotify, "spotify"), "spotify:album:abc123");
+  assert.match(musicAlbumLink(spotify, "tidal"), /^https:\/\/tidal\.com\/search\?q=An%20Artist%20An%20Album$/);
+  assert.match(musicAlbumLink(tidal, "spotify"), /^spotify:search:/);
+  assert.throws(() => musicAlbumLink(tidal, "invalid"), /non valido/);
+  assert.equal(tidalApiUrl("userCollectionPlaylists/me/relationships/items").hostname, "openapi.tidal.com");
+  assert.throws(() => tidalApiUrl("userCollectionPlaylists/me/relationships/items", "POST"), /non supportata/);
+});
 const json = (value, { status = 200, headers = {} } = {}) => new Response(
   status === 204 || status === 304 ? null : JSON.stringify(value), { status, headers });
 const fixture = (respond, options = {}) => {
@@ -364,15 +376,15 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.11\.2/); assert.match(sw, /v1\.11\.2/);
+  assert.match(html, /v1\.12\.0/); assert.match(sw, /v1\.12\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=80/); assert.match(sw, /style\.css\?v=33/);
-  assert.match(sw, /tidal\.mjs\?v=1/); assert.match(sw, /tidal-ui\.mjs\?v=3/);
+  assert.match(sw, /app\.mjs\?v=82/); assert.match(sw, /style\.css\?v=33/);
+  assert.match(sw, /tidal\.mjs\?v=2/); assert.match(sw, /tidal-ui\.mjs\?v=5/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
-    assert.match(mirrorHtml, /v1\.11\.2/); assert.match(mirrorWorker, /v1\.11\.2/);
-    for (const file of ["app.mjs?v=80", "style.css?v=33", "tidal-ui.mjs?v=3"]) {
+    assert.match(mirrorHtml, /v1\.12\.0/); assert.match(mirrorWorker, /v1\.12\.0/);
+    for (const file of ["app.mjs?v=82", "style.css?v=33", "tidal-ui.mjs?v=5"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

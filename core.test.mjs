@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { tidalAlbumId } from "./tidal.mjs";
 import {
   buildSimilarityQueue,
   resolveArtistFromTracks,
@@ -233,7 +234,7 @@ test("incoming GET shares remove only share parameters, stage unknown albums, an
   const nodes = { "#openSpotifyInput": { value: "", focus() {} } };
   let opens = 0;
   const context = { URL, location: { href: original }, history: { state: {}, replaceState: (_state, _unused, url) => { replacement = url; } },
-    spotifyAlbumIntent, state: { albums: [] }, $: (selector) => nodes[selector], activateViewTab() {}, showFeedback() {},
+    musicService: { service: "spotify" }, spotifyAlbumIntent, state: { albums: [] }, $: (selector) => nodes[selector], activateViewTab() {}, showFeedback() {},
     openSpotifyAlbumIntent: () => { opens += 1; } };
   const receive = runInNewContext(`${appFunction("function receiveSharedAlbum(", '\n$("#backupButton")')}\nreceiveSharedAlbum`, context);
   receive();
@@ -247,6 +248,28 @@ test("incoming GET shares remove only share parameters, stage unknown albums, an
   const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
   assert.equal(manifest.share_target.method, "GET");
   assert.equal(manifest.share_target.action, "./");
+});
+
+test("incoming TIDAL shares stage catalog lookup or open local details without any Spotify fallback", () => {
+  const original = `https://example.test/accord/?share_text=${encodeURIComponent("Artist https://tidal.com/browse/album/42?u=share")}&code=oauth`;
+  let replacement;
+  const staged = [], opened = [];
+  const context = {
+    URL, location: { href: original }, history: { state: {}, replaceState: (_state, _unused, url) => { replacement = url; } },
+    musicService: { service: "tidal" }, tidalAlbumId, state: { albums: [] },
+    tidalUI: { openCatalog: (value) => staged.push(value) }, $() {}, activateViewTab() {}, showFeedback() {},
+    openAlbumDetails: (id) => opened.push(id),
+    openSpotifyAlbumIntent() { assert.fail("Spotify must not be used"); },
+  };
+  runInNewContext(`${appFunction("function openTidalAlbumIntent(", '\n$("#openSpotifyForm")')}\n${appFunction("function receiveSharedAlbum(", '\n$("#backupButton")')}\nreceiveSharedAlbum()`, context);
+  assert.deepEqual(staged, ["https://tidal.com/browse/album/42"]);
+  assert.deepEqual(opened, []);
+  assert.equal(replacement.searchParams.get("code"), "oauth");
+  assert.equal(replacement.searchParams.has("share_text"), false);
+  context.state.albums = [{ id: "tidal:42" }];
+  runInNewContext("receiveSharedAlbum()", context);
+  assert.deepEqual(opened, ["tidal:42"]);
+  assert.equal(staged.length, 1);
 });
 
 test("playlist quality metrics use existing evidence, count repeats/collaborators, and retain unknowns", () => {
@@ -1438,11 +1461,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=80", "style.css?v=33"]) {
+  for (const file of ["app.mjs?v=82", "style.css?v=33"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=45", "ui.mjs?v=9", "tidal.mjs?v=1", "tidal-ui.mjs?v=3"]) {
+  for (const file of ["core.mjs?v=45", "ui.mjs?v=9", "tidal.mjs?v=2", "tidal-ui.mjs?v=5"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

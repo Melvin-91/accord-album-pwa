@@ -12,13 +12,13 @@
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css?v=33">
-    <title>Accord v1.11.2 · La mia raccolta</title>
+    <title>Accord v1.12.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.11.2</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">v1.12.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -89,7 +89,7 @@
         <button id="resetFiltersButton" class="secondary" type="button" hidden>Azzera filtri</button>
       </div>
       <form id="openSpotifyForm" class="qol-actions">
-        <label>Apri link album Spotify · prima cerca sul dispositivo
+        <label><span id="openMusicAlbumLabel">Apri link album Spotify · prima cerca sul dispositivo</span>
           <input id="openSpotifyInput" type="text" maxlength="2000" autocomplete="off" placeholder="Incolla un link album Spotify">
         </label>
         <button type="submit">Apri album / prepara ricerca</button>
@@ -507,6 +507,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=80"></script>
+    <script type="module" src="app.mjs?v=82"></script>
   </body>
 </html>
