@@ -5,7 +5,7 @@ export function normalizeCollectionPreferences(value) {
   return {
     layout: LOCAL_LAYOUTS.has(source.layout) ? source.layout : "comfortable",
     pinnedIds: [...new Set((Array.isArray(source.pinnedIds) ? source.pinnedIds : [])
-      .filter((id) => typeof id === "string" && /^[A-Za-z0-9]+$/.test(id)))],
+      .filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id)))],
   };
 }
 
@@ -334,7 +334,9 @@ export function createLocalBackup(albums, preferences, validate) {
   return { format: "accord-local-backup", version: 1,
     albums: albums.map((album) => {
       const record = validate(album);
-      return { ...record, url: `https://open.spotify.com/album/${record.id}` };
+      return { ...record, url: record.id.startsWith("tidal:")
+        ? `https://tidal.com/browse/album/${record.id.slice(6)}`
+        : `https://open.spotify.com/album/${record.id}` };
     }), preferences: portablePreferences(preferences) };
 }
 

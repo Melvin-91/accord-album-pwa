@@ -6,19 +6,19 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://open.spotify.com https://musicbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://open.spotify.com https://openapi.tidal.com https://auth.tidal.com https://musicbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="../assets/malt_metal.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="192x192" href="../assets/accord-192.png">
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=26">
-    <title>Accord v1.7.2 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=33">
+    <title>Accord v1.11.2 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.7.2</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">v1.11.2</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -78,6 +78,7 @@
           </details>
         </div>
       </section>
+      <div id="tidalCollectionMount"></div>
 
       <div class="collection-search">
         <button id="facetBackButton" type="button" hidden>← Torna alla vista precedente</button>
@@ -377,9 +378,20 @@
           <label>Nome, ID o link della playlist
             <input id="playlistInput" required maxlength="300" autocomplete="off" placeholder="Nome playlist o link open.spotify.com/playlist/…">
           </label>
-          <p class="notice">Quando cerchi una playlist per nome, Accord controlla solo la prima pagina di risultati. Se inserisci un ID o un link, la ricerca per nome non serve. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Accord salva nella raccolta solo i dati degli album, non i brani o le altre informazioni della playlist. L’importazione non avvia la sincronizzazione con GitHub.</p>
+          <p class="notice">Quando cerchi una playlist per nome, Accord controlla solo la prima pagina di risultati. Se inserisci un ID o un link, la ricerca per nome non serve. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Gli album completi restano inclusi; i singoli / EP vengono mostrati in una lista e ciascuno parte non selezionato. Spotify non distingue con certezza EP e singoli. Accord salva nella raccolta solo i dati delle release, non i brani o le altre informazioni della playlist. L’importazione non avvia la sincronizzazione con GitHub.</p>
         </div>
         <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Continua</button></div></div>
+      </form>
+    </dialog>
+
+    <dialog id="playlistSinglesDialog">
+      <form id="playlistSinglesForm" method="dialog">
+        <div class="dialog-scroll">
+          <div class="dialog-heading"><div><p class="eyebrow">IMPORTAZIONE SPOTIFY</p><h2>Singoli / EP della playlist</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+          <p id="playlistSinglesSummary" class="notice" role="status" aria-live="polite"></p>
+          <section id="playlistSinglesList" class="conflict-list" aria-label="Seleziona singoli o EP da importare"></section>
+        </div>
+        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Importa selezionati</button></div></div>
       </form>
     </dialog>
 
@@ -478,7 +490,7 @@
       <article class="album-card">
         <label class="album-selection"><input class="album-select" type="checkbox"><span class="sr-only">Seleziona album</span></label>
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="spotify-link">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
+        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
         <div class="album-fields" hidden>
         <label class="status-field">Stato
           <select class="status-input">
@@ -495,6 +507,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=70"></script>
+    <script type="module" src="app.mjs?v=79"></script>
   </body>
 </html>

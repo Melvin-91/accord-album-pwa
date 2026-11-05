@@ -1,5 +1,118 @@
 # Accord · Raccolta album PWA
 
+## Correzione PWA 1.11.2 · Aggiunta manuale locale
+
+- Anche l'aggiunta manuale da Spotify e l'abbinamento da Last.fm o
+  MusicBrainz salvano solo sul dispositivo, come il desktop. Non avviano
+  una sincronizzazione GitHub: usa **Sincronizza** quando desideri inviare
+  le modifiche. Restano invariati sincronizzazione all'avvio, conflitti,
+  dati locali e tutte le funzionalita' delle release precedenti.
+
+## Correzione PWA 1.11.1 · TIDAL allineato a Spotify
+
+- TIDAL usa le stesse gerarchie di schede, intestazioni, stati e comandi
+  compatti della PWA Spotify. I risultati album mostrano copertina o
+  segnaposto, titolo, artista, anno e selezione.
+- La raccolta locale resta in primo piano e disponibile con entrambi i
+  servizi. Ricerca e importazione TIDAL sono raccolte in un riquadro a
+  espansione; configurazione account e accesso PKCE sono nelle impostazioni.
+- I comandi meno frequenti sono dietro **Mostra altre azioni** e
+  **Mostra gestione playlist esistenti**; il modulo playlist parte aperto e
+  può essere richiuso.
+- I filtri meno frequenti e le modifiche remote sono progressive; le
+  anteprime, le conferme, le etichette UNLISTED e le protezioni di rete non
+  cambiano. La ricerca rimane manuale, senza nuove richieste o polling.
+
+## Novità PWA 1.11.0 · TIDAL senza backend
+
+- **Servizio musicale**, sopra le schede, sceglie Spotify o TIDAL. La raccolta
+  rimane unica; cambiare servizio non elimina token o preferenze Spotify.
+  Con TIDAL sono bloccate anche le richieste Spotify già accodate e le risposte
+  tardive, comprese ricerca e copertine automatiche. Un ID TIDAL non viene mai
+  inviato a Spotify.
+- Ricerca pubblica TIDAL di album, artisti, brani e playlist; album da link/ID,
+  catalogo di un artista, lettura/importazione selettiva dei preferiti e degli
+  album delle playlist. I preferiti remoti sono distinti da stato/voto locali.
+  Aggiunta/rimozione preferiti, elenco/lettura/creazione/modifica/eliminazione
+  playlist, aggiunta/rimozione/spostamento delle singole occorrenze dei brani:
+  sempre anteprima e conferma esplicita, senza retry automatici delle scritture.
+  Le playlist nuove sono **non in elenco (UNLISTED), non private**:
+  accessibili a chi ha il link.
+- Suggerimenti da album/artisti simili e mix ufficiali **Daily, Discovery,
+  New Release**, quando disponibili per l'account. Sono fonti TIDAL,
+  **non** classifiche o cronologia di ascolto. I mix possono contenere playlist:
+  si leggono al massimo tre playlist, una pagina ciascuna. Ogni lettura è
+  limitata a cinque pagine/250 risorse e dieci dettagli album aggiuntivi;
+  troncamenti e metadati insufficienti sono dichiarati come risultati parziali.
+- Nessun widget remoto, now playing, cronologia TIDAL, controllo del player,
+  backend, client secret, API non ufficiale o servizio a pagamento/deployment.
+  `PlaybackStates` e `RecommendationBlocks` sono INTERNAL e non vengono chiamati.
+  Le copertine TIDAL già sincronizzate restano utilizzabili offline. Le letture
+  esplicite possono mostrare gli artwork restituiti dall'API, solo da
+  `https://resources.tidal.com` (dominio verificato negli esempi dell'SDK
+  ufficiale). Nessuna ricostruzione di URL o ricerca Spotify. Le copertine
+  appena importate sono online/in memoria, non dichiarate salvate offline.
+- ID canonico `tidal:123`, link `https://tidal.com/browse/album/123`;
+  campi/schema della raccolta, storage esistente, formato degli archivi
+  copertine e backup restano compatibili. Nessuna conversione degli ID Spotify.
+- Trasporto condiviso fra funzioni: deduplicazione delle letture concorrenti,
+  cache per token rispettosa di `Cache-Control`, ETag, `Age`, `Date`,
+  paginazione limitata allo stesso endpoint ufficiale, cooldown `429/Retry-After`
+  persistente fra schede (Web Locks dove disponibile). Nessuna soglia numerica
+  universale presunta.   Le impronte (non token o contenuti) delle scritture inviate/in corso/incerte
+  restano sul dispositivo fra schede e riaperture, anche ricreando il trasporto:
+  verificare lo stato remoto, non ripetere
+  alla cieca una creazione o una modifica. Nessuna scrittura riparte dopo OAuth.
+
+### Configurare la propria app TIDAL
+
+1. Aprire [TIDAL Developer](https://developer.tidal.com/), registrare un'app
+   personale e abilitare il flusso **Authorization Code con PKCE (S256)** per
+   un client pubblico/browser. Non inserire mai un Client Secret in Accord.
+2. Aprire Accord dalla sua destinazione effettiva HTTPS (oppure localhost).
+   Aprire **Preferenze e collegamenti → TIDAL · accesso con PKCE**. Copiare
+   l'URL esatto mostrato accanto a **Redirect URI**, incluse eventuali sottocartelle o
+   `index.html`, e registrarlo nell'app TIDAL. Non aggiungere query o frammenti.
+   La copia pubblicabile alla radice e quella sotto `/pwa/` possono avere URI
+   diversi: registrare quello della pagina realmente utilizzata.
+3. Abilitare gli scope pubblici `user.read`, `search.read`, `collection.read`,
+   `collection.write`, `playlists.read`, `playlists.write`,
+   `recommendations.read` fra quelli concessi all'app. Non richiedere
+   `r_usr`/`w_usr`, riservati INTERNAL.
+4. Incollare e salvare il **Client ID**, poi premere **Collega / autorizza TIDAL**.
+   Il callback verifica state, destinazione e scadenza, separatamente da Spotify.
+   Solo il Client ID resta persistente; token/verifier OAuth restano in
+   `sessionStorage` e non vengono inclusi in raccolta, backup o GitHub.
+   Dopo il ritorno scegliere una lettura: nessuna operazione remota viene
+   eseguita automaticamente.
+
+È necessaria una propria app approvata con le autorizzazioni richieste; senza
+registrazione/credenziali reali il collegamento live non è verificabile.
+Disponibilità, permessi, CORS e quote dipendono da TIDAL e dall'account.
+Un rifiuto HTTP viene mostrato, senza ripiegare su endpoint non ufficiali.
+Questa consegna **non pubblica** la PWA.
+
+Riferimenti ufficiali verificati:
+[OpenAPI TIDAL](https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json),
+[autorizzazione](https://developer.tidal.com/documentation/api-sdk/api-sdk-authorization).
+Test locali: `node --test accord-pwa-site\core.test.mjs accord-pwa-site\tidal.test.mjs accord-pwa-site\tidal-ui.test.mjs`
+e gli stessi file in `accord\pwa`.
+
+## Correzione PWA 1.10.1
+
+- Rimossi integrazione Qobuz, selettore dedicato, backend privato e configurazione
+  Render. Nessun servizio esterno viene richiesto. Le funzioni Spotify e i dati
+  locali restano invariati.
+
+## Novità PWA 1.9.0
+
+- L'importazione playlist mantiene gli album completi e mostra singoli / EP
+  separatamente, inizialmente deselezionati, così puoi scegliere ogni release
+  prima di aggiungerla. Spotify identifica questi elementi come `single` senza
+  distinguere con certezza EP e singoli. Anche la ricerca manuale Spotify li
+  mostra e li aggiunge uno alla volta. Le scelte non vengono memorizzate nella
+  cache snapshot e non generano richieste Spotify aggiuntive.
+
 ## Correzione PWA 1.7.2
 
 - La copia servita da `/pwa/` usa riferimenti alle icone e al pre-cache
@@ -412,10 +525,12 @@ L'audit ha corretto il bypass della coda/cooldown nelle due POST OAuth e la
 durata eccessiva della cache quando la risposta aveva già un'età `Age`/`Date`.
 I test riproducono questi casi con fetch, clock, attesa, storage e Web Locks
 simulati, oltre ai casi preesistenti di cache, paginazione, deduplicazione e
-scritture. Non richiedono account né richieste Spotify reali. La copia desktop
-si verifica indipendentemente dal workflow Pages con
+scritture. Non richiedono account né richieste Spotify reali. Il workflow
+Pages usa Node 22, controlla la sintassi dei moduli di entrambe le versioni e
+da questa cartella esegue `node --test core.test.mjs pwa/core.test.mjs`.
+Per la copia desktop `accord/pwa/`, esegui separatamente
 `node --check app.mjs`, `node --check core.mjs`, `node --check ui.mjs`,
-`node --check sw.js` e `node --test core.test.mjs`, eseguiti da questa cartella.
+`node --check sw.js` e `node --test core.test.mjs` dalla sua cartella.
 
 La [documentazione rate limit](https://developer.spotify.com/documentation/web-api/concepts/rate-limits)
 descrive una finestra mobile di 30 secondi, ma **non pubblica una soglia
@@ -430,9 +545,12 @@ nessun endpoint rimosso viene usato come aggiramento.
 Abilita GitHub Pages in **Settings → Pages**, scegliendo **GitHub Actions**
 come sorgente. Il workflow pubblica i file statici a ogni push al branch
 `main`. Dopo il deploy, apri `https://Melvin-91.github.io/accord-album-pwa/`.
-Il workflow del repository Pages verifica la radice e la sottocartella `pwa`
-del repository canonico, non questa copia desktop. Le suite usano percorsi
-relativi e non sono intercambiabili senza verificarne la compatibilità.
+Il workflow carica la radice e pubblica anche la sottocartella `pwa`.
+Le due cartelle hanno versioni e percorsi relativi distinti: ciascuna suite
+verifica i file accanto a sé. Il workflow le prova entrambe; non copiare test
+da una cartella all'altra senza verificarne prima la compatibilità. La copia
+desktop `accord/pwa/` non è inclusa nel workflow Pages e richiede il comando
+locale documentato sopra.
 
 ## Primo uso sul telefono
 

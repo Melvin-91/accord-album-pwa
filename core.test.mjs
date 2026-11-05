@@ -35,6 +35,7 @@ import {
   NO_PRIMARY_GENRE_FILTER,
   NO_SECONDARY_GENRE_FILTER,
   playlistAlbumRecords,
+  playlistReleaseRecords,
   primaryAlbumGenres,
   readLastFmAllTimeArtists,
   readMusicBrainzCatalog,
@@ -43,6 +44,7 @@ import {
   rankDiscogsSuggestionAlbums,
   retryMusicBrainzRequest,
   sortAlbumsByManualOrder,
+  spotifyAlbumSearchRecords,
   spotifyAlbumId,
   spotifyCacheableRead,
   spotifyPlaylistId,
@@ -668,6 +670,61 @@ function appFunction(start, end) {
   return uiAppSource.slice(beginning, ending);
 }
 
+test("manual Spotify additions stay local until explicit GitHub synchronization", () => {
+  const album = qosAlbum("new");
+  const nodes = new Map();
+  const node = () => ({
+    children: [], listeners: {}, append(...children) { this.children.push(...children); },
+    replaceChildren() { this.children = []; },
+    addEventListener(type, callback) { this.listeners[type] = callback; },
+    setAttribute() {},
+  });
+  const context = {
+    state: { albums: [] }, spotifyAlbumMetadata: new Map(), suggestedMatchAlbumId: null,
+    suggestedSourceAlbums: new Map(), document: { createElement: node },
+    $: (id) => {
+      if (!nodes.has(id)) nodes.set(id, node());
+      return nodes.get(id);
+    },
+    createAlbumCoverFrame: () => ({ frame: node() }), setAlbumCover: () => {},
+    musicBrainzCoverArtUrl: () => "", addPlaylistAlbums, saveState: () => {},
+    rememberLocalChanges: () => {}, clearAlbumDraft: () => {}, render: () => {},
+    setSyncState: () => {}, requestAutomaticSync: () => assert.fail("Unexpected GitHub sync"),
+  };
+  runInNewContext(appFunction("function addAlbumToCollection(", "\nfunction createAlbumCoverFrame(")
+    + appFunction("function renderManualAlbumResults(", "\nfunction manualAlbumSearchInput(")
+    + "\nrenderManualAlbumResults([album]);", { ...context, album });
+  const card = nodes.get("#manualAlbumResults").children[0];
+  card.children.at(-1).listeners.click();
+  assert.equal(context.state.albums[0].id, album.id);
+  assert.match(nodes.get("#manualAlbumStatus").textContent, /aggiunto localmente.*Sincronizza GitHub/);
+});
+
+test("unambiguous external album matches do not request automatic GitHub synchronization", async () => {
+  const album = { ...qosAlbum("external"), source: "Last.fm" };
+  const match = qosAlbum("matched");
+  let additions = 0;
+  const nodes = new Map();
+  const context = {
+    state: { albums: [] }, suggestedSourceAlbums: new Map(), suggestedMatchAlbumId: null,
+    $: (id) => {
+      if (!nodes.has(id)) nodes.set(id, { replaceChildren() {} });
+      return nodes.get(id);
+    },
+    fetchSpotifyManualAlbums: async () => [match],
+    addAlbumToCollection: (record, options) => {
+      assert.equal(record.id, match.id);
+      assert.notEqual(options?.syncAutomatically, true);
+      additions += 1;
+    },
+  };
+  const resolve = runInNewContext(appFunction("async function resolveManualAlbumToSpotify(",
+    "\nfunction updateManualAlbumSourceNotice(") + "\nresolveManualAlbumToSpotify", context);
+  await resolve(album, "test-token");
+  assert.equal(additions, 1);
+  assert.match(nodes.get("#manualAlbumStatus").textContent, /aggiunto localmente.*Sincronizza GitHub/);
+});
+
 test("each collection filter gesture has exactly one render listener", () => {
   const controls = new Map();
   let renders = 0;
@@ -705,10 +762,6 @@ test("collection search applies only when Enter is pressed", () => {
   assert.equal(context.appliedCollectionSearch, "Artist");
   assert.match(appFunction("function render(options = {})", "\nasync function renderCovers"),
     /search: appliedCollectionSearch/);
-});
-
-test("album Spotify links target the installed Spotify app", () => {
-  assert.match(uiAppSource, /link\.href = `spotify:album:\$\{album\.id\}`;/);
 });
 
 test("exact local facets match whole artists and labels, never substrings or another label type", () => {
@@ -1349,11 +1402,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=70", "style.css?v=26"]) {
+  for (const file of ["app.mjs?v=79", "style.css?v=33"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=39", "ui.mjs?v=6"]) {
+  for (const file of ["core.mjs?v=45", "ui.mjs?v=9", "tidal.mjs?v=1", "tidal-ui.mjs?v=3"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -1650,6 +1703,7 @@ test("Spotify discovery counts cache hits as logical reads while reusing the nor
     ({ ...spotifyResponse({ items: [] }, { "Cache-Control": "max-age=600" }), ok: true }));
   const context = {
     URL, SPOTIFY_API: "https://api.spotify.com/v1",
+    musicService: { epoch: 0, assert() {} },
     spotifyTransport: fixture.transport, spotifyJsonReader: createSpotifyJsonReader(),
     clearSpotifySession() { assert.fail("unexpected expired session"); },
     readSpotifySearchPages,
@@ -2940,6 +2994,39 @@ test("extracts and deduplicates only valid full albums from playlist items", () 
   assert.deepEqual(added.albums, albums);
 });
 
+test("classifies and deduplicates Spotify single / EP releases without persisting selection metadata", () => {
+  const albumId = "0123456789012345678901";
+  const singleId = "1123456789012345678901";
+  const makeItem = (id, type, totalTracks = 0) => ({
+    type: "track",
+    album: {
+      id, name: `Record ${id}`, album_type: type, total_tracks: totalTracks,
+      artists: [{ name: "Artist" }],
+      external_urls: { spotify: `https://open.spotify.com/album/${id}` },
+      release_date: "2024-01-02",
+    },
+  });
+  const entries = [
+    { item: makeItem(albumId, "album") },
+    { track: makeItem(singleId, "single", 3) },
+    { item: makeItem(singleId, "single", 3) },
+    { item: makeItem("2123456789012345678901", "compilation") },
+    { item: { type: "episode" } },
+  ];
+  const releases = playlistReleaseRecords(entries);
+  assert.deepEqual(releases.albums, [album(albumId, {
+    name: `Record ${albumId}`, artist: "Artist", year: "2024", primary_genre: "",
+  })]);
+  assert.deepEqual(releases.singles, [{
+    album: album(singleId, { name: `Record ${singleId}`, artist: "Artist", year: "2024", primary_genre: "" }),
+    totalTracks: 3,
+  }]);
+  assert.equal(releases.skipped, 2);
+  assert.deepEqual(spotifyAlbumSearchRecords(entries), [
+    ...releases.albums, ...releases.singles.map(({ album: record }) => record),
+  ]);
+});
+
 test("normalizes ListenBrainz recommendations and rejects unrelated or invalid rows", () => {
   const rows = [
     { reference_mbid: "seed", artist_mbid: "b", name: "Artist B", score: 2 },
@@ -3122,6 +3209,47 @@ test("playlist writes preserve catalog cache and HTTP no-store policy", async ()
   }
 });
 
+test("PWA playlist import applies only selected singles without additional Spotify reads", async () => {
+  const albumId = "a".repeat(22);
+  const firstSingleId = "s".repeat(22);
+  const secondSingleId = "t".repeat(22);
+  const entry = (id, type) => ({
+    item: { type: "track", album: {
+      id, name: `Record ${id}`, album_type: type, total_tracks: 2,
+      artists: [{ name: "Artist" }],
+      external_urls: { spotify: `https://open.spotify.com/album/${id}` },
+      release_date: "2025-01-01",
+    } },
+  });
+  let pages = 0;
+  let checks = 0;
+  let writes = 0;
+  const state = { albums: [] };
+  const context = {
+    JSON, Map, Set, state, spotifyPlaylistSnapshots: new Map(),
+    resolveSpotifyPlaylist: async () => ({ id: "p".repeat(22), name: "Synthetic", snapshot_id: "snapshot" }),
+    completeSpotifyPages: async () => {
+      pages += 1;
+      return [entry(albumId, "album"), entry(firstSingleId, "single"), entry(secondSingleId, "single")];
+    },
+    spotifyRequest: async () => { checks += 1; return { id: "p".repeat(22), snapshot_id: "snapshot" }; },
+    playlistReleaseRecords, addPlaylistAlbums,
+    chooseSpotifyPlaylistSingles: async (_name, singles) => ({
+      confirmed: true, ids: singles.map(({ album: record }) => record.id).slice(0, 1),
+    }),
+    window: { confirm: () => assert.fail("single selection dialog confirms the import") },
+    setSyncState: () => {}, saveState: () => { writes += 1; },
+    rememberLocalChanges: () => {}, render: () => {}, showMessage: () => {},
+  };
+  const read = runInNewContext(appFunction("async function runPlaylistImport(", "\nasync function importSpotifyPlaylist(")
+    + "\nrunPlaylistImport;", context);
+  await read("test", "token");
+  assert.deepEqual(state.albums.map(({ id }) => id), [albumId, firstSingleId]);
+  assert.equal(writes, 1);
+  assert.equal(pages, 1);
+  assert.equal(checks, 1);
+});
+
 test("PWA imports reuse only verified account-scoped playlist snapshots", async () => {
   let pages = 0;
   let checks = 0;
@@ -3140,7 +3268,7 @@ test("PWA imports reuse only verified account-scoped playlist snapshots", async 
         external_urls: { spotify: `https://open.spotify.com/album/${"a".repeat(22)}` } } } }, { track: null }];
     },
     spotifyRequest: async () => { checks += 1; return { id: "p".repeat(22), snapshot_id: latest }; },
-    playlistAlbumRecords,
+    playlistReleaseRecords,
     addPlaylistAlbums,
     window: { confirm: () => false },
     setSyncState: () => {},

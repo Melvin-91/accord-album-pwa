@@ -23,11 +23,26 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-      - name: Run PWA core tests
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check PWA syntax
         run: |
           node --check app.mjs
           node --check core.mjs
-          node --test core.test.mjs
+          node --check ui.mjs
+          node --check tidal.mjs
+          node --check tidal-ui.mjs
+          node --check sw.js
+          node --check pwa/app.mjs
+          node --check pwa/core.mjs
+          node --check pwa/ui.mjs
+          node --check pwa/tidal.mjs
+          node --check pwa/tidal-ui.mjs
+          node --check pwa/sw.js
+      - name: Run root and nested PWA test suites
+        run: node --test core.test.mjs tidal.test.mjs tidal-ui.test.mjs pwa/core.test.mjs pwa/tidal.test.mjs pwa/tidal-ui.test.mjs
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site

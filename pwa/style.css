@@ -20,8 +20,8 @@
 :root[data-contrast="high"] :is(button, input, select, textarea, dialog, .album-card) { border-color: #aaa; }
 :root[data-contrast="high"] a { color: #fff; text-decoration: underline; }
 :root[data-contrast="high"] input::placeholder { color: #ddd; }
-:root[data-density="touch"] :is(button, select, input:not([type="checkbox"]), summary, .spotify-link) { min-height: 44px; }
-:root[data-density="touch"] .spotify-link { display: inline-flex; align-items: center; }
+:root[data-density="touch"] :is(button, select, input:not([type="checkbox"]), summary, .album-player-link) { min-height: 44px; }
+:root[data-density="touch"] .album-player-link { display: inline-flex; align-items: center; }
 :root[data-density="compact"] :is(button:not(.icon-button), select, input:not([type="checkbox"])) { padding: 6px 9px; min-height: 32px; }
 .album-main { flex-wrap: wrap; }
 .album-quick-edit { display: flex; flex-wrap: wrap; gap: 10px; flex-basis: 100%; }
@@ -49,7 +49,7 @@
   .selection-toolbar label { min-width: 130px; flex: 1; }
   body:has(.selection-toolbar:not([hidden])) main { padding-bottom: 44dvh; }
 }
-body { margin: 0; min-width: 320px; }
+body { margin: 0; min-width: 0; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button, select, input, textarea { border: 1px solid #353535; border-radius: 9px; background: #1c1c1c; }
 button { cursor: pointer; padding: 9px 14px; font-weight: 600; }
@@ -77,6 +77,49 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: .75rem; font-we
 .primary:hover { background: #d3c5ff; border-color: #d3c5ff; }
 .icon-button { width: 40px; height: 40px; padding: 0; font-size: 1.25rem; }
 main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
+.music-service-picker { display: grid; grid-template-columns: auto minmax(160px, 220px) minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.music-service-picker .eyebrow, .music-service-picker .summary { margin: 0; }
+.music-service-picker label { min-width: 0; }
+.music-service-picker select { min-width: 0; }
+.tidal-panel { display: grid; gap: 12px; margin-bottom: 18px; padding: 16px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.tidal-panel h2 { margin: 0; font-size: 1.125rem; }
+.tidal-panel p { margin-block: 0; }
+.tidal-panel-heading { display: grid; gap: 4px; }
+.tidal-panel-heading .eyebrow { margin: 0; }
+.tidal-panel label { display: grid; gap: 6px; min-width: 0; }
+.tidal-panel input, .tidal-panel select { max-width: 100%; min-width: 0; }
+.tidal-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: 12px; min-width: 0; }
+.tidal-controls button { justify-self: start; max-width: 100%; }
+.tidal-playlist-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tidal-collection-details, .tidal-secondary-details, .tidal-info-details, .tidal-playlist-form { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.tidal-collection-details > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 10px; overflow-wrap: anywhere; }
+.tidal-collection-details > summary .eyebrow { width: 100%; }
+.tidal-collection-details > summary strong { color: #f2f2f2; font-size: .9375rem; }
+.tidal-collection-controls { margin-top: 12px; }
+.tidal-secondary-details > summary, .tidal-info-details > summary { font-weight: 600; overflow-wrap: anywhere; }
+.tidal-playlist-form > summary { font-weight: 600; overflow-wrap: anywhere; }
+.tidal-playlist-form[open] > summary { margin-bottom: 12px; }
+.tidal-secondary-details[open] > button { margin: 8px 8px 0 0; }
+.tidal-info-details p { margin-top: 10px; color: var(--muted); font-size: .75rem; line-height: 1.5; overflow-wrap: anywhere; }
+.tidal-output { display: grid; gap: 12px; min-width: 0; margin-top: 12px; }
+.tidal-output > p[role="status"] { margin: 0; color: var(--muted); font-size: .8125rem; line-height: 1.5; overflow-wrap: anywhere; }
+.tidal-results { display: grid; gap: 8px; min-width: 0; }
+.tidal-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.tidal-actions > button { flex: 1 1 150px; min-width: 0; }
+.tidal-actions > .summary { flex: 1 1 150px; min-height: 0; margin: 0; }
+.tidal-secondary-details { flex: 1 1 220px; }
+.tidal-secondary-details > button { margin: 8px 8px 0 0; }
+.tidal-result { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; min-width: 0; border: 1px solid #353535; border-radius: 10px; padding: 12px; overflow-wrap: anywhere; }
+.tidal-result-choice { display: flex !important; flex: 1 1 220px; align-items: center; gap: 10px !important; min-width: 0; }
+.tidal-results input[type="checkbox"] { flex: none; width: 20px; height: 20px; min-height: 20px; margin: 0; accent-color: var(--accent); }
+.tidal-album-result { justify-content: space-between; }
+.tidal-album-choice { display: grid !important; grid-template-columns: 20px 64px minmax(0, 1fr); align-items: center; gap: 10px !important; flex: 1 1 280px; min-width: 0; }
+.tidal-album-choice .suggestion-cover-frame { width: 64px; }
+.tidal-album-copy { display: grid; gap: 4px; min-width: 0; color: #f2f2f2; }
+.tidal-album-copy strong, .tidal-album-copy .suggestion-detail { overflow-wrap: anywhere; }
+.tidal-result-link { flex: none; color: #dedede; font-size: .75rem; overflow-wrap: anywhere; }
+.tidal-mutation { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; margin: 0; padding: 12px; background: #101010; border: 1px solid var(--border); border-radius: 10px; font: inherit; font-size: .8125rem; }
+button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .view-tabs { display: flex; gap: 8px; margin: 0 0 18px; border-bottom: 1px solid var(--border); }
 .view-tab { min-width: 150px; padding: 11px 16px; color: var(--muted); background: transparent; border: 1px solid transparent; border-bottom: 0; }
 .view-tab[aria-selected="true"] { color: var(--accent); background: var(--surface); border-color: var(--border); box-shadow: inset 0 -2px var(--accent); }
@@ -178,8 +221,8 @@ body.manual-sort-dragging { user-select: none; }
 .album-quick-edit .rating-field select { max-width: none; }
 .album-title { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 1rem; }
 .album-meta { margin: 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
-.spotify-link { flex: none; color: #dedede; font-size: .75rem; text-decoration: none; }
-.spotify-link:hover { text-decoration: underline; }
+.album-player-link { flex: none; color: #dedede; font-size: .75rem; text-decoration: none; }
+.album-player-link:hover { text-decoration: underline; }
 .genres-field input { font-size: .8125rem; }
 .rating-field select { max-width: 100px; }
 .empty { padding: 50px 10px; color: var(--muted); text-align: center; }
@@ -233,6 +276,9 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
 .check { display: flex; align-items: start; gap: 10px; color: #dedede; font-size: .8125rem; line-height: 1.45; }
 .check input { width: 18px; min-height: 18px; margin: 0; accent-color: #aaa; }
 .conflict-list { display: grid; gap: 12px; max-height: 48vh; overflow-x: hidden; overflow-y: auto; }
+.playlist-single-choice { padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.playlist-single-choice input { flex: 0 0 18px; margin-top: 2px; }
+.playlist-single-choice:has(input:disabled) { opacity: .65; }
 .conflict-card { padding: 14px; border: 1px solid #393939; border-radius: 12px; }
 .conflict-card h3 { margin: 0 0 10px; }
 .conflict-card p { margin: 5px 0; color: var(--muted); font-size: .75rem; }
@@ -256,6 +302,13 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   #commandButton { flex: 1; }
   .view-tabs { gap: 4px; }
   .view-tab { min-width: 0; flex: 1; padding: 10px 8px; }
+  .music-service-picker { grid-template-columns: minmax(0, 1fr); gap: 5px; padding: 10px 12px; }
+  .tidal-controls, .tidal-playlist-controls { grid-template-columns: minmax(0, 1fr); }
+  .tidal-controls button { width: 100%; justify-self: stretch; }
+  .tidal-actions > button, .tidal-secondary-details { flex-basis: 100%; }
+  .tidal-album-choice { grid-template-columns: 20px 52px minmax(0, 1fr); gap: 8px !important; }
+  .tidal-album-choice .suggestion-cover-frame { width: 52px; }
+  .tidal-album-result .tidal-result-link { margin-left: 28px; }
   .sync-state { display: block; min-width: 0; overflow-wrap: anywhere; }
   main { width: calc(100% - 24px); }
   .tab-intro { display: block; }
@@ -281,7 +334,7 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   .album-main { align-items: stretch; flex-direction: column; gap: 10px; }
   .album-actions { justify-content: flex-start; }
   .album-actions button { min-height: 44px; }
-  .album-actions .spotify-link { flex-basis: 100%; padding: 10px 0; }
+  .album-actions .album-player-link { flex-basis: 100%; padding: 10px 0; }
   .album-list[data-layout="compact"] .album-card { grid-template-columns: 20px 44px minmax(0, 1fr); gap: 8px; padding: 10px; }
   .album-list[data-layout="compact"] .cover-frame { width: 44px; }
   .collection-search { align-items: stretch; flex-direction: column; }

@@ -26,6 +26,7 @@ import {
   lastFmSuggestionRange,
   musicBrainzCoverArtUrl,
   playlistAlbumRecords,
+  playlistReleaseRecords,
   primaryAlbumGenres,
   findSpotifyPlaylistMatches,
   listeningAlbumSuggestions,
@@ -37,6 +38,7 @@ import {
   retryMusicBrainzRequest,
   shouldStopDiscogsSuggestionQueue,
   sortAlbumsByManualOrder,
+  spotifyAlbumSearchRecords,
   spotifyAlbumId,
   spotifyPlaylistId,
   spotifyRedirectUriForPage,
@@ -48,7 +50,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=39";
+} from "./core.mjs?v=45";
 import {
   localCommandResults,
   collectionAuditSummary,
@@ -62,7 +64,11 @@ import {
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-} from "./ui.mjs?v=6";
+} from "./ui.mjs?v=9";
+import { createMusicServiceGate } from "./tidal.mjs?v=1";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=3";
+
+const musicService = createMusicServiceGate(localStorage);
 
 const STORAGE_KEY = "accord-album-pwa-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
@@ -101,6 +107,12 @@ const spotifyJsonReader = createSpotifyJsonReader();
 const spotifyPlaylistSnapshots = new Map();
 const spotifyTransport = createSpotifyTransport({
   storage: localStorage,
+  fetch: async (url, { accordServiceEpoch, ...options } = {}) => {
+    musicService.assert("spotify", accordServiceEpoch);
+    const response = await fetch(url, options);
+    musicService.assert("spotify", accordServiceEpoch);
+    return response;
+  },
   lock: (name, request) => navigator.locks?.request
     ? navigator.locks.request(name, request) : request(),
 });
@@ -322,7 +334,7 @@ function loadState() {
     const base = validateDocument({ format: "accord-album-collection", version: 1,
       albums: Array.isArray(saved.base) ? saved.base : [] });
     const manualOrder = Array.isArray(saved.manualOrder)
-      ? [...new Set(saved.manualOrder.filter((id) => typeof id === "string" && /^[A-Za-z0-9]+$/.test(id)))]
+      ? [...new Set(saved.manualOrder.filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id)))]
       : [];
     const sortOrders = ["artist", "name", "year", "rating", "genre", "collection", "manual"];
     const sortOrder = sortOrders.includes(saved.sortOrder) ? saved.sortOrder : "artist";
@@ -1018,6 +1030,7 @@ $("#pinnedOnlyInput").addEventListener("change", render);
 $("#resetFiltersButton").addEventListener("click", resetCollectionFilters);
 $("#emptyActionButton").addEventListener("click", () => {
   if (state.albums.length) resetCollectionFilters();
+  else if (musicService.service === "tidal") $("#tidalAlbumQuery").focus();
   else $("#manualAlbumButton").click();
 });
 $("#clearSelectionButton").addEventListener("click", () => {
@@ -1270,7 +1283,7 @@ function render(options = {}) {
   $("#emptyHeading").textContent = state.albums.length ? "Nessun album trovato" : "La tua raccolta inizia qui";
   $("#emptyDescription").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
-    : "Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist Spotify.";
+    : `Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist ${musicService.service === "tidal" ? "TIDAL" : "Spotify"}.`;
   $("#emptyActionButton").textContent = state.albums.length ? "Azzera filtri" : "Aggiungi il primo album";
   updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
@@ -1330,8 +1343,15 @@ function render(options = {}) {
     quick.setAttribute("aria-label", `Modifica rapida di ${album.name}`);
     card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
-    const link = card.querySelector(".spotify-link");
-    link.href = `spotify:album:${album.id}`;
+    const link = card.querySelector(".album-player-link");
+    const tidalAlbum = album.id.startsWith("tidal:");
+    const albumLink = tidalAlbum ? album.url : `spotify:album:${album.id}`;
+    link.hidden = !albumLink;
+    if (albumLink) link.href = albumLink;
+    link.target = "_self";
+    link.rel = "noopener noreferrer";
+    link.textContent = tidalAlbum ? "Apri in TIDAL ↗" : "Apri in Spotify ↗";
+    link.setAttribute("aria-label", `${link.textContent.replace(" ↗", "")}: ${album.artist} · ${album.name}`);
     const orderControls = card.querySelector(".manual-order-controls");
     orderControls.hidden = !manualSorting;
     if (manualSorting) {
@@ -1402,6 +1422,25 @@ async function renderCovers(albums, generation, remoteCovers = false) {
       };
       if (!album.cover_sha256) {
         unavailable += 1;
+        const tidalArtwork = album.id.startsWith("tidal:") && musicService.service === "tidal"
+          ? collectionCoverImageUrls.get(album.id) : null;
+        if (tidalArtwork) {
+          const image = card.querySelector(".album-cover"), serviceEpoch = musicService.epoch;
+          image.addEventListener("load", () => {
+            if (generation !== coverRenderGeneration || musicService.epoch !== serviceEpoch) return;
+            card.classList.add("has-cover");
+            collectionCoverRemoteIds.add(album.id);
+            collectionCoverFailures.delete(album.id);
+            updateCollectionCoverNotice();
+          }, { once: true });
+          image.addEventListener("error", () => {
+            if (generation !== coverRenderGeneration || musicService.epoch !== serviceEpoch) return;
+            collectionCoverFailures.set(album.id, "TIDAL: copertina online non caricabile.");
+            updateCollectionCoverNotice();
+          }, { once: true });
+          image.src = tidalArtwork;
+          continue;
+        }
         enqueue();
         continue;
       }
@@ -1458,7 +1497,8 @@ async function renderCovers(albums, generation, remoteCovers = false) {
 }
 
 function collectionCoverTaskIsCurrent(task) {
-  return task.generation === coverRenderGeneration && task.card.isConnected;
+  return musicService.service === "spotify" && !task.album.id.startsWith("tidal:")
+    && task.generation === coverRenderGeneration && task.card.isConnected;
 }
 
 function showCollectionCoverImage(task, url) {
@@ -1823,7 +1863,9 @@ function getSuggestionCoverSpotifyToken() {
 }
 
 async function loadSuggestedSpotifyCover(task) {
-  if (!task.card.isConnected) return;
+  if (musicService.service !== "spotify") return;
+  const serviceEpoch = musicService.epoch;
+  if (!task.card.isConnected || musicService.service !== "spotify" || musicService.epoch !== serviceEpoch) return;
   if (!task.spotifyFallback && task.fallbackUrl) {
     setAlbumCover(task.cover, task.fallbackUrl, () => {
       enqueueSuggestionCover({ ...task, spotifyFallback: true });
@@ -1832,7 +1874,7 @@ async function loadSuggestedSpotifyCover(task) {
   }
   try {
     const token = await getSuggestionCoverSpotifyToken();
-    if (!task.card.isConnected) return;
+    if (!task.card.isConnected || musicService.service !== "spotify" || musicService.epoch !== serviceEpoch) return;
     if (!token) throw new Error("Cover Art Archive e Spotify non hanno fornito una copertina verificabile.");
     const matches = await suggestedSpotifyMatches(task.album, token);
     if (!task.card.isConnected) return;
@@ -1846,6 +1888,7 @@ async function loadSuggestedSpotifyCover(task) {
 }
 
 function enqueueSuggestionCover(task) {
+  if (musicService.service !== "spotify" || task.album.id?.startsWith("tidal:")) return;
   suggestionCoverQueue.push(task);
   processSuggestionCoverQueue();
 }
@@ -1887,7 +1930,7 @@ function renderManualAlbumResults(albums) {
   if (!albums.length) {
     const empty = document.createElement("p");
     empty.className = "suggestion-detail";
-    empty.textContent = "Nessun risultato album trovato.";
+    empty.textContent = "Nessun risultato verificabile trovato.";
     container.append(empty);
     return;
   }
@@ -1902,7 +1945,11 @@ function renderManualAlbumResults(albums) {
     name.textContent = album.name;
     const detail = document.createElement("span");
     detail.className = "suggestion-detail";
+    const metadata = spotifyAlbumMetadata.get(album.id);
     detail.textContent = ` · ${album.artist} · ${album.year || "Anno sconosciuto"}`
+      + (metadata?.albumType === "single"
+        ? ` · Singolo / EP (Spotify)${metadata.totalTracks ? ` · ${metadata.totalTracks} brani` : ""}`
+        : "")
       + (album.source ? ` · ${album.source}` : "");
     info.append(name, detail);
     const button = document.createElement("button");
@@ -1921,11 +1968,11 @@ function renderManualAlbumResults(albums) {
         return;
       }
       try {
-        if (addAlbumToCollection(album, { syncAutomatically: true })) {
+        if (addAlbumToCollection(album)) {
           button.textContent = "Aggiunto";
           button.disabled = true;
           button.setAttribute("aria-label", `${album.name} aggiunto alla raccolta`);
-          $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente; sincronizzazione GitHub avviata o in attesa di configurazione.`;
+          $("#manualAlbumStatus").textContent = `${album.name} aggiunto localmente. Sincronizza GitHub per inviarlo.`;
           if (suggestedMatchAlbumId && suggestedSourceAlbums.has(suggestedMatchAlbumId)) {
             suggestedMatchAlbumId = null;
           }
@@ -1970,7 +2017,11 @@ function rememberSpotifyAlbumMetadata(albums) {
       }) || "";
     const artistNames = (Array.isArray(album.artists) ? album.artists : [])
       .map((artist) => String(artist?.name || "").trim()).filter(Boolean);
-    if (coverUrl || artistNames.length) spotifyAlbumMetadata.set(id, { coverUrl, artistNames });
+    const albumType = album.album_type === "single" ? "single" : "";
+    const totalTracks = Number.isSafeInteger(Number(album.total_tracks)) ? Number(album.total_tracks) : 0;
+    if (coverUrl || artistNames.length || albumType) {
+      spotifyAlbumMetadata.set(id, { coverUrl, artistNames, albumType, totalTracks });
+    }
   }
   while (spotifyAlbumMetadata.size > 500) {
     spotifyAlbumMetadata.delete(spotifyAlbumMetadata.keys().next().value);
@@ -2021,7 +2072,7 @@ async function fetchSpotifyManualAlbums(filters, accessToken) {
   if (directId) {
     const spotifyAlbum = await spotifyRequest(`albums/${encodeURIComponent(directId)}`, accessToken);
     rememberSpotifyAlbumMetadata([spotifyAlbum]);
-    return playlistAlbumRecords([{ item: { type: "track", album: spotifyAlbum } }]);
+    return spotifyAlbumSearchRecords([{ item: { type: "track", album: spotifyAlbum } }]);
   }
   const queryTerms = [
     filters.album && spotifySearchField("album", filters.album),
@@ -2032,7 +2083,7 @@ async function fetchSpotifyManualAlbums(filters, accessToken) {
   const response = await spotifySearchRequest(parameters, accessToken);
   if (!Array.isArray(response.albums?.items)) throw new Error("Risposta Spotify senza risultati verificabili.");
   rememberSpotifyAlbumMetadata(response.albums.items);
-  return playlistAlbumRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })))
+  return spotifyAlbumSearchRecords(response.albums.items.map((album) => ({ item: { type: "track", album } })))
     .filter((album) => albumMatchesManualFilters(album, filters));
 }
 
@@ -3766,8 +3817,10 @@ async function searchManualAlbums(input = manualAlbumSearchInput(), accessToken 
     }
     renderManualAlbumResults(albums);
     $("#manualAlbumStatus").textContent = albums.length
-      ? `${albums.length} album trovati. ${filters.provider === "spotify" ? "Scegli un album da aggiungere." : "Seleziona un risultato e abbinalo a Spotify."}`
-      : `Nessun album trovato su ${filters.provider === "lastfm" ? "Last.fm" : filters.provider === "musicbrainz" ? "MusicBrainz" : "Spotify"}.`;
+      ? `${albums.length} ${filters.provider === "spotify" ? "release" : "album"} trovati. ${
+        filters.provider === "spotify" ? "Scegli un risultato da aggiungere." : "Seleziona un risultato e abbinalo a Spotify."}`
+      : `Nessun ${filters.provider === "spotify" ? "album, singolo o EP verificabile" : "album"} trovato su ${
+        filters.provider === "lastfm" ? "Last.fm" : filters.provider === "musicbrainz" ? "MusicBrainz" : "Spotify"}.`;
   } catch (error) {
     $("#manualAlbumStatus").textContent = `Ricerca non riuscita: ${error.message}`;
   } finally {
@@ -3803,11 +3856,11 @@ async function resolveManualAlbumToSpotify(album, accessToken = null) {
     if (matches.length === 1 && album.matchConfidence !== "ambiguous") {
       const match = matches[0];
       const alreadyPresent = state.albums.some((existing) => existing.id === match.id);
-      if (!alreadyPresent) addAlbumToCollection(match, { syncAutomatically: true });
+      if (!alreadyPresent) addAlbumToCollection(match);
       $("#manualAlbumResults").replaceChildren();
       $("#manualAlbumStatus").textContent = alreadyPresent
         ? `${match.name} è già nella raccolta.`
-        : `${match.name} trovato senza ambiguità e aggiunto alla raccolta.`;
+        : `${match.name} trovato senza ambiguità e aggiunto localmente. Sincronizza GitHub per inviarlo.`;
       if ($("#manualAlbumDialog").open) $("#manualAlbumDialog").close();
       return { alreadyPresent };
     }
@@ -3832,7 +3885,8 @@ function updateManualAlbumSourceNotice() {
     ? "Last.fm è predefinito e usa una richiesta per titolo, artista o genere. Il filtro anno non è disponibile."
     : provider === "musicbrainz"
       ? "MusicBrainz cerca per titolo, artista, tag/genere e anno con una richiesta al catalogo."
-      : "Spotify esegue una sola ricerca album per titolo, artista e anno; per evitare richieste aggiuntive il filtro genere è disattivato.";
+      : "Spotify esegue una sola ricerca per titolo, artista e anno; i risultati possono includere singoli / EP. "
+        + "Per evitare richieste aggiuntive il filtro genere è disattivato.";
 }
 
 async function loadSuggestedAlbums(artistName, trigger = null, accessToken = null) {
@@ -4830,16 +4884,22 @@ async function refreshSpotifyAccessToken(refreshToken) {
 }
 
 async function spotifyApiFetch(url, options, retryRead, budget = null) {
-  return spotifyTransport.fetch(url, options, retryRead, budget);
+  const serviceEpoch = musicService.epoch;
+  musicService.assert("spotify", serviceEpoch);
+  const response = await spotifyTransport.fetch(url, { ...options, accordServiceEpoch: serviceEpoch }, retryRead, budget);
+  musicService.assert("spotify", serviceEpoch);
+  return response;
 }
 
 async function spotifyRequest(path, accessToken, budget = null) {
+  const serviceEpoch = musicService.epoch;
+  musicService.assert("spotify", serviceEpoch);
   const url = new URL(path, `${SPOTIFY_API}/`);
   if (url.origin !== "https://api.spotify.com" || !url.pathname.startsWith("/v1/")) {
     throw new Error("Indirizzo API Spotify non valido.");
   }
   budget?.read();
-  return spotifyJsonReader.read(url, accessToken, async (etag) => {
+  const data = await spotifyJsonReader.read(url, accessToken, async (etag) => {
     const headers = { Accept: "application/json", Authorization: `Bearer ${accessToken}` };
     if (etag) headers["If-None-Match"] = etag;
     const response = await spotifyApiFetch(url, {
@@ -4856,6 +4916,8 @@ async function spotifyRequest(path, accessToken, budget = null) {
     if (!response.ok && response.status !== 304) throw new Error(`Richiesta Spotify non riuscita (HTTP ${response.status}).`);
     return response;
   });
+  musicService.assert("spotify", serviceEpoch);
+  return data;
 }
 
 function spotifySearchRequest(parameters, accessToken, budget = null) {
@@ -4911,6 +4973,45 @@ async function chooseSpotifyPlaylist(playlists) {
   });
 }
 
+async function chooseSpotifyPlaylistSingles(name, singles, albums, skipped) {
+  const dialog = $("#playlistSinglesDialog");
+  const list = $("#playlistSinglesList");
+  const existingIds = new Set(albums.map((album) => album.id));
+  list.replaceChildren();
+  $("#playlistSinglesSummary").textContent =
+    `Playlist “${name}”: ${albums.length} album completi verranno inclusi se confermi. `
+    + `Scegli singolarmente i singoli / EP da aggiungere. `
+    + `Spotify li identifica come tipo “single” e non distingue con certezza EP e singoli.`
+    + (skipped ? ` ${skipped} elementi non disponibili o di altro tipo saranno saltati.` : "");
+  for (const { album, totalTracks } of singles) {
+    const label = document.createElement("label");
+    label.className = "check playlist-single-choice";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = album.id;
+    checkbox.checked = false;
+    checkbox.disabled = existingIds.has(album.id);
+    const text = document.createElement("span");
+    text.textContent = `${album.name} · ${album.artist} · ${album.year || "Anno sconosciuto"}`
+      + (totalTracks ? ` · ${totalTracks} brani` : "")
+      + (checkbox.disabled ? " · Già in raccolta" : "");
+    label.append(checkbox, text);
+    list.append(label);
+  }
+  dialog.returnValue = "";
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      resolve({
+        confirmed: dialog.returnValue === "import",
+        ids: dialog.returnValue === "import"
+          ? [...list.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value)
+          : [],
+      });
+    }, { once: true });
+    dialog.showModal();
+  });
+}
+
 async function resolveSpotifyPlaylist(input, accessToken) {
   const id = spotifyPlaylistId(input);
   if (id) {
@@ -4951,8 +5052,7 @@ async function runPlaylistImport(input, accessToken) {
     summary = JSON.parse(cached.summary);
   } else {
     const entries = await completeSpotifyPages(`playlists/${encodeURIComponent(playlist.id)}/items?limit=50&offset=0`, accessToken);
-    summary = { albums: playlistAlbumRecords(entries), count: entries.length,
-      skipped: entries.filter((entry) => !playlistAlbumRecords([entry]).length).length };
+    summary = { ...playlistReleaseRecords(entries), count: entries.length };
   }
   const latest = await spotifyRequest(`playlists/${encodeURIComponent(playlist.id)}?fields=id,snapshot_id`, accessToken);
   if (latest.id !== playlist.id || latest.snapshot_id !== playlist.snapshot_id) {
@@ -4964,10 +5064,23 @@ async function runPlaylistImport(input, accessToken) {
     spotifyPlaylistSnapshots.set(key, { snapshot: playlist.snapshot_id, summary: serialized });
     while (spotifyPlaylistSnapshots.size > 32) spotifyPlaylistSnapshots.delete(spotifyPlaylistSnapshots.keys().next().value);
   }
-  const additions = summary.albums;
+  const singles = summary.singles || [];
+  let selectedSingles = [];
+  if (singles.length) {
+    const choice = await chooseSpotifyPlaylistSingles(playlist.name, singles, state.albums, summary.skipped);
+    if (!choice.confirmed) {
+      setSyncState("Importazione annullata: raccolta invariata");
+      return;
+    }
+    const selectedIds = new Set(choice.ids);
+    selectedSingles = singles
+      .filter(({ album }) => selectedIds.has(album.id))
+      .map(({ album }) => album);
+  }
+  const additions = [...summary.albums, ...selectedSingles];
   const result = addPlaylistAlbums(state.albums, additions);
   const skipped = summary.skipped;
-  if (!window.confirm(`${playlist.name}: ${result.added} album nuovi, ${result.duplicates} gia' presenti e invariati, ${
+  if (!singles.length && !window.confirm(`${playlist.name}: ${result.added} album nuovi, ${result.duplicates} gia' presenti e invariati, ${
     skipped} elementi non utilizzabili saltati. Applicare solo alla raccolta locale?`)) {
     setSyncState("Importazione annullata: raccolta invariata");
     return;
@@ -4989,7 +5102,9 @@ async function runPlaylistImport(input, accessToken) {
     setSyncState("Playlist importata · nessun album nuovo");
   }
   showMessage("Importazione playlist completata",
-    `${playlist.name}: ${summary.count} brani letti, ${additions.length} album trovati, ${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato automaticamente a GitHub; usa Sincronizza per inviare la raccolta.`);
+    `${playlist.name}: ${summary.count} brani letti, ${summary.albums.length} album completi trovati, `
+    + `${singles.length} singoli / EP elencati, ${selectedSingles.length} selezionati, `
+    + `${result.added} aggiunti e ${result.duplicates} già presenti. Nessun dato è stato inviato automaticamente a GitHub; usa Sincronizza per inviare la raccolta.`);
 }
 
 async function importSpotifyPlaylist(input, accessToken = null) {
@@ -5020,6 +5135,7 @@ async function importSpotifyPlaylist(input, accessToken = null) {
 }
 
 async function startSpotifyAuthorization(input, task = "playlist") {
+  musicService.assert("spotify");
   const { clientId, redirectUri } = spotifySettings();
   if (!clientId || !redirectUri) throw new Error("Configura prima Client ID e Redirect URI Spotify.");
   if (!crypto.subtle || !window.isSecureContext) {
@@ -5079,6 +5195,7 @@ async function startSpotifyAuthorization(input, task = "playlist") {
 
 async function finishSpotifyAuthorization() {
   const callback = new URL(location.href);
+  if (callback.searchParams.get("state")?.startsWith("tidal.")) return;
   const code = callback.searchParams.get("code");
   const error = callback.searchParams.get("error");
   if (!code && !error) return;
@@ -5201,11 +5318,13 @@ async function finishSpotifyAuthorization() {
 }
 
 $("#playlistImportButton").addEventListener("click", () => {
+  if (musicService.service === "tidal") { activateViewTab($("#playlistBuilderTab")); return; }
   $("#playlistInput").value = "";
   $("#playlistDialog").showModal();
 });
 
 $("#manualAlbumButton").addEventListener("click", () => {
+  if (musicService.service === "tidal") { activateViewTab($("#collectionTab")); $("#tidalAlbumQuery").focus(); return; }
   $("#manualAlbumSource").value = "spotify";
   $("#manualAlbumQuery").value = "";
   $("#manualAlbumArtist").value = "";
@@ -6059,6 +6178,23 @@ if (updateView) {
   } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
 }
 const incomingShare = ["share_url", "share_text", "share_title"].some((key) => new URL(location.href).searchParams.has(key));
+initializeTidalUI({
+  gate: musicService,
+  addAlbum: (album, artwork) => {
+    const record = validateAlbum(album);
+    if (artwork) collectionCoverImageUrls.set(record.id, artwork);
+    const added = addAlbumToCollection(record);
+    if (!added) render();
+    return added;
+  },
+  changed: () => {
+    collectionCoverQueue.length = 0;
+    suggestionCoverQueue.length = 0;
+    collectionCoverObserver?.disconnect();
+    suggestionCoverObserver?.disconnect();
+    render();
+  },
+});
 render({ remoteCovers: !incomingShare && !updateView });
 receiveSharedAlbum();
 restoreListeningSuggestionsForSpotifyReturn();

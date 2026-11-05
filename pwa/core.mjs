@@ -96,11 +96,15 @@ export function validateAlbum(value) {
   value = { ...value, status: normalizeAlbumStatus(value.status) };
   const url = new URL(value.url);
   const match = url.pathname.match(/^\/album\/([A-Za-z0-9]+)$/);
-  if (url.protocol !== "https:" || url.host !== "open.spotify.com" || url.username || url.password
-      || !match || match[1] !== value.id
+  const tidal = /^tidal:[1-9][0-9]*$/.test(value.id);
+  const validLink = tidal
+    ? url.host === "tidal.com" && url.pathname === `/browse/album/${value.id.slice(6)}` && !url.search && !url.hash
+    : /^[A-Za-z0-9]+$/.test(value.id) && url.host === "open.spotify.com" && match?.[1] === value.id;
+  if (url.protocol !== "https:" || url.username || url.password || !validLink
       || !value.name || !value.artist || !ALBUM_STATES.has(value.status)) {
-    throw new Error("Album o link Spotify non valido.");
+    throw new Error(tidal ? "Album o link TIDAL non valido." : "Album o link Spotify non valido.");
   }
+  if (tidal) value = { ...value, url: `https://tidal.com/browse/album/${value.id.slice(6)}` };
   if (value.rating !== null && (!Number.isFinite(value.rating) || value.rating < 0.5 || value.rating > 5
       || !Number.isInteger(value.rating * 2))) throw new Error("Il voto deve andare da 0,5 a 5.");
   if (!Array.isArray(value.genres) || value.genres.some((genre) => typeof genre !== "string")) {
@@ -696,11 +700,14 @@ export async function readSpotifySearchPages(parameters, request) {
   return { ...result, [key]: { ...result[key], items } };
 }
 
-export function playlistAlbumRecords(entries, playlistName = "") {
+export function playlistReleaseRecords(entries) {
   const albums = new Map();
+  const singles = new Map();
+  let skipped = 0;
   for (const entry of entries) {
     const item = entry?.item || entry?.track;
     const album = item?.album;
+    const type = album?.album_type;
     const id = album?.id;
     const name = album?.name;
     const artist = (Array.isArray(album?.artists) ? album.artists : [])
@@ -710,11 +717,18 @@ export function playlistAlbumRecords(entries, playlistName = "") {
     const match = typeof url === "string"
       ? url.match(/^https:\/\/open\.spotify\.com\/album\/([A-Za-z0-9]{22})(?:[?#].*)?$/)
       : null;
-    if (item?.type && item.type !== "track") continue;
-    if (!album || album.album_type !== "album" || album.restrictions
+    if (item?.type && item.type !== "track") {
+      skipped += 1;
+      continue;
+    }
+    if (!album || !["album", "single"].includes(type) || album.restrictions
         || typeof id !== "string" || id !== match?.[1]
-        || typeof name !== "string" || !name || !artist || albums.has(id)) continue;
-    albums.set(id, validateAlbum({
+        || typeof name !== "string" || !name || !artist) {
+      skipped += 1;
+      continue;
+    }
+    if (albums.has(id) || singles.has(id)) continue;
+    const record = validateAlbum({
       id,
       name,
       artist,
@@ -726,9 +740,34 @@ export function playlistAlbumRecords(entries, playlistName = "") {
       collections: [],
       tags: [],
       cover_sha256: null,
-    }));
+    });
+    if (type === "single") {
+      const totalTracks = Number(album.total_tracks);
+      singles.set(id, { album: record, totalTracks: Number.isSafeInteger(totalTracks) && totalTracks >= 0
+        ? totalTracks : 0 });
+    } else {
+      albums.set(id, record);
+    }
   }
-  return [...albums.values()];
+  return { albums: [...albums.values()], singles: [...singles.values()], skipped };
+}
+
+export function playlistAlbumRecords(entries) {
+  return playlistReleaseRecords(entries).albums;
+}
+
+export function spotifyAlbumSearchRecords(entries) {
+  const records = [];
+  const seen = new Set();
+  for (const entry of entries) {
+    const releases = playlistReleaseRecords([entry]);
+    const record = releases.albums[0] || releases.singles[0]?.album;
+    if (record && !seen.has(record.id)) {
+      seen.add(record.id);
+      records.push(record);
+    }
+  }
+  return records;
 }
 
 export function listenBrainzRecommendations(rows, referenceMbid) {
@@ -1616,9 +1655,10 @@ export async function encodeCoverArchive(covers) {
   let total = COVER_MAGIC.length;
   for (const [id, value] of entries) {
     const data = value instanceof Uint8Array ? value : value.data;
-    if (!/^[A-Za-z0-9]+$/.test(id) || !(data instanceof Uint8Array)
+    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id) || !(data instanceof Uint8Array)
         || data.length === 0 || data.length > MAX_COVER_BYTES) throw new Error("Miniatura album non valida.");
     const idBytes = new TextEncoder().encode(id);
+    if (idBytes.length > 255) throw new Error("Identificativo miniatura troppo lungo.");
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
     const length = new Uint8Array(4);
     new DataView(length.buffer).setUint32(0, data.length);
@@ -1647,7 +1687,7 @@ export async function decodeCoverArchive(archive) {
     if (!idLength || offset + idLength + 36 > archive.length) throw new Error("Indice copertina non valido.");
     const id = new TextDecoder("ascii", { fatal: true }).decode(archive.subarray(offset, offset + idLength));
     offset += idLength;
-    if (!/^[A-Za-z0-9]+$/.test(id) || covers.has(id)) throw new Error("Identificativo copertina duplicato o non valido.");
+    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id) || covers.has(id)) throw new Error("Identificativo copertina duplicato o non valido.");
     const digest = archive.slice(offset, offset + 32);
     offset += 32;
     const dataLength = new DataView(archive.buffer, archive.byteOffset + offset, 4).getUint32(0);
