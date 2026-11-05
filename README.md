@@ -7,6 +7,10 @@
   una sincronizzazione GitHub: usa **Sincronizza** quando desideri inviare
   le modifiche. Restano invariati sincronizzazione all'avvio, conflitti,
   dati locali e tutte le funzionalita' delle release precedenti.
+- L'installazione di una nuova cache ricarica i soli file statici dalla
+  rete, evitando di conservare una vecchia pagina dalla cache HTTP.
+  L'attivazione resta esplicita da **Aggiorna ora**, senza cancellare
+  raccolta, bozze o preferenze.
 
 ## Correzione PWA 1.11.1 · TIDAL allineato a Spotify
 

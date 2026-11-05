@@ -341,12 +341,22 @@ test("restore dialog previews selective writes, refuses concurrent edits, and ap
   assert.equal(state.preferences.contrast, "high");
 });
 
-test("service worker never skips waiting during install, only on explicit update activation", async () => {
+test("service worker reloads static HTTP cache on install and activates only on explicit update", async () => {
   const handlers = {}, calls = [];
   runInNewContext(readFileSync(new URL("./sw.js", import.meta.url), "utf8"), {
-    self: { addEventListener: (event, listener) => { handlers[event] = listener; },
+    URL, Request,
+    self: { location: { href: "https://example.test/accord/pwa/sw.js" },
+      addEventListener: (event, listener) => { handlers[event] = listener; },
       skipWaiting: async () => { calls.push("activate"); } },
-    caches: { open: async () => ({ addAll: async (files) => { calls.push(`cache:${files.length}`); } }) },
+    caches: { open: async () => ({ addAll: async (files) => {
+      assert.ok(files.some((file) => file.url === "https://example.test/accord/pwa/index.html"));
+      for (const file of files) {
+        assert.ok(file instanceof Request);
+        assert.equal(file.cache, "reload", "a new release must not precache stale HTTP shell/assets");
+        assert.equal(new URL(file.url).origin, "https://example.test");
+      }
+      calls.push(`cache:${files.length}`);
+    } }) },
   });
   let pending;
   handlers.install({ waitUntil: (promise) => { pending = promise; } });

@@ -15,7 +15,9 @@ const FILES = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(FILES)));
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(
+    FILES.map((file) => new Request(new URL(file, self.location.href), { cache: "reload" })),
+  )));
 });
 
 self.addEventListener("activate", (event) => {
