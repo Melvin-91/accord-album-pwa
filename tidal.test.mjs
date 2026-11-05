@@ -366,13 +366,13 @@ test("active root/copy modules and tests match; precache covers modules, version
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
   assert.match(html, /v1\.11\.2/); assert.match(sw, /v1\.11\.2/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=79/); assert.match(sw, /style\.css\?v=33/);
+  assert.match(sw, /app\.mjs\?v=80/); assert.match(sw, /style\.css\?v=33/);
   assert.match(sw, /tidal\.mjs\?v=1/); assert.match(sw, /tidal-ui\.mjs\?v=3/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     assert.match(mirrorHtml, /v1\.11\.2/); assert.match(mirrorWorker, /v1\.11\.2/);
-    for (const file of ["app.mjs?v=79", "style.css?v=33", "tidal-ui.mjs?v=3"]) {
+    for (const file of ["app.mjs?v=80", "style.css?v=33", "tidal-ui.mjs?v=3"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

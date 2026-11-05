@@ -5325,7 +5325,7 @@ $("#playlistImportButton").addEventListener("click", () => {
 
 $("#manualAlbumButton").addEventListener("click", () => {
   if (musicService.service === "tidal") { activateViewTab($("#collectionTab")); $("#tidalAlbumQuery").focus(); return; }
-  $("#manualAlbumSource").value = "spotify";
+  $("#manualAlbumSource").value = "lastfm";
   $("#manualAlbumQuery").value = "";
   $("#manualAlbumArtist").value = "";
   $("#manualAlbumGenre").value = "";

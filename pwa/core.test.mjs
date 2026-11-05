@@ -680,6 +680,32 @@ function appFunction(start, end) {
   return uiAppSource.slice(beginning, ending);
 }
 
+test("manual album dialog defaults to Last.fm and preserves the saved search source", () => {
+  const nodes = new Map();
+  let savedSource = null;
+  const context = {
+    musicService: { service: "spotify" },
+    $: (id) => {
+      if (!nodes.has(id)) nodes.set(id, {
+        addEventListener(_type, callback) { this.click = callback; },
+        replaceChildren() {}, showModal() {}, focus() {},
+      });
+      return nodes.get(id);
+    },
+    updateManualAlbumSourceNotice() {},
+    restoreManualAlbumDraft() {
+      if (savedSource) nodes.get("#manualAlbumSource").value = savedSource;
+    },
+  };
+  runInNewContext(appFunction('$("#manualAlbumButton").addEventListener("click"',
+    '\n$("#manualAlbumSource").addEventListener'), context);
+  nodes.get("#manualAlbumButton").click();
+  assert.equal(nodes.get("#manualAlbumSource").value, "lastfm");
+  savedSource = "musicbrainz";
+  nodes.get("#manualAlbumButton").click();
+  assert.equal(nodes.get("#manualAlbumSource").value, "musicbrainz");
+});
+
 test("manual Spotify additions stay local until explicit GitHub synchronization", () => {
   const album = qosAlbum("new");
   const nodes = new Map();
@@ -1412,7 +1438,7 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=79", "style.css?v=33"]) {
+  for (const file of ["app.mjs?v=80", "style.css?v=33"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }

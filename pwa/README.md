@@ -11,6 +11,8 @@
   rete, evitando di conservare una vecchia pagina dalla cache HTTP.
   L'attivazione resta esplicita da **Aggiorna ora**, senza cancellare
   raccolta, bozze o preferenze.
+- La ricerca manuale parte da Last.fm, come indicato nel selettore e nel
+  desktop; una bozza esistente mantiene invece la fonte gia' scelta.
 
 ## Correzione PWA 1.11.1 · TIDAL allineato a Spotify
 

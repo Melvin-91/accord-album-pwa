@@ -5,7 +5,7 @@ const FILES = [
   "./style.css?v=33",
   "./core.mjs?v=45",
   "./ui.mjs?v=9",
-  "./app.mjs?v=79",
+  "./app.mjs?v=80",
   "./tidal.mjs?v=1",
   "./tidal-ui.mjs?v=3",
   "./manifest.json",
