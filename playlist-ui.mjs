@@ -1,4 +1,4 @@
-import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=1";
+import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=2";
 
 export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView }) {
   const field = (id) => document.getElementById(id);
@@ -134,7 +134,7 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
     try { guard(); } catch (error) { reset(); status.textContent = error.message; return; }
     const privacy = provider === "tidal" ? "non in elenco, accessibile a chi ha il link (NON privata)" : "privata";
     if (!confirm(`Creare «${name}» ${privacy} con ${preview.tracks.length} brani verificati?`)) return;
-    const tracks = preview.tracks;
+    const savedPreview = preview, tracks = preview.tracks;
     busy = true; preview = null; controls();
     status.textContent = "Creo la playlist e aggiungo i brani verificati…";
     try {
@@ -147,7 +147,11 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
       status.textContent = `Playlist ${privacy} creata: ${playlist.name || name} · ${tracks.length} brani.`;
       state = null; source = null;
     } catch (error) {
-      if (gate.service === provider && gate.epoch === epoch) status.textContent = `Creazione non completata: ${error.message}`;
+      if (gate.service === provider && gate.epoch === epoch) {
+        const pending = uncertain.get();
+        if (!pending && expected === currentSignature()) preview = savedPreview;
+        status.textContent = `${pending ? "Creazione non completata" : "Creazione non avviata"}: ${error.message}`;
+      }
     } finally { busy = false; configure(); controls(); }
   }
   verify.addEventListener("click", async () => {

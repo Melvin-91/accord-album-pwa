@@ -1473,18 +1473,18 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=97", "style.css?v=36"]) {
+  for (const file of ["app.mjs?v=99", "style.css?v=36"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=5", "tidal-ui.mjs?v=16", "qobuz-ui.mjs?v=13",
-    "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "playlist-ui.mjs?v=1",
+  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=7", "tidal-ui.mjs?v=18", "qobuz-ui.mjs?v=14",
+    "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "playlist-ui.mjs?v=2",
     "music-app-links.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
-  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=1"));
-  assert.ok(sw.includes("catalog-playlist.mjs?v=1"));
+  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=2"));
+  assert.ok(sw.includes("catalog-playlist.mjs?v=2"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
     assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
   }

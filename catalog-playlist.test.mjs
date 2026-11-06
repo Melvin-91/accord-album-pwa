@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs";
 import { CatalogSuggestions } from "./catalog-suggestions.mjs";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs";
 
 const discovery = (count = 1) => ({
   target: count, source: "Archivio locale", reads: 0, stats: {}, filters: {}, canContinue: false,
@@ -99,6 +100,83 @@ test("create succeeded but add failed leaves sticky uncertainty and blocks a sec
   assert.equal(f.pending(), true);
   await assert.rejects(createCatalogPlaylist(f.options), /Verifica prima/);
   assert.deepEqual(f.calls, ["create"]);
+});
+
+test("cooldown preflight prevents creation without marking a write as uncertain", async () => {
+  const f = writer();
+  f.options.api.preflight = async () => { throw new Error("TIDAL: attendi 120 secondi"); };
+  await assert.rejects(createCatalogPlaylist(f.options), /attendi 120/);
+  assert.equal(f.pending(), false);
+  assert.deepEqual(f.calls, []);
+});
+
+test("playlist UI preserves its preview after preflight cooldown and can create after the pause", async (t) => {
+  const globals = ["document", "window", "navigator", "localStorage", "confirm"];
+  const previous = new Map(globals.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
+  t.after(() => {
+    for (const [name, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else delete globalThis[name];
+    }
+  });
+  const nodes = new Map(), data = new Map();
+  function node(id) {
+    if (!nodes.has(id)) nodes.set(id, { value: "", textContent: "", parentElement: {},
+      addEventListener() {}, replaceChildren() {}, querySelector: (selector) => node(selector) });
+    return nodes.get(id);
+  }
+  const settings = {
+    document: { getElementById: node, querySelector: () => node("root") },
+    window: { addEventListener() {} }, confirm: () => true,
+    localStorage: { getItem: (key) => data.get(key) ?? null,
+      setItem: (key, value) => data.set(key, value), removeItem: (key) => data.delete(key) },
+    navigator: { locks: { request: async (_name, run) => run() } },
+  };
+  for (const [name, value] of Object.entries(settings)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value });
+  }
+  for (const service of ["tidal", "qobuz"]) {
+    let paused = true, creations = 0, additions = 0, preparations = 0;
+    const api = {
+      revision: () => "account", batchSize: service === "tidal" ? 50 : 100,
+      preflight: async () => { if (paused) throw new Error("attendi 120 secondi"); },
+      create: async () => { creations += 1; return { id: "p1", name: "New" }; },
+      add: async () => { additions += 1; },
+      prepare: async () => { preparations += 1; return { tracks: [{ id: "1", name: "First" }] }; },
+      adopt() {},
+    };
+    const ui = initializeCatalogPlaylistUI({
+      gate: { service, epoch: 1, assert() {} }, providers: { [service]: { playlistAPI: api } },
+      discoveryUI: { playlistSignature: () => "filters" },
+      render() {}, clearSpotifyPreview() {}, selectView() {},
+    });
+    node("playlistBuilderName").value = "New";
+    await ui.prepareRecords([{}]);
+    await ui.create();
+    assert.equal(creations, 0);
+    assert.equal(data.size, 0);
+    assert.equal(node("playlistCreateButton").disabled, false);
+    assert.match(node("playlistBuilderStatus").textContent, /Creazione non avviata.*attendi 120/);
+    paused = false;
+    await ui.create();
+    assert.equal(creations, 1);
+    assert.equal(additions, 1);
+    assert.equal(preparations, 1);
+    assert.equal(data.size, 0);
+    assert.equal(node("playlistCreateButton").disabled, true);
+  }
+});
+
+test("rate limit on the second batch preserves confirmed progress and never resends", async () => {
+  const f = writer(50);
+  f.options.api.add = async (_id, ids) => {
+    f.calls.push(ids);
+    if (f.calls.length === 3) throw new Error("TIDAL: attendi 120 secondi");
+  };
+  await assert.rejects(createCatalogPlaylist(f.options), /50\/121 brani confermati.*attendi 120.*non ricreare/);
+  assert.equal(f.pending(), true);
+  await assert.rejects(createCatalogPlaylist(f.options), /Verifica prima/);
+  assert.equal(f.calls.length, 3);
 });
 
 test("provider changes while waiting for the lock prevent every remote write", async () => {

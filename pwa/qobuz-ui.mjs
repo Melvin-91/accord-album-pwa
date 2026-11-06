@@ -1,5 +1,5 @@
-import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=5";
-import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=4";
+import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=6";
+import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=5";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 

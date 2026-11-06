@@ -16,9 +16,10 @@ export function createServiceRequests({
 }) {
   const queues = storage
     ? storageQueues.get(storage) || storageQueues.set(storage, new Map()).get(storage) : memoryQueues;
-  if (!queues.has(service)) queues.set(service, { queue: Promise.resolve(), next: 0, cooldown: 0 });
+  if (!queues.has(service)) queues.set(service, { queue: Promise.resolve(), next: 0, cooldown: 0, interval: 1000 });
   const state = queues.get(service);
   const cooldownKey = `accord-${service}-cooldown-until-v1`, nextKey = `accord-${service}-next-request-v1`;
+  const intervalKey = `accord-${service}-request-interval-v1`, adaptive = service === "tidal";
   function number(key, fallback) {
     const raw = storage?.getItem(key);
     const result = raw == null ? fallback : Number(raw);
@@ -26,7 +27,19 @@ export function createServiceRequests({
     return result;
   }
   function save(key, value) { storage?.setItem(key, String(value)); }
+  function interval() {
+    const previousLimit = adaptive && number(cooldownKey, state.cooldown) > 0;
+    const value = adaptive ? number(intervalKey, Math.max(state.interval, previousLimit ? 5000 : 1000)) : 500;
+    if (adaptive && (value < 1000 || value > 60_000)) throw new Error("Stato richieste tidal non valido.");
+    return value;
+  }
+  function ready() {
+    interval();
+    const remaining = number(cooldownKey, state.cooldown) - now();
+    if (remaining > 0) throw new Error(`${service.toUpperCase()}: attendi ${Math.ceil(remaining / 1000)} secondi (Retry-After).`);
+  }
   return {
+    ready,
     send(request, { read = true, signal, check = () => {}, beforeSend = () => {} } = {}) {
       const guard = () => {
         signal?.throwIfAborted();
@@ -42,12 +55,11 @@ export function createServiceRequests({
       };
       const run = async () => {
         guard();
-        const remaining = number(cooldownKey, state.cooldown) - now();
-        if (remaining > 0) throw new Error(`${service.toUpperCase()}: attendi ${Math.ceil(remaining / 1000)} secondi (Retry-After).`);
+        ready();
         for (let attempt = 0; attempt < 3; attempt += 1) {
           await pause(Math.max(0, number(nextKey, state.next) - now()));
           beforeSend?.();
-          state.next = now() + 500;
+          state.next = now() + interval();
           save(nextKey, state.next);
           let response;
           try { response = await request(); }
@@ -60,6 +72,14 @@ export function createServiceRequests({
           let retry = null;
           if (response.status === 429) {
             retry = retryMilliseconds(response.headers.get("Retry-After"), now());
+            if (adaptive) {
+              const slower = Math.min(60_000, Math.max(5000, interval() * 2));
+              state.interval = slower;
+              save(intervalKey, slower);
+              retry = Math.max(retry, slower);
+              state.next = Math.max(number(nextKey, state.next), now() + slower);
+              save(nextKey, state.next);
+            }
             state.cooldown = Math.max(number(cooldownKey, state.cooldown), now() + retry);
             save(cooldownKey, state.cooldown);
           }

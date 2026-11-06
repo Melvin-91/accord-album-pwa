@@ -1,5 +1,31 @@
 # Accord · Raccolta album PWA
 
+## PWA 1.15.4 · Paginazione TIDAL senza prefisso API
+
+- Nei link alla pagina successiva il prefisso /v2 puo' essere ripristinato
+  solo per lo stesso host/protocollo e l'identico percorso della risorsa
+  corrente senza prefisso. Non sono ammessi altri host, risorse o versioni.
+- Cursori preservati; invariati controlli URL, limiti di lettura e politica
+  richieste. Modifica locale, non ancora pubblicata.
+
+## PWA 1.15.3 · Ritmo adattivo TIDAL e creazione playlist
+
+- TIDAL: almeno 1 s fra richieste; dopo un 429, almeno 5 s, poi raddoppio
+  fino a 60 s. Ritmo appreso persistente fra schede/riavvii, senza
+  accelerazione automatica dopo successi. Cooldown delle versioni
+  precedenti, anche scaduto, porta il ritmo iniziale ad almeno 5 s.
+- Retry-After e' un minimo, non un invito a ripartire subito al ritmo
+  precedente. Nessuna quota numerica ufficiale garantita; richieste da
+  altri dispositivi/app non sono coordinate. Qobuz invariato.
+- La creazione controlla il cooldown prima di segnare una scrittura come
+  incerta e conserva l'anteprima se impedisce l'avvio. Dopo la creazione,
+  in caso di errore mostra anche il numero di
+  brani confermati; non ricrea la playlist e non reinvia blocchi falliti.
+- Approfondimenti: [playlist e 429](https://github.com/orgs/tidal-music/discussions/155),
+  [letture aggregate](https://github.com/tidal-music/discussions/discussions/185#discussioncomment-13471571).
+  Esperienze della comunita', non quote ufficiali TIDAL.
+- Modifica locale, non ancora pubblicata.
+
 ## PWA 1.15.2 · Richieste TIDAL e Qobuz
 
 - Coda per servizio con almeno 500 ms fra chiamate; non e' una quota

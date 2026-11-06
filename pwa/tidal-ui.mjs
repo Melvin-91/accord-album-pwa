@@ -1,6 +1,6 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=5";
+} from "./tidal.mjs?v=7";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 
@@ -799,7 +799,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     }))),
     revision: () => `${accountRevision}|${client.value}|${country.value}`,
     batchSize: 50,
-    preflight: async () => { gate.assert("tidal"); await auth.access(client.value.trim()); },
+    preflight: async () => {
+      gate.assert("tidal"); transport.ready(); await auth.access(client.value.trim()); transport.ready();
+    },
     albumTracks: async (id) => {
       const current = epoch(), account = accountRevision;
       gate.assert("tidal", current);

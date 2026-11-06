@@ -249,6 +249,29 @@ test("pagination follows same-origin same-resource cursors, reports bounded part
   }
 });
 
+test("pagination restores missing v2 only for the same origin and identical opaque search resource", async () => {
+  const path = "/searchResults/opaque%2Fvalue/relationships/albums";
+  for (const link of [path + "?page[cursor]=second",
+    "https://openapi.tidal.com" + path + "?page[cursor]=second"]) {
+    const f = fixture((_url, _init, count) => json({ data: [{ type: "albums", id: String(count) }],
+      links: { next: count === 1 ? link : null } }));
+    const result = await f.transport.pages("https://openapi.tidal.com/v2" + path, "token");
+    assert.equal(result.complete, true);
+    assert.equal(result.count, 2);
+    assert.equal(f.calls.length, 2);
+    const next = new URL(f.calls[1].url);
+    assert.equal(next.pathname, "/v2" + path);
+    assert.equal(next.searchParams.get("page[cursor]"), "second");
+  }
+  for (const link of ["https://evil.test" + path, "http://openapi.tidal.com" + path,
+    "https://user@openapi.tidal.com" + path, path + "#fragment",
+    "/searchResults/other/relationships/albums", "/albums", "/v1" + path, "/v3" + path]) {
+    const f = fixture(() => json({ data: [], links: { next: link } }));
+    await assert.rejects(f.transport.pages("https://openapi.tidal.com/v2" + path, "token"));
+    assert.equal(f.calls.length, 1);
+  }
+});
+
 const authFixture = () => {
   const session = storage(), tokens = [];
   let time = 100_000;
@@ -390,18 +413,18 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.15\.2/); assert.match(sw, /v1\.15\.2/);
+  assert.match(html, /v1\.15\.4/); assert.match(sw, /v1\.15\.4/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=97/); assert.match(sw, /style\.css\?v=36/);
-  assert.match(sw, /tidal\.mjs\?v=5/); assert.match(sw, /tidal-ui\.mjs\?v=16/);
+  assert.match(sw, /app\.mjs\?v=99/); assert.match(sw, /style\.css\?v=36/);
+  assert.match(sw, /tidal\.mjs\?v=7/); assert.match(sw, /tidal-ui\.mjs\?v=18/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
-    assert.match(mirrorHtml, /v1\.15\.2/); assert.match(mirrorWorker, /v1\.15\.2/);
+    assert.match(mirrorHtml, /v1\.15\.4/); assert.match(mirrorWorker, /v1\.15\.4/);
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=97", "style.css?v=36", "tidal-ui.mjs?v=16", "qobuz.mjs?v=5", "qobuz-ui.mjs?v=13",
-      "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "catalog-playlist.mjs?v=1", "playlist-ui.mjs?v=1",
-      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=4", "music-suggestion-filters.mjs?v=1", "service-requests.mjs?v=1"]) {
+    for (const file of ["app.mjs?v=99", "style.css?v=36", "tidal-ui.mjs?v=18", "qobuz.mjs?v=6", "qobuz-ui.mjs?v=14",
+      "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "catalog-playlist.mjs?v=2", "playlist-ui.mjs?v=2",
+      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=5", "music-suggestion-filters.mjs?v=1", "service-requests.mjs?v=2"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

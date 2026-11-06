@@ -1,5 +1,5 @@
-import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=5";
-import { createServiceRequests } from "./service-requests.mjs?v=1";
+import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=6";
+import { createServiceRequests } from "./service-requests.mjs?v=2";
 
 const AUDIO_HOSTS = new Set(["streaming-qobuz-sec.akamaized.net", "streaming-qobuz-std.akamaized.net"]);
 const BUNDLE_LIMIT = 16 * 1024 * 1024;

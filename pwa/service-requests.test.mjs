@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServiceRequests, retryMilliseconds } from "./service-requests.mjs?v=1";
+import { createServiceRequests, retryMilliseconds } from "./service-requests.mjs?v=2";
 import { createTidalTransport } from "./tidal.mjs";
 import { createQobuzClient } from "./qobuz.mjs";
 
@@ -29,6 +29,47 @@ test("429 respects Retry-After and retries a read without another parallel reque
     return times.length === 1 ? json({}, 429, { "Retry-After": "2" }) : json();
   });
   assert.deepEqual(times.map((time) => time - times[0]), [0, 2000]);
+});
+
+test("TIDAL learns slower pacing on 429 and shares it with subsequent clients", async () => {
+  const f = fixture("tidal"), times = [], statuses = [429, 200, 200, 429, 200, 200];
+  const send = async () => {
+    times.push(f.time());
+    return json({}, statuses.shift(), { "Retry-After": "1" });
+  };
+  await f.policy.send(send);
+  const recreated = createServiceRequests(f.options);
+  for (let i = 0; i < 3; i += 1) await recreated.send(send);
+  assert.deepEqual(times.map((time) => time - times[0]), [0, 5000, 10000, 15000, 25000, 35000]);
+  assert.equal(f.data.get("accord-tidal-request-interval-v1"), "10000");
+});
+
+test("TIDAL cold starts honor the persisted interval and cooldown before playlist creation", async () => {
+  const f = fixture("tidal");
+  f.data.set("accord-tidal-request-interval-v1", "20000");
+  f.data.set("accord-tidal-cooldown-until-v1", String(f.time() + 120000));
+  assert.throws(() => f.policy.ready(), /120 secondi/);
+  await assert.rejects(f.policy.send(() => assert.fail("cooldown reached network"), { read: false }));
+  f.data.set("accord-tidal-cooldown-until-v1", "0");
+  const times = [];
+  for (let i = 0; i < 2; i += 1) await f.policy.send(async () => { times.push(f.time()); return json(); });
+  assert.equal(times[1] - times[0], 20000);
+});
+
+test("TIDAL learns from a rejected write without retrying it", async () => {
+  const f = fixture("tidal");
+  let attempts = 0;
+  await f.policy.send(async () => { attempts += 1; return json({}, 429, { "Retry-After": "1" }); }, { read: false });
+  assert.equal(attempts, 1);
+  assert.equal(f.data.get("accord-tidal-request-interval-v1"), "5000");
+  assert.throws(() => f.policy.ready(), /5 secondi/);
+});
+
+test("previous-version TIDAL cooldown history starts with slower pacing even after expiration", async () => {
+  const f = fixture("tidal"), times = [];
+  f.data.set("accord-tidal-cooldown-until-v1", String(f.time() - 1000));
+  for (let i = 0; i < 2; i += 1) await f.policy.send(async () => { times.push(f.time()); return json(); });
+  assert.equal(times[1] - times[0], 5000);
 });
 
 test("long server cooldown is persistent and blocks new clients and writes", async () => {

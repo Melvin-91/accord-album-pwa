@@ -73,17 +73,20 @@ export async function createCatalogPlaylist({ api, name, tracks, guard, uncertai
     if (uncertain.get()) throw new Error("Verifica prima l'esito della scrittura precedente.");
     await api.preflight(); guard();
     uncertain.set(true);
-    let playlist;
+    let playlist, confirmed = 0;
     try {
       playlist = await api.create(name.trim(), guard); guard();
       for (let start = 0; start < ids.length; start += api.batchSize) {
         guard();
-        await api.add(playlist.id, ids.slice(start, start + api.batchSize), guard); guard();
+        const batch = ids.slice(start, start + api.batchSize);
+        await api.add(playlist.id, batch, guard);
+        confirmed += batch.length;
+        guard();
       }
       uncertain.set(false);
       return playlist;
     } catch (error) {
-      throw new Error(`Esito da verificare nell'app${playlist ? `: playlist «${playlist.name || name}»` : ""}. `
+      throw new Error(`Esito da verificare nell'app${playlist ? `: playlist «${playlist.name || name}» (${confirmed}/${ids.length} brani confermati)` : ""}. `
         + `${error.message} Nessun nuovo invio automatico; non ricreare la playlist senza controllarla.`);
     }
   });

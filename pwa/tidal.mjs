@@ -1,6 +1,6 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
 import { nativeMusicLink } from "./music-app-links.mjs?v=1";
-import { createServiceRequests } from "./service-requests.mjs?v=1";
+import { createServiceRequests } from "./service-requests.mjs?v=2";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
 
@@ -192,6 +192,7 @@ export function createTidalTransport({
     return promise;
   }
   return {
+    ready: () => { guard(); requests.ready(); },
     request: requestJson,
     async token(parameters) {
       const result = await response("https://auth.tidal.com/v1/oauth2/token", {
@@ -216,7 +217,12 @@ export function createTidalTransport({
         count += size;
         const link = document.links?.next;
         next = typeof link === "string" ? link : link?.href;
-        if (next) next = new URL(next, url).href;
+        if (next) {
+          const candidate = new URL(next, url);
+          if (candidate.origin === url.origin && !candidate.username && !candidate.password && !candidate.hash
+              && candidate.pathname === pathname.slice("/v2".length)) candidate.pathname = pathname;
+          next = candidate.href;
+        }
         if (next && (documents.length >= maxPages || count >= maxItems)) { complete = false; break; }
       }
       return { documents, complete, count };

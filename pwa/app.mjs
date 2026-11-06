@@ -1,5 +1,5 @@
 import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=3";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=1";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=2";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=2";
 import {
   addPlaylistAlbums,
@@ -69,11 +69,11 @@ import {
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
 } from "./ui.mjs?v=10";
-import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=5";
+import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=7";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=16";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=13";
-import { qobuzAlbumId } from "./qobuz.mjs?v=5";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=18";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=14";
+import { qobuzAlbumId } from "./qobuz.mjs?v=6";
 
 const musicService = createMusicServiceGate(localStorage);
 
