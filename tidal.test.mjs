@@ -36,6 +36,7 @@ const fixture = (respond, options = {}) => {
   const calls = [], local = options.storage || storage();
   let time = 1_800_000_000_000;
   const transport = createTidalTransport({ storage: local, now: () => time,
+    sleep: async (ms) => { time += ms; }, jitter: () => 0,
     fetch: async (url, init) => { calls.push({ url: String(url), ...init }); return respond(url, init, calls.length); },
     ...options });
   return { transport, calls, local, advance: (ms) => { time += ms; } };
@@ -126,7 +127,7 @@ test("GET concurrency deduplicates reads and respects per-token cache isolation"
   const f = fixture(() => new Promise((resolve) => { release = resolve; }));
   const a = f.transport.request("albums/123", "a");
   const b = f.transport.request("albums/123", "a");
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.calls.length, 1);
   release(json(document, { headers: { "Cache-Control": "max-age=120" } }));
   const [left, right] = await Promise.all([a, b]);
@@ -134,7 +135,7 @@ test("GET concurrency deduplicates reads and respects per-token cache isolation"
   left.data[0].id = "changed";
   assert.equal((await f.transport.request("albums/123", "a")).data[0].id, "123");
   const other = f.transport.request("albums/123", "b");
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(f.calls.length, 2);
   release(json(document));
   await other;
@@ -162,23 +163,23 @@ test("HTTP no-store/no-cache, ETag 304, Age and Date control freshness without i
   }
 });
 
-test("429 Retry-After is persisted across transports/features/tabs and blocks auth and writes without retry", async () => {
+test("long 429 pauses persist across transports/features/tabs and block auth and writes", async () => {
   const shared = storage();
-  const f = fixture(() => json({}, { status: 429, headers: { "Retry-After": "17" } }), { storage: shared });
+  const f = fixture(() => json({}, { status: 429, headers: { "Retry-After": "120" } }), { storage: shared });
   await assert.rejects(f.transport.request("albums/123", "token"), /429/);
   const g = fixture(() => { assert.fail("cooldown reached network"); }, { storage: shared });
-  await assert.rejects(g.transport.request("playlists", "token"), /17 secondi/);
-  await assert.rejects(g.transport.request("playlists", "token", { method: "POST", body: { data: [] } }), /17 secondi/);
-  await assert.rejects(g.transport.token({ grant_type: "authorization_code" }), /17 secondi/);
+  await assert.rejects(g.transport.request("playlists", "token"), /120 secondi/);
+  await assert.rejects(g.transport.request("playlists", "token", { method: "POST", body: { data: [] } }), /120 secondi/);
+  await assert.rejects(g.transport.token({ grant_type: "authorization_code" }), /120 secondi/);
   assert.equal(f.calls.length, 1);
   assert.equal(g.calls.length, 0);
-  f.advance(17_001);
+  f.advance(120_001);
   await assert.rejects(f.transport.request("albums/123", "token"), /429/);
   assert.equal(f.calls.length, 2);
 });
 
 test("HTTP-date and absent Retry-After use a conservative shared cooldown", async () => {
-  for (const retry of [new Date(1_800_000_000_000 + 9000).toUTCString(), "invalid"]) {
+  for (const retry of [new Date(1_800_000_000_000 + 90_000).toUTCString(), "invalid"]) {
     const f = fixture(() => json({}, { status: 429, headers: { "Retry-After": retry } }));
     await assert.rejects(f.transport.request("albums/123", "token"), /429/);
     await assert.rejects(f.transport.request("artists/9", "token"), /secondi/);
@@ -186,12 +187,12 @@ test("HTTP-date and absent Retry-After use a conservative shared cooldown", asyn
   }
 });
 
-test("read failures have no automatic retry storm; HTTP errors and malformed JSON remain visible", async () => {
-  for (const respond of [() => json({}, { status: 503 }), () => { throw new Error("offline"); },
-    () => new Response("not JSON")]) {
+test("read retries are bounded; HTTP errors and malformed JSON remain visible", async () => {
+  for (const [respond, attempts] of [[() => json({}, { status: 503 }), 3],
+    [() => { throw new Error("offline"); }, 3], [() => new Response("not JSON"), 1]]) {
     const f = fixture(respond);
     await assert.rejects(f.transport.request("albums/123", "token"));
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, attempts);
   }
 });
 
@@ -330,7 +331,7 @@ test("provider epoch blocks already queued work and stale final responses even i
   assert.equal(f.calls.length, 0);
   enabled = true;
   const read = f.transport.request("albums/123", "token");
-  await Promise.resolve(); enabled = false; release(json(document));
+  await new Promise((resolve) => setImmediate(resolve)); enabled = false; release(json(document));
   await assert.rejects(read, /scartata/);
 });
 
@@ -381,25 +382,26 @@ test("active root/copy modules and tests match; precache covers modules, version
   for (const mirror of mirrors) for (const file of ["app.mjs", "core.mjs", "ui.mjs", "tidal.mjs", "tidal-ui.mjs",
     "qobuz.mjs", "qobuz-ui.mjs", "qobuz-playback.mjs", "music-suggestion-filters.mjs", "catalog-suggestions.mjs",
     "suggestions-ui.mjs", "music-app-links.mjs", "music-app-links.test.mjs", "catalog-suggestions.test.mjs", "style.css", "core.test.mjs",
-    "tidal.test.mjs", "tidal-ui.test.mjs", "qobuz.test.mjs", "qobuz-ui.test.mjs", "qobuz-playback.test.mjs"]) {
+    "tidal.test.mjs", "tidal-ui.test.mjs", "qobuz.test.mjs", "qobuz-ui.test.mjs", "qobuz-playback.test.mjs",
+    "service-requests.mjs", "service-requests.test.mjs"]) {
     assert.equal(readFileSync(new URL(file, import.meta.url), "utf8"), readFileSync(new URL(file, mirror), "utf8"), `${file} in ${mirror}`);
   }
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.15\.0/); assert.match(sw, /v1\.15\.0/);
+  assert.match(html, /v1\.15\.2/); assert.match(sw, /v1\.15\.2/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=95/); assert.match(sw, /style\.css\?v=35/);
-  assert.match(sw, /tidal\.mjs\?v=4/); assert.match(sw, /tidal-ui\.mjs\?v=15/);
+  assert.match(sw, /app\.mjs\?v=97/); assert.match(sw, /style\.css\?v=36/);
+  assert.match(sw, /tidal\.mjs\?v=5/); assert.match(sw, /tidal-ui\.mjs\?v=16/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
-    assert.match(mirrorHtml, /v1\.15\.0/); assert.match(mirrorWorker, /v1\.15\.0/);
+    assert.match(mirrorHtml, /v1\.15\.2/); assert.match(mirrorWorker, /v1\.15\.2/);
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=95", "style.css?v=35", "tidal-ui.mjs?v=15", "qobuz.mjs?v=4", "qobuz-ui.mjs?v=12",
+    for (const file of ["app.mjs?v=97", "style.css?v=36", "tidal-ui.mjs?v=16", "qobuz.mjs?v=5", "qobuz-ui.mjs?v=13",
       "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "catalog-playlist.mjs?v=1", "playlist-ui.mjs?v=1",
-      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=3", "music-suggestion-filters.mjs?v=1"]) {
+      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=4", "music-suggestion-filters.mjs?v=1", "service-requests.mjs?v=1"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

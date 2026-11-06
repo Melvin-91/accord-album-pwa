@@ -1,4 +1,5 @@
-import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=4";
+import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=5";
+import { createServiceRequests } from "./service-requests.mjs?v=1";
 
 const AUDIO_HOSTS = new Set(["streaming-qobuz-sec.akamaized.net", "streaming-qobuz-std.akamaized.net"]);
 const BUNDLE_LIMIT = 16 * 1024 * 1024;
@@ -53,7 +54,8 @@ export function qobuzMd5(text) {
 }
 
 export async function qobuzStreamUrl({ appId, token, trackId, secret, format = 5,
-  request = (...args) => globalThis.fetch(...args), signal, timestamp = Math.floor(Date.now() / 1000) }) {
+  request = (...args) => globalThis.fetch(...args), signal, timestamp = Math.floor(Date.now() / 1000),
+  storage = globalThis.localStorage, now, sleep, jitter, active = () => true }) {
   const auth = qobuzCredentials(appId, token), id = qobuzNumericId(trackId, "brano");
   if (typeof secret !== "string" || !/^[!-~]{1,512}$/.test(secret)
       || ![5, 6].includes(format) || !Number.isSafeInteger(timestamp) || timestamp <= 0) {
@@ -67,13 +69,20 @@ export async function qobuzStreamUrl({ appId, token, trackId, secret, format = 5
   const abort = () => controller.abort();
   if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(abort, 30_000);
+  const requests = createServiceRequests({ service: "qobuz", storage, now, sleep, jitter });
   try {
     let response;
     try {
-      response = await request(url.href, { method: "GET", signal: controller.signal, credentials: "omit",
+      response = await requests.send(() => request(url.href, { method: "GET", signal: controller.signal, credentials: "omit",
         redirect: "error", cache: "no-store", referrerPolicy: "no-referrer",
-        headers: { "X-App-Id": auth.appId, "X-User-Auth-Token": auth.token, Accept: "application/json" } });
-    } catch { throw new Error("Lettura audio Qobuz non riuscita o interrotta."); }
+        headers: { "X-App-Id": auth.appId, "X-User-Auth-Token": auth.token, Accept: "application/json" } }),
+      { signal: controller.signal, check: () => {
+        if (!active()) throw new Error("Riproduzione Qobuz interrotta.");
+      } });
+    } catch (error) {
+      if (/Retry-After|Stato richieste/.test(error.message)) throw error;
+      throw new Error("Lettura audio Qobuz non riuscita o interrotta.");
+    }
     if (response.status !== 200) throw new Error(`Lettura audio Qobuz non riuscita (HTTP ${response.status}).`);
     let data;
     try { data = await response.json(); } catch { throw new Error("Risposta audio Qobuz non leggibile."); }

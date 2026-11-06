@@ -1,5 +1,26 @@
 # Accord · Raccolta album PWA
 
+## PWA 1.15.2 · Richieste TIDAL e Qobuz
+
+- Coda per servizio con almeno 500 ms fra chiamate; non e' una quota
+  ufficiale garantita. Web Locks coordinano le schede dove disponibili.
+- Pause HTTP 429 persistenti, Retry-After in secondi/data; 60 s prudenziali
+  se manca o non e' leggibile. Nuove operazioni mostrano il tempo residuo.
+- Solo letture: fino a 2 ritentativi, attese esponenziali e jitter per
+  rete/429/5xx. Pause server oltre 30 s tornano all'interfaccia, senza
+  reinviare richieste. Nessun retry automatico delle scritture.
+- Attese interrotte da AbortSignal o cambio servizio/account; URL audio
+  Qobuz inclusi nella stessa coda del catalogo. Nessun coordinamento
+  fra dispositivi o con le app ufficiali dei servizi.
+- Modifica locale, non ancora pubblicata.
+
+## PWA 1.15.1 · Messaggi leggibili
+
+- Finestre dei messaggi piu' ampie, altezza naturale e a capo conservati.
+  Lo scorrimento e' limitato ai messaggi che superano lo schermo, senza
+  un secondo riquadro scorrevole per il testo.
+- Modifica locale, non ancora pubblicata.
+
 ## PWA 1.15.0 · Crea playlist condiviso
 
 - Stesso builder e anteprima raggruppata per Spotify, TIDAL e Qobuz.

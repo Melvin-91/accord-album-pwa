@@ -1,5 +1,6 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
 import { nativeMusicLink } from "./music-app-links.mjs?v=1";
+import { createServiceRequests } from "./service-requests.mjs?v=1";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
 
@@ -84,34 +85,36 @@ export function tidalPlaylistId(value) {
 export function createTidalTransport({
   fetch: request = (...args) => globalThis.fetch(...args), storage, writeStorage = storage,
   now = () => Date.now(), active = () => true, lock = (_name, run) => run(),
+  sleep, jitter, revision = () => 0,
 } = {}) {
   const cache = new Map(), pending = new Map(), writes = new Set();
-  let queue = Promise.resolve();
+  const requests = createServiceRequests({ service: "tidal", storage, now, sleep, jitter, lock });
   function guard() {
     if (!active()) throw new Error("TIDAL non è il servizio selezionato.");
     const remaining = Number(storage?.getItem(COOLDOWN) || 0) - now();
     if (remaining > 0) throw new Error(`TIDAL: attendi ${Math.ceil(remaining / 1000)} secondi (Retry-After).`);
   }
   async function response(url, options, beforeSend) {
-    const queued = queue.then(() => lock("accord-tidal-request-v1", async () => {
-      guard();
-      beforeSend?.();
-      const result = await request(url, { ...options, redirect: "error", credentials: "omit",
-        referrerPolicy: "no-referrer", cache: "no-store" });
-      if (result.status === 429) {
-        const retry = result.headers.get("Retry-After");
-        const until = retry && /^\s*\d+(?:\.\d+)?\s*$/.test(retry)
-          ? now() + Number(retry) * 1000 : Date.parse(retry || "");
-        storage?.setItem(COOLDOWN, String(Math.max(Number(storage?.getItem(COOLDOWN) || 0),
-          Number.isFinite(until) && until > now() ? until : now() + 60_000)));
+    const currentRevision = revision();
+    return requests.send(async () => {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      options.signal?.throwIfAborted();
+      options.signal?.addEventListener("abort", abort, { once: true });
+      const timeout = setTimeout(abort, 30_000);
+      try {
+        return await request(url, { ...options, signal: controller.signal, redirect: "error", credentials: "omit",
+          referrerPolicy: "no-referrer", cache: "no-store" });
+      } finally {
+        clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", abort);
       }
-      if (!active()) throw new Error("Servizio cambiato: risposta TIDAL scartata.");
-      return result;
-    }));
-    queue = queued.catch(() => {});
-    return queued;
+    }, { read: options.method === "GET", signal: options.signal, beforeSend,
+      check: () => {
+        if (!active() || revision() !== currentRevision) throw new Error("Servizio cambiato: risposta TIDAL scartata.");
+      } });
   }
-  async function requestJson(path, token, { method = "GET", body } = {}) {
+  async function requestJson(path, token, { method = "GET", body, signal } = {}) {
     const url = tidalApiUrl(path, method).href;
     guard();
     const key = `${token}|${url}`;
@@ -135,7 +138,7 @@ export function createTidalTransport({
       }
       let result;
       try {
-        result = await response(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
+        result = await response(url, { method, headers, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
           method === "GET" ? null : () => {
             if (writeStorage?.getItem(writeKey) || writeStorage?.getItem(lastWriteKey) === fingerprint) {
               throw new Error("Scrittura TIDAL già inviata da un’altra operazione: verifica lo stato remoto.");

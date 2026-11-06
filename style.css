@@ -267,6 +267,10 @@ dialog form > * { min-width: 0; }
 .dialog-scroll { display: grid; align-content: start; gap: 18px; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .dialog-footer { min-width: 0; padding-top: 10px; background: var(--surface); border-top: 1px solid var(--border); }
 .dialog-footer .dialog-actions { margin-top: 0; }
+#messageDialog { width: min(760px, calc(100vw - 24px)); }
+#messageDialog form { display: block; max-height: none; overflow: visible; }
+#messageDialog .dialog-scroll { overflow: visible; }
+#messageBody { white-space: pre-wrap; }
 dialog p, dialog label, dialog legend { overflow-wrap: anywhere; }
 .dialog-heading { justify-content: space-between; }
 .dialog-heading h2 { margin: 2px 0 0; }

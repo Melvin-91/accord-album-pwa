@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initializeQobuzUI } from "./qobuz-ui.mjs";
+import { initializeQobuzUI as initialize } from "./qobuz-ui.mjs";
 import { createMusicServiceGate } from "./tidal.mjs";
+
+let time = Date.now();
+const initializeQobuzUI = (options) => initialize({ ...options, requestOptions: {
+  now: () => time, sleep: async (ms) => { time += ms; }, jitter: () => 0,
+} });
 
 class Node {
   constructor(tag) { this.tag = tag; this.children = []; this.attributes = {}; this.listeners = {}; this.value = ""; }
@@ -111,7 +116,8 @@ test("verification in another tab cannot clear an in-flight write's guard", asyn
   const overrides = {
     document: { createElement: (tag) => new Node(tag), getElementById: () => root, querySelector: () => root },
     localStorage: local, sessionStorage: session, confirm: () => { confirmations += 1; return true; },
-    navigator: { locks: { request: (_name, run) => {
+    navigator: { locks: { request: (name, run) => {
+      if (name === "accord-qobuz-request-v1") return run();
       const current = pending.then(run); pending = current.catch(() => {}); return current;
     } } },
     fetch: async (_url, options) => options.method === "GET"
@@ -196,7 +202,8 @@ test("a Qobuz write waiting for the lock is not sent after changing service", as
   const overrides = {
     document: { createElement: (tag) => new Node(tag), getElementById: () => root, querySelector: () => root },
     localStorage: local, sessionStorage: session, confirm: () => true,
-    navigator: { locks: { request: async (_name, run) => {
+    navigator: { locks: { request: async (name, run) => {
+      if (name === "accord-qobuz-request-v1") return run();
       await new Promise((resolve) => { release = resolve; }); return run();
     } } },
     fetch: async (_url, options) => {

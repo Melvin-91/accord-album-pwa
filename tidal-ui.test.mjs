@@ -1,8 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initializeTidalUI } from "./tidal-ui.mjs";
+import { initializeTidalUI as initialize } from "./tidal-ui.mjs";
 import { createMusicServiceGate } from "./tidal.mjs";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs";
+
+let time = Date.now();
+const initializeTidalUI = (options) => initialize({ ...options, requestOptions: {
+  now: () => time, sleep: async (ms) => { time += ms; }, jitter: () => 0,
+} });
 
 test("artist exclusions match normalized whole names without splitting commas", () => {
   const excluded = excludedArtistNames("  earth, wind & FIRE ; OTHER   Artist ;;");

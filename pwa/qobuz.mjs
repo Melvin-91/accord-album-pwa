@@ -1,3 +1,4 @@
+import { createServiceRequests } from "./service-requests.mjs?v=1";
 export const QOBUZ_API = "https://www.qobuz.com/api.json/0.2/";
 export const QOBUZ_PAGE_SIZE = 100;
 
@@ -84,8 +85,13 @@ export function qobuzTrack(value, fallbackAlbum = null) {
     duration: Number.isSafeInteger(value.duration) ? value.duration : 0, streamable: value.streamable !== false };
 }
 
-export function createQobuzClient({ appId, token, fetch: request = (...args) => globalThis.fetch(...args) }) {
+export function createQobuzClient({ appId, token, fetch: request = (...args) => globalThis.fetch(...args),
+  storage = globalThis.localStorage, now, sleep, jitter, lock, active = () => true, signal }) {
   const auth = qobuzCredentials(appId, token);
+  const requests = createServiceRequests({ service: "qobuz", storage, now, sleep, jitter, lock });
+  function check() {
+    if (!active()) throw new Error("Servizio musicale cambiato o account modificato: richiesta Qobuz interrotta.");
+  }
   async function send(path, { params, data } = {}) {
     if (!["album/search", "album/get", "album/suggest", "favorite/getUserFavorites", "favorite/create", "favorite/delete",
       "playlist/getUserPlaylists", "playlist/get", "playlist/create", "playlist/update", "playlist/delete",
@@ -94,39 +100,51 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
     }
     const write = data !== undefined, url = new URL(path, QOBUZ_API);
     if (params) url.search = new URLSearchParams(params).toString();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
+    check();
+    let response;
     try {
-      let response;
-      try {
-        response = await request(url.href, {
-          method: write ? "POST" : "GET",
-          headers: { "X-App-Id": auth.appId, "X-User-Auth-Token": auth.token, Accept: "application/json" },
-          ...(write ? { body: new URLSearchParams(data) } : {}),
-          signal: controller.signal, credentials: "omit", redirect: "error", cache: "no-store",
-          referrerPolicy: "no-referrer",
-        });
-      } catch {
-        throw new Error("Connessione Qobuz non riuscita." + (write ? " Esito incerto: verifica su Qobuz." : ""));
-      }
-      if (response.status !== 200) throw new Error(`Qobuz ha risposto HTTP ${response.status}.`
-        + (write ? " Verifica lo stato remoto prima di riprovare." : ""));
-      let result;
-      try { result = await response.json(); }
-      catch { throw new Error("Risposta Qobuz non leggibile." + (write ? " Verifica lo stato remoto." : "")); }
-      const verifiedWrite = ["favorite/create", "favorite/delete", "playlist/delete"].includes(path)
-        ? result?.status === "success"
-        : result?.id != null && (!data?.playlist_id || String(result.id) === data.playlist_id);
-      if (!result || typeof result !== "object" || Array.isArray(result) || result.error
-          || result.status === "error" || (write && result.status != null && result.status !== "success")
-          || (write && !verifiedWrite)) {
-        throw new Error("Qobuz ha rifiutato l'operazione o restituito una risposta non valida."
-          + (write ? " Verifica lo stato remoto." : ""));
-      }
-      return result;
-    } finally {
-      clearTimeout(timeout);
+      response = await requests.send(async () => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        signal?.throwIfAborted();
+        signal?.addEventListener("abort", abort, { once: true });
+        const timeout = setTimeout(abort, 30_000);
+        try {
+          return await request(url.href, {
+            method: write ? "POST" : "GET",
+            headers: { "X-App-Id": auth.appId, "X-User-Auth-Token": auth.token, Accept: "application/json" },
+            ...(write ? { body: new URLSearchParams(data) } : {}),
+            signal: controller.signal, credentials: "omit", redirect: "error", cache: "no-store",
+            referrerPolicy: "no-referrer",
+          });
+        } finally {
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", abort);
+        }
+      }, { read: !write, signal, check });
+    } catch (error) {
+      check();
+      signal?.throwIfAborted();
+      if (/Retry-After|Stato richieste/.test(error.message)) throw error;
+      throw new Error("Connessione Qobuz non riuscita." + (write ? " Esito incerto: verifica su Qobuz." : ""));
     }
+    if (response.status !== 200) throw new Error(`Qobuz ha risposto HTTP ${response.status}.`
+      + (response.status === 429 ? " Pausa Retry-After condivisa attiva." : "")
+      + (write ? " Verifica lo stato remoto prima di riprovare." : ""));
+    let result;
+    try { result = await response.json(); }
+    catch { throw new Error("Risposta Qobuz non leggibile." + (write ? " Verifica lo stato remoto." : "")); }
+    if (!write) check();
+    const verifiedWrite = ["favorite/create", "favorite/delete", "playlist/delete"].includes(path)
+      ? result?.status === "success"
+      : result?.id != null && (!data?.playlist_id || String(result.id) === data.playlist_id);
+    if (!result || typeof result !== "object" || Array.isArray(result) || result.error
+        || result.status === "error" || (write && result.status != null && result.status !== "success")
+        || (write && !verifiedWrite)) {
+      throw new Error("Qobuz ha rifiutato l'operazione o restituito una risposta non valida."
+        + (write ? " Verifica lo stato remoto." : ""));
+    }
+    return result;
   }
   async function page(path, params, offset) {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Pagina Qobuz non valida.");

@@ -100,6 +100,16 @@ test("dialogs fit the viewport, keep primary actions visible and avoid horizonta
   assert.doesNotMatch(css, /overflow-x:\s*auto/);
 });
 
+test("message dialogs use natural height with a single viewport overflow fallback", () => {
+  const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  assert.match(css, /#messageDialog \{[^}]*width: min\(760px, calc\(100vw - 24px\)\);/);
+  assert.match(css, /#messageDialog form \{[^}]*display: block;[^}]*max-height: none;[^}]*overflow: visible;/);
+  assert.match(css, /#messageDialog \.dialog-scroll \{[^}]*overflow: visible;/);
+  assert.match(css, /#messageBody \{[^}]*white-space: pre-wrap;/);
+  assert.ok(app.includes('$("#messageDialog .dialog-footer").prepend(actions)'));
+});
+
 test("details neighbors follow only the supplied filtered sorted visible list, without wrapping", () => {
   const albums = ["c", "a", "b"].map((id) => ({ id }));
   assert.deepEqual(adjacentAlbumIds(albums, "a"), { previous: "c", next: "b" });
@@ -1463,11 +1473,11 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=95", "style.css?v=35"]) {
+  for (const file of ["app.mjs?v=97", "style.css?v=36"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=4", "tidal-ui.mjs?v=15", "qobuz-ui.mjs?v=12",
+  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=5", "tidal-ui.mjs?v=16", "qobuz-ui.mjs?v=13",
     "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "playlist-ui.mjs?v=1",
     "music-app-links.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));

@@ -1,6 +1,6 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=4";
+} from "./tidal.mjs?v=5";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 
@@ -35,10 +35,13 @@ const tidalAlbumArtists = (resources) => {
   }));
 };
 
-export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {}, playlistPrepared = null }) {
+export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {}, playlistPrepared = null,
+  requestOptions = {} }) {
   const epoch = () => gate.epoch;
   const transport = createTidalTransport({
+    ...requestOptions,
     storage: localStorage, writeStorage: localStorage, active: () => gate.service === "tidal",
+    revision: epoch,
     lock: (name, run) => navigator.locks?.request ? navigator.locks.request(name, run) : run(),
     fetch: async (...args) => {
       const current = epoch(); gate.assert("tidal", current);

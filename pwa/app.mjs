@@ -69,11 +69,11 @@ import {
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
 } from "./ui.mjs?v=10";
-import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=4";
+import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=5";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=15";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=12";
-import { qobuzAlbumId } from "./qobuz.mjs?v=4";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=16";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=13";
+import { qobuzAlbumId } from "./qobuz.mjs?v=5";
 
 const musicService = createMusicServiceGate(localStorage);
 
@@ -570,7 +570,7 @@ function showMessage(title, message) {
   const actions = document.createElement("div");
   actions.className = "qol-actions error-actions";
   appendErrorActions(actions, `${title} ${message}`, () => $("#messageDialog").close());
-  $("#messageDialog").append(actions);
+  $("#messageDialog .dialog-footer").prepend(actions);
   $("#messageDialog").showModal();
 }
 

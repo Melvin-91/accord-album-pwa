@@ -1,5 +1,5 @@
-import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=4";
-import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=3";
+import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=5";
+import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=4";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 
@@ -13,7 +13,8 @@ const element = (tag, text = "", attributes = {}) => {
   return node;
 };
 
-export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openSettings = () => {} }) {
+export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openSettings = () => {},
+  requestOptions = {} }) {
   let accountRevision = 0;
   const section = element("details", "", { class: "tidal-collection-details" });
   section.append(element("summary", "Qobuz · cerca, importa e gestisci preferiti"));
@@ -65,12 +66,17 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     if (!value || Object.keys(value).sort().join("|") !== "appId|token") {
       throw new Error("Collega prima la sessione Qobuz.");
     }
-    return createQobuzClient(qobuzCredentials(value.appId, value.token));
+    return guardedClient(qobuzCredentials(value.appId, value.token));
+  }
+  function guardedClient(value) {
+    const epoch = gate.epoch, revision = accountRevision;
+    return createQobuzClient({ ...requestOptions, ...value, storage: localStorage,
+      active: () => gate.service === "qobuz" && gate.epoch === epoch && accountRevision === revision });
   }
   button(controls, "Collega Qobuz", () => run(async (guard) => {
     const value = qobuzCredentials(appId.value.trim(), token.value.trim());
     appId.value = ""; token.value = "";
-    await createQobuzClient(value).favorites();
+    await guardedClient(value).favorites();
     guard();
     resetSessionViews();
     sessionStorage.setItem(SESSION, JSON.stringify(value));
@@ -645,7 +651,8 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     playerRequest = request;
     playerStatus.textContent = "Preparazione del brano Qobuz…";
     try {
-      const url = await qobuzStreamUrl({ ...active, trackId: track.id, secret, signal: request.signal });
+      const url = await qobuzStreamUrl({ ...requestOptions, ...active, trackId: track.id, secret, signal: request.signal,
+        active: () => epoch === playerEpoch && gate.service === "qobuz" });
       guard();
       if (epoch !== playerEpoch) throw new Error("Riproduzione Qobuz interrotta.");
       playerRequest = null; audio.src = url;
