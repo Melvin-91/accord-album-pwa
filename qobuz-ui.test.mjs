@@ -13,8 +13,12 @@ class Node {
   set textContent(value) { this.text = value; this.children = []; }
   get textContent() { return (this.text || "") + this.children.map((child) => child.textContent).join(""); }
   setAttribute(name, value) { this.attributes[name] = value; }
-  append(...nodes) { this.children.push(...nodes); }
-  prepend(...nodes) { this.children.unshift(...nodes); }
+  append(...nodes) { for (const node of nodes) node.parentNode = this; this.children.push(...nodes); }
+  prepend(...nodes) { for (const node of nodes) node.parentNode = this; this.children.unshift(...nodes); }
+  before(node) {
+    node.parentNode = this.parentNode;
+    this.parentNode.children.splice(this.parentNode.children.indexOf(this), 0, node);
+  }
   replaceChildren(...nodes) { this.children = [...nodes]; }
   removeAttribute(name) { delete this.attributes[name]; if (name === "src") this.src = ""; }
   addEventListener(name, callback) { this.listeners[name] = callback; }

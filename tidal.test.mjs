@@ -404,27 +404,30 @@ test("active root/copy modules and tests match; precache covers modules, version
   assert.ok(mirrors.length > 0, "At least one published/development mirror is present");
   for (const mirror of mirrors) for (const file of ["app.mjs", "core.mjs", "ui.mjs", "tidal.mjs", "tidal-ui.mjs",
     "qobuz.mjs", "qobuz-ui.mjs", "qobuz-playback.mjs", "music-suggestion-filters.mjs", "catalog-suggestions.mjs",
-    "suggestions-ui.mjs", "music-app-links.mjs", "music-app-links.test.mjs", "catalog-suggestions.test.mjs", "style.css", "core.test.mjs",
+    "suggestions-ui.mjs", "music-qol.mjs", "music-qol.test.mjs", "music-app-links.mjs", "music-app-links.test.mjs",
+    "catalog-suggestions.test.mjs", "style.css", "core.test.mjs",
     "tidal.test.mjs", "tidal-ui.test.mjs", "qobuz.test.mjs", "qobuz-ui.test.mjs", "qobuz-playback.test.mjs",
-    "service-requests.mjs", "service-requests.test.mjs"]) {
+    "service-requests.mjs", "service-requests.test.mjs", "music-continuity.mjs", "music-continuity.test.mjs",
+    "catalog-playlist.mjs", "playlist-ui.mjs", "catalog-playlist.test.mjs"]) {
     assert.equal(readFileSync(new URL(file, import.meta.url), "utf8"), readFileSync(new URL(file, mirror), "utf8"), `${file} in ${mirror}`);
   }
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.15\.4/); assert.match(sw, /v1\.15\.4/);
+  assert.match(html, /v1\.16\.0/); assert.match(sw, /v1\.16\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=99/); assert.match(sw, /style\.css\?v=36/);
-  assert.match(sw, /tidal\.mjs\?v=7/); assert.match(sw, /tidal-ui\.mjs\?v=18/);
+  assert.match(sw, /app\.mjs\?v=102/); assert.match(sw, /style\.css\?v=36/);
+  assert.match(sw, /tidal\.mjs\?v=7/); assert.match(sw, /tidal-ui\.mjs\?v=19/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
-    assert.match(mirrorHtml, /v1\.15\.4/); assert.match(mirrorWorker, /v1\.15\.4/);
+    assert.match(mirrorHtml, /v1\.16\.0/); assert.match(mirrorWorker, /v1\.16\.0/);
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=99", "style.css?v=36", "tidal-ui.mjs?v=18", "qobuz.mjs?v=6", "qobuz-ui.mjs?v=14",
-      "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "catalog-playlist.mjs?v=2", "playlist-ui.mjs?v=2",
-      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=5", "music-suggestion-filters.mjs?v=1", "service-requests.mjs?v=2"]) {
+    for (const file of ["app.mjs?v=102", "style.css?v=36", "tidal-ui.mjs?v=19", "qobuz.mjs?v=6", "qobuz-ui.mjs?v=15",
+      "catalog-suggestions.mjs?v=3", "suggestions-ui.mjs?v=5", "music-qol.mjs?v=1", "catalog-playlist.mjs?v=3", "playlist-ui.mjs?v=3",
+      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=5", "music-suggestion-filters.mjs?v=1", "service-requests.mjs?v=2",
+      "music-continuity.mjs?v=1"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

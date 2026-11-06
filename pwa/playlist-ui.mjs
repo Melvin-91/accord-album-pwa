@@ -1,6 +1,8 @@
-import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=2";
+import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=3";
+import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=1";
 
-export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView }) {
+export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView,
+  spotifyPreview = () => null }) {
   const field = (id) => document.getElementById(id);
   const root = document.querySelector("#playlistBuilderPanel > .playlist-builder");
   const status = field("playlistBuilderStatus"), previewButton = field("playlistPreviewButton");
@@ -14,6 +16,43 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
   const referenceDetails = field("playlistReferences"), referenceList = field("playlistReferenceList");
   const references = new Map(), excludedReferences = new Set();
   let service = "", busy = false, state = null, preview = null, source = null, signature = "";
+  let historical = false, checkpointContext = null, pauseTimer = null;
+  const resume = document.createElement("button"), pause = document.createElement("p");
+  resume.type = "button"; resume.className = "secondary"; resume.textContent = "Riprendi anteprima conservata";
+  management.parentElement.append(resume);
+  pause.className = "notice"; pause.setAttribute("aria-live", "polite"); status.before(pause);
+  const parameters = () => inputs.map((input) => input.value);
+  const durableCriteria = () => JSON.stringify([gate.service, inputs.slice(0, 2).map((input) => input.value),
+    discoveryUI.playlistDurableSignature(), [...excludedReferences]]);
+  async function identity() { return fingerprint(await api().identity()); }
+  inputs[2].addEventListener("input", () => {
+    try { persist(); } catch (error) { status.textContent = `Parametri non conservati: ${error.message}`; }
+  });
+  function persist() {
+    if (!preview || !checkpointContext) return;
+    saveCheckpoint(localStorage, checkpointContext.provider, checkpointContext.identity, checkpointContext.criteria,
+      { inputs: parameters(), excludedReferences: [...excludedReferences], references: [...references],
+        discovery: discoveryUI.playlistParameters?.() || null },
+      preview, state?.checkpoint() || null);
+  }
+  function updatePause() {
+    clearTimeout(pauseTimer); pauseTimer = null;
+    try {
+      const remaining = pauseRemaining(localStorage, gate.service);
+      const continuing = gate.service === "spotify" ? spotifyPreview()?.hasMore : state?.canContinue;
+      pause.hidden = !remaining;
+      pause.textContent = remaining ? `Pausa letture: ${remaining} s. Risultati verificati conservati. `
+        + (continuing ? "Alla scadenza Continua riprende solo le letture mancanti. "
+          : "Alla scadenza potrai avviare una nuova lettura. ")
+        + "Nessun invio o riavvio automatico." : "";
+      if (gate.service !== "spotify") {
+        previewButton.disabled = busy || remaining > 0;
+        createButton.disabled = busy || remaining > 0 || !preview?.tracks.length || uncertain.get();
+      }
+      if (remaining > 0) pauseTimer = setTimeout(updatePause, 1000);
+      return remaining;
+    } catch (error) { pause.hidden = false; pause.textContent = error.message; return Infinity; }
+  }
   const api = () => providers[gate.service].playlistAPI;
   const key = () => gate.service === "qobuz" ? "accord-qobuz-write-uncertain-v1" : "accord-catalog-playlist-uncertain-tidal-v1";
   const uncertain = { get: () => Boolean(localStorage.getItem(key())),
@@ -28,9 +67,13 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
     verify.hidden = !uncertain.get(); verify.disabled = busy;
     createButton.disabled = busy || !preview?.tracks.length || uncertain.get();
     previewButton.textContent = state?.canContinue ? "Continua anteprima" : "Genera anteprima";
+    try { resume.disabled = busy || !readCheckpoint(localStorage, gate.service); }
+    catch (error) { resume.disabled = false; status.textContent = error.message; }
+    updatePause();
   }
   function reset() {
     state = null; source = null; preview = null; signature = "";
+    historical = false; checkpointContext = null;
     previewOutput.replaceChildren(); details.textContent = ""; controls();
   }
   function configure() {
@@ -40,6 +83,7 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
       status.textContent = "Genera un'anteprima nel servizio scelto. Nessuna playlist creata.";
     }
     const native = service !== "spotify", tidal = service === "tidal";
+    resume.hidden = !native;
     root.hidden = false;
     root.querySelector(".eyebrow").textContent = `CREAZIONE ${service.toUpperCase()}`;
     description.textContent = "Nuovi artisti con lo stesso metodo di Suggerimenti. "
@@ -107,10 +151,13 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
         for (const row of source.references) references.set(row.name, row.plays ?? row.count ?? 0);
         renderReferences();
         signature = expected;
+        checkpointContext = { provider, identity: await identity(), criteria: durableCriteria() };
+        historical = false;
       }
       if (!state || !source) throw new Error("Genera una nuova anteprima.");
       preview = await state.step({ discover: source.discover, albumTracks: api().albumTracks, guard: source.guard });
       guard(); render(preview); api().adopt(preview.tracks);
+      if (historical) status.textContent += " Include risultati storici conservati, non riletti oggi.";
       details.textContent = `${preview.source}. Letture scoperta: ${preview.reads}; letture brani: ${preview.trackReads}. `
         + `Noti/duplicati: ${preview.stats.known}; ambigui: ${preview.stats.ambiguous}; non trovati: ${preview.stats.unmatched}. `
         + "I primi brani seguono l'ordine dell'album, non classifiche native. Durata, artisti e brani già noti: solo dati disponibili.";
@@ -120,7 +167,12 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
         else reset();
         status.textContent = `Anteprima non completata: ${error.message}`;
       }
-    } finally { busy = false; configure(); controls(); }
+    } finally {
+      if (gate.service === provider && expected === currentSignature()) {
+        try { persist(); } catch (error) { status.textContent += ` Ripresa non salvata: ${error.message}`; }
+      }
+      busy = false; configure(); controls();
+    }
   }
   async function create() {
     if (busy || gate.service === "spotify" || !preview?.tracks.length) return;
@@ -134,6 +186,7 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
     try { guard(); } catch (error) { reset(); status.textContent = error.message; return; }
     const privacy = provider === "tidal" ? "non in elenco, accessibile a chi ha il link (NON privata)" : "privata";
     if (!confirm(`Creare «${name}» ${privacy} con ${preview.tracks.length} brani verificati?`)) return;
+    if (historical && !confirm("Sono risultati storici conservati, non riletti oggi. Confermi l'uso di questi brani? Nessuna scrittura precedente verrà ripresa.")) return;
     const savedPreview = preview, tracks = preview.tracks;
     busy = true; preview = null; controls();
     status.textContent = "Creo la playlist e aggiungo i brani verificati…";
@@ -146,6 +199,7 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
       guard();
       status.textContent = `Playlist ${privacy} creata: ${playlist.name || name} · ${tracks.length} brani.`;
       state = null; source = null;
+      clearCheckpoint(localStorage, provider);
     } catch (error) {
       if (gate.service === provider && gate.epoch === epoch) {
         const pending = uncertain.get();
@@ -166,7 +220,7 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
           if (!lock) throw new Error("Scrittura ancora in corso in un'altra scheda. Attendi prima di verificare.");
           if (!confirm("Hai controllato nell'app la playlist e i brani, anche parziali? "
               + "Confermare sblocca nuove scritture, non ripete l'operazione.")) return;
-          uncertain.set(false); reset();
+          uncertain.set(false); clearCheckpoint(localStorage, provider); reset();
           status.textContent = "Verifica confermata. Genera una nuova anteprima prima di creare.";
         });
     } catch (error) {
@@ -199,10 +253,49 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
       signature = expected;
       api().adopt(tracks);
       render(preview); selectView("playlists");
+      checkpointContext = { provider, identity: await identity(), criteria: durableCriteria() };
+      persist();
       return "Anteprima pronta nella scheda Crea playlist. Nessuna scrittura eseguita.";
     } finally { busy = false; controls(); }
   }
   window.addEventListener("storage", () => { if (gate.service !== "spotify") controls(); });
+  resume.addEventListener("click", async () => {
+    if (busy || gate.service === "spotify") return;
+    const provider = gate.service, epoch = gate.epoch;
+    let displayed = false;
+    busy = true; controls();
+    try {
+      const record = readCheckpoint(localStorage, provider);
+      if (!record) throw new Error("Nessuna anteprima conservata.");
+      record.parameters.inputs.forEach((value, index) => { inputs[index].value = value; });
+      if (record.parameters.discovery) discoveryUI.restorePlaylistParameters(record.parameters.discovery);
+      excludedReferences.clear(); references.clear();
+      for (const name of record.parameters.excludedReferences || []) excludedReferences.add(name);
+      for (const [name, plays] of record.parameters.references || []) references.set(name, plays);
+      state = null; source = null; preview = null; checkpointContext = null;
+      render(record.preview); controls();
+      displayed = true;
+      status.textContent += " Risultati storici conservati, non riletti oggi; verifico l'account prima di abilitare i comandi.";
+      const account = await identity(); gate.assert(provider, epoch);
+      validateCheckpoint(record, account, durableCriteria());
+      signature = currentSignature();
+      const expected = signature;
+      const guard = () => {
+        gate.assert(provider, epoch);
+        if (expected !== currentSignature()) throw new Error("Account o criteri cambiati.");
+      };
+      source = record.state ? discoveryUI.restorePlaylistSource(record.state.discovery, guard) : null;
+      state = record.state ? CatalogPlaylist.restore(record.state, source.discovery) : null;
+      checkpointContext = { provider, identity: account, criteria: durableCriteria() };
+      preview = record.preview; historical = true;
+      renderReferences(); render(preview); api().adopt(preview.tracks);
+      status.textContent += " Risultati storici, non riletti oggi. Continua riprende solo le letture; creazione solo dopo nuova conferma.";
+      controls();
+    } catch (error) { status.textContent = `${displayed ? "Risultati conservati consultabili. " : ""}Ripresa non disponibile: ${error.message}`; }
+    finally { busy = false; controls(); }
+  });
+  window.addEventListener("pagehide", () => clearTimeout(pauseTimer));
+  window.addEventListener("pageshow", updatePause);
   configure();
   return { configure, run, create, prepareRecords };
 }

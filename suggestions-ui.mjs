@@ -1,5 +1,7 @@
-import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=2";
+import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=3";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
+import { bindPauseNotice } from "./music-continuity.mjs?v=1";
+import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=1";
 
 const node = (tag, text = "") => {
   const result = document.createElement(tag); result.textContent = text; return result;
@@ -21,6 +23,8 @@ export function initializeCatalogSuggestionsUI({
   const root = document.querySelector("#suggestionsPanel > .suggestions");
   const tool = document.getElementById("suggestionTool"), output = document.getElementById("spotifySuggestionAlbums");
   const status = document.getElementById("spotifySuggestionStatus");
+  bindPauseNotice(status, { storage: localStorage, provider: () => gate.service,
+    describe: () => "potrai usare Continua ricerca, quando disponibile, oppure avviare una nuova ricerca." });
   const picker = document.querySelector(".suggestion-source-picker");
   const spotifyChildren = new Map([...document.querySelector(".spotify-suggestions").children].map((child) => [child, child.hidden]));
   const spotifyHeading = document.getElementById("spotifySuggestionHeading").textContent;
@@ -60,6 +64,7 @@ export function initializeCatalogSuggestionsUI({
   output.before(artists);
   const historySelect = field(picker, "Risultati precedenti del servizio", "select");
   let service = "spotify", search = null, result = null, busy = false, revision = 0;
+  let comparison = null;
   let selected = new Set(), excludedAlbums = new Set(), savedHistory = [], spotifyChoice = tool.value, searchAccount = null;
   const values = () => ({
     tool: tool.value, user: user.value.trim(), period: period.value, start: start.value, end: end.value, exclusion: exclusion.value,
@@ -94,6 +99,8 @@ export function initializeCatalogSuggestionsUI({
       && !blocked.has(normalized(row.album.artist)) && notSnoozed(row.album));
   }
   function render() {
+    comparison?.destroy();
+    comparison = createAlbumComparisonToolbar(output, collection, status, "Suggerimenti");
     output.replaceChildren(); artists.replaceChildren(); selected.clear();
     const records = filterResult();
     for (const row of records) {
@@ -117,6 +124,7 @@ export function initializeCatalogSuggestionsUI({
       label.className = "check";
       check.addEventListener("change", () => { check.checked ? selected.add(album.id) : selected.delete(album.id); });
       label.prepend(check); card.append(cover, info, label);
+      comparison.append(card, { ...album, genres: row.genres, source: row.source, reason: row.reason });
       const inCollection = collection().some((entry) => entry.id === album.id);
       const add = action(card, inCollection ? "Già in raccolta" : "Aggiungi alla raccolta", () => {
         try { addAlbum(album, row.coverUrl); render(); }
@@ -345,5 +353,31 @@ export function initializeCatalogSuggestionsUI({
     return { discovery, references: input.seeds, guard: check,
       discover: () => discovery.step({ similar, topAlbums, genres, search: api.search, guard: check }) };
   }
-  return { configure, run, playlistSource, playlistSignature: () => JSON.stringify([values(), revision, [...excludedAlbums]]) };
+  function restorePlaylistSource(saved, guard) {
+    const snapshot = JSON.stringify(values()), currentRevision = revision;
+    const check = () => {
+      guard();
+      if (snapshot !== JSON.stringify(values()) || currentRevision !== revision) throw new Error("Criteri cambiati.");
+    };
+    const discovery = CatalogSuggestions.restore(saved, notSnoozed);
+    const api = providers[gate.service].suggestionAPI;
+    return { discovery, guard: check,
+      discover: () => discovery.step({ similar, topAlbums, genres, search: api.search, guard: check }) };
+  }
+  const playlistControls = { period, start, end, exclusion, artistFilter, included, excluded, includedMode, excludedMode };
+  function restorePlaylistParameters(saved) {
+    for (const [key, input] of Object.entries(playlistControls)) {
+      if (typeof saved.settings?.[key] !== "string") throw new Error("Parametri conservati non validi.");
+      input.value = saved.settings[key];
+    }
+    if (!Array.isArray(saved.excludedAlbums)) throw new Error("Esclusioni conservate non valide.");
+    excludedAlbums = new Set(saved.excludedAlbums);
+    persist(); reset();
+  }
+  return { configure, run, playlistSource, restorePlaylistSource,
+    playlistParameters: () => ({ settings: Object.fromEntries(Object.entries(playlistControls).map(([key, input]) => [key, input.value])),
+      excludedAlbums: [...excludedAlbums] }),
+    restorePlaylistParameters,
+    playlistDurableSignature: () => JSON.stringify([values(), [...excludedAlbums], collection()]),
+    playlistSignature: () => JSON.stringify([values(), revision, [...excludedAlbums]]) };
 }

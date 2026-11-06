@@ -400,9 +400,15 @@ test("TIDAL playlist import supports pasted links and respects the shared cooldo
     await f.field("Servizio musicale").dispatch("change");
     f.ui.openImport();
     f.field("Playlist TIDAL da importare · ID o link").value = "https://tidal.com/browse/playlist/playlist-one";
+    await f.find("Anteprima album della playlist TIDAL").dispatch("click");
+    assert.equal(f.calls.length, 1);
+    const output = f.walk().find((node) => node.attributes.class === "tidal-results");
+    const verifiedRows = [...output.children];
+    assert.ok(verifiedRows.length > 0);
     f.local.setItem("accord-tidal-cooldown-until-v1", String(Date.now() + 60000));
     await f.find("Anteprima album della playlist TIDAL").dispatch("click");
-    assert.equal(f.calls.length, 0);
+    assert.equal(f.calls.length, 1);
+    assert.deepEqual(output.children, verifiedRows);
     assert.match(f.walk().find((node) => node.attributes.id === "tidalStatus").textContent, /attend|limite|429/i);
     assert.equal(f.imported.length, 0);
   });

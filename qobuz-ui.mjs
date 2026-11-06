@@ -2,6 +2,7 @@ import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } fro
 import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=5";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
+import { bindPauseNotice } from "./music-continuity.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
 const UNCERTAIN = "accord-qobuz-write-uncertain-v1";
@@ -134,6 +135,10 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
           report: (message) => { status.textContent = message; } }));
       button(item, "Usa per suggerimenti", () => useAlbum(row.album, "suggestions"), false);
       button(item, "Usa per playlist", () => useAlbum(row.album, "playlists"), false);
+      if (editionSelection) button(item, "Associa questa edizione", () => {
+        if (!editionSelection) { status.textContent = "Apri Associa edizione dalla raccolta prima di scegliere."; return; }
+        const callback = editionSelection; editionSelection = null; callback(row.album);
+      }, false);
       results.append(item); rows.push({ ...row, check });
     }
     status.textContent = `Qobuz: ${rows.length} risultati da ${offset + 1}, totale ${page.total}. `
@@ -729,7 +734,9 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     }
     wasActive = active;
   }
-  function openCatalog(value = "") {
+  let editionSelection = null;
+  function openCatalog(value = "", selection = null) {
+    editionSelection = selection;
     gate.assert("qobuz");
     selectView("collection");
     section.open = true;
@@ -793,6 +800,11 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       showPlaylistPage({ tracks, offset: 0, total: tracks.length, next: null }, "prepared");
     },
     revision: () => `${accountRevision}|${sessionStorage.getItem(SESSION)}`,
+    identity: () => {
+      const value = JSON.parse(sessionStorage.getItem(SESSION) || "null");
+      if (!value) throw new Error("Collega Qobuz prima di riprendere.");
+      return value;
+    },
     batchSize: 100,
     preflight: async () => { gate.assert("qobuz"); client(); },
     albumTracks: (id, offset = 0) => client().albumTracks(id, offset),
@@ -810,5 +822,12 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       return { tracks: [...tracks.values()].slice(0, 250), partial: partial || tracks.size > 250 };
     },
   };
+  for (const [anchor, describe] of [
+    [status, () => next !== null ? "Pagina successiva legge la pagina seguente dei risultati conservati."
+      : "potrai rilanciare la ricerca o la lettura dei preferiti."],
+    [suggestionStatus, () => "potrai rilanciare la ricerca di album o la lettura dei preferiti."],
+    [playlistStatus, () => playlistNext !== null ? "Pagina successiva legge la pagina seguente della playlist o dell'album."
+      : "potrai rileggere la playlist o l'album; Continua riprende le letture mancanti dell'anteprima."],
+  ]) bindPauseNotice(anchor, { storage: localStorage, provider: () => "qobuz", describe });
   return { setActive, openCatalog, openPlaylists, suggestionAPI, playlistAPI };
 }

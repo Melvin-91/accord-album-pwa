@@ -1,12 +1,59 @@
 # Accord · Raccolta album PWA
 
+## Stato corrente e gerarchia
+
+Rivisto il 6 novembre 2026. **PWA 1.16.0**, pacchetto per la pubblicazione su
+[GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
+Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
+Release precedente 1.15.4: `d24975224ec904a85a3e147fbe08c175c26bab79`,
+workflow Pages `42227653246` concluso con successo.
+
+La PWA e' il client musicale statico; non include Task, Outlook o JIRA.
+La raccolta nel repository privato `accord-music-data`, le credenziali e
+la sincronizzazione sono separate dal sito pubblico.
+Gli accessi Qobuz sono non ufficiali; le playlist TIDAL sono UNLISTED,
+non private. Le funzionalita' non equivalenti restano indicate.
+
+Backup e ripristino locali riguardano solo la raccolta musicale della PWA:
+includono album, ordine, coda, durate e preferenze allowlistate, con
+anteprima, scelta dei dati e rilevamento delle modifiche concorrenti.
+Credenziali, cache e dati Task/Outlook/JIRA desktop non fanno parte del file.
+
+La fonte da modificare e' `Accord\accord\pwa`. Il mirror pubblicabile e'
+`Accord\accord-pwa-site`, con ingressi root e `pwa`; il clone Git e' in
+`Accord\files\publication\accord-album-pwa`. Non modificare una sola copia
+o copiare nel sito l'intero workspace. La procedura di pubblicazione e'
+in `Accord\docs\tools.md`, la guida utente in `Accord\docs\accord.md`.
+
+Le sezioni numerate che seguono sono **cronologia delle release**:
+note su limiti o disponibilita' si riferiscono alla versione indicata.
+Lo stato corrente prevale sui vecchi annunci. Le release 1.15.0-1.15.3
+sono incluse nella 1.15.4 pubblicata. La revisione della documentazione
+nel workspace non provoca un nuovo deployment.
+
+## PWA 1.16.0 · Continuita', confronto e coda locale
+
+- Anteprime playlist e cursori di lettura recuperabili sul dispositivo,
+  vincolati a provider/account/criteri. Dati recuperati indicati come storici;
+  nessuna creazione automatica dopo OAuth o reinvio di scritture incerte.
+- Associazioni esplicite delle edizioni TIDAL/Qobuz ricordate e modificabili,
+  senza fusioni o trasferimenti di voti.
+- Confronto di 2-4 suggerimenti con evidenze gia' caricate; nessuna richiesta
+  al cambio di selezione. Countdown operativo vicino ai comandi.
+- Coda per durata con album interi e durate note, senza sforamento;
+  anteprima Aggiungi/Sostituisci, totale risultante e nessun autoplay.
+- Backup musicale v2 con ordine/coda/durate, anteprima, gestione conflitti
+  e rollback; import dei backup v1 mantenuto. Non e' il backup del desktop.
+- Pubblicazione richiesta il 6 novembre 2026; verificare l'esito del workflow
+  Pages relativo al commit di questa release.
+
 ## PWA 1.15.4 · Paginazione TIDAL senza prefisso API
 
 - Nei link alla pagina successiva il prefisso /v2 puo' essere ripristinato
   solo per lo stesso host/protocollo e l'identico percorso della risorsa
   corrente senza prefisso. Non sono ammessi altri host, risorse o versioni.
 - Cursori preservati; invariati controlli URL, limiti di lettura e politica
-  richieste. Modifica locale, non ancora pubblicata.
+  richieste. Pubblicata il 6 novembre 2026.
 
 ## PWA 1.15.3 · Ritmo adattivo TIDAL e creazione playlist
 
@@ -24,7 +71,7 @@
 - Approfondimenti: [playlist e 429](https://github.com/orgs/tidal-music/discussions/155),
   [letture aggregate](https://github.com/tidal-music/discussions/discussions/185#discussioncomment-13471571).
   Esperienze della comunita', non quote ufficiali TIDAL.
-- Modifica locale, non ancora pubblicata.
+- Inclusa nella release pubblicata 1.15.4.
 
 ## PWA 1.15.2 · Richieste TIDAL e Qobuz
 
@@ -38,14 +85,14 @@
 - Attese interrotte da AbortSignal o cambio servizio/account; URL audio
   Qobuz inclusi nella stessa coda del catalogo. Nessun coordinamento
   fra dispositivi o con le app ufficiali dei servizi.
-- Modifica locale, non ancora pubblicata.
+- Inclusa nella release pubblicata 1.15.4.
 
 ## PWA 1.15.1 · Messaggi leggibili
 
 - Finestre dei messaggi piu' ampie, altezza naturale e a capo conservati.
   Lo scorrimento e' limitato ai messaggi che superano lo schermo, senza
   un secondo riquadro scorrevole per il testo.
-- Modifica locale, non ancora pubblicata.
+- Inclusa nella release pubblicata 1.15.4.
 
 ## PWA 1.15.0 · Crea playlist condiviso
 
@@ -64,7 +111,7 @@
 - Gestione TIDAL/Qobuz in pannelli secondari richiudibili. La gestione
   remota delle playlist esistenti non e' disponibile nella PWA Spotify:
   il controllo e' disabilitato con tooltip, senza aprire un'altra funzione.
-- Cambiamenti locali, non pubblicati. Nuovo flusso verificato con dati
+- Inclusa nella release pubblicata 1.15.4. Nuovo flusso verificato con dati
   sintetici, senza scritture negli account personali.
 
 ## PWA 1.12.10 · Crediti artisti TIDAL
@@ -449,19 +496,25 @@ e dalla configurazione dell'app Spotify; i test locali non le simulano integralm
   proporzione di brani noti soltanto dai dati già disponibili. Dati mancanti
   o parziali sono dichiarati; gli album in raccolta non sono impropriamente
   considerati prove di ascolto dei singoli brani. Nessuna lettura aggiuntiva.
-- **Vista e altro → Scarica backup locale JSON** esporta album e una lista
-  chiusa di preferenze: layout, album fissati, dimensione testo, contrasto e
-  densità. Nessuna credenziale, bozza, ricerca, cronologia, token o immagine.
+- **Vista e altro → Scarica backup locale JSON** esporta album, ordine
+  manuale, coda locale, durate note e una lista chiusa di preferenze: layout,
+  album fissati, dimensione testo, contrasto e densità. Nessuna credenziale,
+  bozza, ricerca, cronologia, token o immagine.
   Gli URL album esportati sono canonici, senza parametri. Il file contiene
   comunque la tua raccolta personale: custodiscilo in un luogo privato.
   Il ripristino accetta backup locali di questo formato (massimo 10 MB):
   valida tutto prima dell'anteprima, richiede la selezione degli album e
-  una conferma; le preferenze sono facoltative. Sostituisce per ID o aggiunge,
-  non elimina gli album non selezionati. Album e preferenze sono salvati
-  atomicamente in un'unica scrittura locale; un errore non cambia lo stato.
+  una conferma; preferenze e coda/durate sono facoltative. Sostituisce per ID
+  o aggiunge, non elimina gli album non selezionati. Se la coda selezionata
+  richiama album non presenti dopo il ripristino, l'anteprima richiede di
+  selezionarli. Album, preferenze e dati musicali correlati sono salvati con
+  recupero in caso di errore di scrittura; un errore non cambia lo stato.
   Modifiche durante l'anteprima richiedono di riaprirla. Bozze preesistenti
   restano separate; il ripristino non equivale a una sincronizzazione.
   Le copertine già archiviate restano disponibili, ma non sono nel backup.
+  Il formato versione 1 resta importabile senza inventare ordine, coda o
+  durate. Il backup PWA e' separato dal profilo desktop e non contiene Task,
+  Outlook o JIRA.
 - **Attività** raccoglie lavoro in corso, messaggi/errori e scelte recenti
   solo in memoria (ultimi 30 eventi), con la scadenza del cooldown Spotify
   condiviso. Si aggiorna su eventi/apertura: niente polling o nuovi retry.
@@ -495,7 +548,7 @@ funzionalita' compatibili, patch per correzioni e ottimizzazioni. La versione
 avanza una volta per insieme completo e verificato di modifiche, non a ogni
 modifica intermedia. Le modifiche a un solo prodotto non incrementano l'altro.
 
-La versione desktop risiede in `../app_version.py` e alimenta titolo e
+La versione desktop risiede in `Accord\accord\app_version.py` e alimenta titolo e
 diagnostica. Per la PWA, titolo e badge in `index.html` devono corrispondere
 alla versione della cache in `sw.js`; un test ne verifica la coerenza.
 I suffissi degli asset (`?v=...`) sono identificatori tecnici della cache,
@@ -778,7 +831,7 @@ Abilita GitHub Pages in **Settings → Pages**, scegliendo **GitHub Actions**
 come sorgente. Il workflow pubblica i file statici a ogni push al branch
 `main`. Dopo il deploy, apri `https://Melvin-91.github.io/accord-album-pwa/`.
 Il workflow carica la radice e pubblica anche la sottocartella `pwa`.
-Le due cartelle hanno versioni e percorsi relativi distinti: ciascuna suite
+Le due cartelle hanno la stessa versione, ma percorsi relativi distinti: ciascuna suite
 verifica i file accanto a sé. Il workflow le prova entrambe; non copiare test
 da una cartella all'altra senza verificarne prima la compatibilità. La copia
 desktop `accord/pwa/` non è inclusa nel workflow Pages e richiede il comando
@@ -805,7 +858,7 @@ abilita esplicitamente il sync all'avvio.
 
 ## Aggiunta manuale di un album
 
-In **Raccolta album** scegli **Aggiungi album**. La ricerca predefinita usa
+In **Raccolta album** scegli **Aggiungi album**. Con Spotify la ricerca predefinita usa
 Last.fm (titolo, artista o genere/tag); inserisci una chiave API Last.fm nelle
 impostazioni, conservata solo nel profilo browser e mai nella raccolta o su
 GitHub. MusicBrainz permette di filtrare anche per anno; Spotify resta
@@ -821,6 +874,8 @@ modificati. Le nuove voci avviano la sincronizzazione se GitHub è configurato,
 altrimenti restano locali. I conflitti richiedono sempre una scelta esplicita.
 Accord desktop offre lo stesso flusso e usa la chiave Last.fm già configurata
 localmente; le chiavi non vengono trasferite tra dispositivi.
+Con TIDAL o Qobuz la ricerca usa invece il catalogo selezionato e mantiene
+gli ID di quel servizio, senza associarli automaticamente a Spotify.
 
 ## Suggerimenti da ascolti Last.fm
 

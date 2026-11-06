@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { tidalAlbumId } from "./tidal.mjs";
+import { fingerprint } from "./music-continuity.mjs";
 import {
   buildSimilarityQueue,
   resolveArtistFromTracks,
@@ -295,24 +296,44 @@ test("playlist quality metrics use existing evidence, count repeats/collaborator
   assert.equal(playlistPreviewStatistics([{ uri: "t1", duration_ms: -1 }], available).timed, 0);
 });
 
-test("backup exports only collection and explicit preference allowlist, strips URL parameters, validates all records", () => {
+test("backup exports the full local music set and explicit preference allowlist without credentials or caches", () => {
   const album = qosAlbum("a", { url: "https://open.spotify.com/album/a?si=private" });
   const backup = createLocalBackup([album], { token: "SECRET", search: "PRIVATE", drafts: {},
-    density: "compact", textScale: "large", pinnedIds: ["a"] }, validateAlbum);
+    density: "compact", textScale: "large", pinnedIds: ["a"] }, validateAlbum, {
+    manualOrder: ["a"], listeningQueue: { ids: ["a"], resume: "a", durations: { a: 120000 } },
+    durations: { a: 240000 },
+  });
   assert.equal(JSON.stringify(backup).includes("SECRET"), false);
   assert.equal(JSON.stringify(backup).includes("PRIVATE"), false);
   assert.equal(JSON.stringify(backup).includes("?si"), false);
-  assert.deepEqual(Object.keys(backup), ["format", "version", "albums", "preferences"]);
+  assert.deepEqual(Object.keys(backup), ["format", "version", "albums", "preferences", "manualOrder",
+    "listeningQueue", "durations"]);
+  assert.deepEqual(backup.listeningQueue, { ids: ["a"], resume: "a", durations: { a: 120000 } });
+  assert.deepEqual(backup.durations, { a: 240000 });
   const validated = validateLocalBackup(backup, validateDocument);
   assert.equal(validated.albums.length, 1);
   assert.equal(validated.preferences.density, "compact");
+  assert.deepEqual(validated.manualOrder, ["a"]);
+  assert.deepEqual(validated.listeningQueue, backup.listeningQueue);
+  assert.deepEqual(validated.durations, backup.durations);
   for (const changed of [{ ...backup, token: "secret" }, { ...backup, version: 99 },
     { ...backup, preferences: { ...backup.preferences, drafts: {} } },
     { ...backup, preferences: { density: "invalid" } }, { ...backup, preferences: [] },
-    { ...backup, albums: [album, album] }, { ...backup, albums: [{ ...album, rating: 99 }] }]) {
+    { ...backup, albums: [album, album] }, { ...backup, albums: [{ ...album, rating: 99 }] },
+    { ...backup, listeningQueue: { ids: ["missing"], resume: "", durations: {} } },
+    { ...backup, durations: { a: -1 } }]) {
     assert.throws(() => validateLocalBackup(changed, validateDocument));
   }
   assert.equal(album.url.includes("?si"), true, "export cannot mutate collection");
+});
+
+test("legacy collection backups remain importable without inventing queue data", () => {
+  const album = qosAlbum("a");
+  const legacy = { format: "accord-local-backup", version: 1, albums: [album], preferences: {} };
+  const validated = validateLocalBackup(legacy, validateDocument);
+  assert.deepEqual(validated.manualOrder, ["a"]);
+  assert.deepEqual(validated.listeningQueue, { ids: [], resume: "", durations: {} });
+  assert.deepEqual(validated.durations, {});
 });
 
 test("selective restore is a non-destructive ID merge and commits atomically only after successful storage", () => {
@@ -348,10 +369,16 @@ test("restore dialog previews selective writes, refuses concurrent edits, and ap
   const context = { state, qol: { drafts: {} }, collectionPreferences: state.preferences,
     document: { createElement: fakeQolElement, body: { append: (value) => { dialog = value; } } },
     prepareSelectiveRestore, validateAlbum, albumChanges, changesText: () => "preview", portablePreferences,
-    commitLocalRestore, localStorage: { setItem() { writes += 1; } }, STORAGE_KEY: "state",
+    commitLocalRestore, localStorage: { getItem() { return null; }, setItem() { writes += 1; } },
+    LISTENING_QUEUE_KEY: "queue", ALBUM_DURATIONS_KEY: "durations", STORAGE_KEY: "state",
     $: (selector) => nodes[selector], applyAccessibility() {}, updateLocalSyncSummary() {}, rememberLocalChanges() {}, render() {}, showFeedback() {} };
   const preview = runInNewContext(`${appFunction("function previewLocalRestore(", '\n$("#restoreBackupInput")')}\npreviewLocalRestore`, context);
-  const backup = { albums: [qosAlbum("a", { rating: 4 }), qosAlbum("b")], preferences: portablePreferences({ contrast: "high" }) };
+  const backup = { albums: [qosAlbum("a", { rating: 4 }), qosAlbum("b")],
+    manualOrder: ["a", "b"], listeningQueue: { ids: [], resume: "", durations: {} }, durations: {},
+    preferences: portablePreferences({ contrast: "high" }) };
+  preview(backup);
+  dialog.children[8].listeners.click();
+  assert.equal(writes, 0, "cancel leaves every local store untouched");
   preview(backup);
   const firstDialog = dialog;
   assert.equal(writes, 0);
@@ -359,19 +386,35 @@ test("restore dialog previews selective writes, refuses concurrent edits, and ap
   firstCheckbox.checked = true;
   firstCheckbox.listeners.change();
   state.albums = [qosAlbum("a", { rating: 3 })];
-  dialog.children[6].listeners.click();
+  dialog.children[7].listeners.click();
   assert.equal(writes, 0);
-  assert.match(firstDialog.children[5].textContent, /cambiata durante/);
+  assert.match(firstDialog.children[6].textContent, /cambiate durante/);
   preview(backup);
   const secondCheckbox = dialog.children[2].children[1].children[0];
   secondCheckbox.checked = true;
   secondCheckbox.listeners.change();
   dialog.children[3].children[0].checked = true;
-  dialog.children[6].listeners.click();
+  dialog.children[7].listeners.click();
   assert.equal(writes, 1);
   assert.equal(state.albums.find((album) => album.id === "a").rating, 3, "unchecked replacement stays unchanged");
   assert.equal(state.albums.some((album) => album.id === "b"), true);
   assert.equal(state.preferences.contrast, "high");
+});
+
+test("multi-key local restore rolls back prior writes when a later storage write fails", () => {
+  const data = new Map([["state", '{"albums":[]}'], ["queue", '{"ids":[]}']]);
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem(key, value) {
+      if (key === "queue") throw new Error("quota");
+      data.set(key, value);
+    },
+    removeItem: (key) => data.delete(key),
+  };
+  const current = { albums: [] }, next = { albums: [qosAlbum("a")] };
+  assert.throws(() => commitLocalRestore(storage, "state", current, next, { queue: { ids: ["a"] } }), /quota/);
+  assert.deepEqual([...data], [["state", '{"albums":[]}'], ["queue", '{"ids":[]}']]);
+  assert.deepEqual(current, { albums: [] });
 });
 
 test("service worker reloads static HTTP cache on install and activates only on explicit update", async () => {
@@ -1114,6 +1157,8 @@ test("playlist creation submits once and consumes the preview on success or unce
     let resolveToken, writes = 0;
     const elements = new Map([["#playlistBuilderName", { value: "Discovery" }], ["#playlistBuilderStatus", { textContent: "" }]]);
     const context = { commandGuard: createCommandGuard(), topArtistPlaylistPreview: { tracks: [{ uri: "spotify:track:a" }] },
+      playlistCheckpointContext: null, playlistHistorical: false, spotifyPlaylistUncertainKey: "uncertain",
+      localStorage: { getItem: () => null }, confirm: () => true, saveSpotifyPlaylistCheckpoint() {},
       musicService: { service: "spotify", epoch: 0, assert() {} }, catalogPlaylistUI: null,
       $: (selector) => elements.get(selector), setPlaylistBuilderBusy() {}, showFeedback() {}, showMessage() {},
       safeDiagnostics: (value) => value, sessionStorage: { getItem: () => "1" },
@@ -1131,6 +1176,14 @@ test("playlist creation submits once and consumes the preview on success or unce
     assert.equal(context.commandGuard.isBusy(), false);
     if (failure) assert.match(elements.get("#playlistBuilderStatus").textContent, /Nessun tentativo automatico/);
   }
+});
+
+test("returning from Spotify write authorization restores the preview and never resumes a creation", () => {
+  const branch = uiAppSource.slice(uiAppSource.indexOf("else if (pendingPlaylistCreate)"),
+    uiAppSource.indexOf("else if (pendingPlaylist) await importSpotifyPlaylist"));
+  assert.match(branch, /topArtistPlaylistPreview = request\.preview/);
+  assert.match(branch, /nessuna scrittura ripresa/);
+  assert.doesNotMatch(branch, /createTopArtistPlaylist\s*\(/);
 });
 
 test("sync entry point blocks overlapping writes, releases on failure, and never retries uncertain work", async () => {
@@ -1473,18 +1526,18 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=99", "style.css?v=36"]) {
+  for (const file of ["app.mjs?v=102", "style.css?v=36"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=7", "tidal-ui.mjs?v=18", "qobuz-ui.mjs?v=14",
-    "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "playlist-ui.mjs?v=2",
-    "music-app-links.mjs?v=1"]) {
+  for (const file of ["core.mjs?v=46", "ui.mjs?v=11", "tidal.mjs?v=7", "tidal-ui.mjs?v=19", "qobuz-ui.mjs?v=15",
+    "catalog-suggestions.mjs?v=3", "suggestions-ui.mjs?v=5", "music-qol.mjs?v=1", "playlist-ui.mjs?v=3",
+    "music-app-links.mjs?v=1", "music-continuity.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
-  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=2"));
-  assert.ok(sw.includes("catalog-playlist.mjs?v=2"));
+  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=3"));
+  assert.ok(sw.includes("catalog-playlist.mjs?v=3"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
     assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
   }
@@ -1527,7 +1580,12 @@ test("Spotify playlist reuses the real Suggestions candidate, album and Discogs 
     "#spotifyExcludeGenresMatch": "exact",
   })) elements.set(selector, { value });
   const context = {
-    URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums,
+    URLSearchParams, createSpotifyReadBudget, collectSpotifyDiscoveryAlbums, fingerprint,
+    musicService: { service: "spotify", epoch: 0, assert() {} }, spotifyPlaylistAccount: null,
+    spotifySettings: () => ({ clientId: "test-client" }), sessionStorage: { getItem: () => "synthetic-token" },
+    spotifyAccessToken: async () => "synthetic-token", saveCheckpoint() {},
+    spotifySuggestionPreferences: {},
+    playlistCheckpointContext: null, playlistHistorical: false,
     buildSimilarityQueue, localStorage: { getItem: () => null }, LASTFM_KEY: "lastfm",
     spotifyDiscoveryPlaylistPreview, playlistAlbumRecords, filterListeningAlbumSuggestions,
     rankDiscogsSuggestionAlbums, state: { albums: [{ artist: "Fresh", name: "Owned old album" }] },
@@ -1542,6 +1600,7 @@ test("Spotify playlist reuses the real Suggestions candidate, album and Discogs 
     spotifyRequest: async (path, _token, budget) => {
       budget.read();
       calls.push(path);
+      if (path === "me") return { id: "verified-test-account" };
       if (path.startsWith("me/top/artists")) return { items: [heard] };
       if (path.startsWith("me/top/tracks")) return { items: [] };
       return { artists: { items: [heard, fresh, other] } };

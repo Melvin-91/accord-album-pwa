@@ -1,6 +1,8 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=3";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=2";
-import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=2";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=5";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=3";
+import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
+  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=1";
+import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=3";
 import {
   addPlaylistAlbums,
   albumPrimaryGenre,
@@ -68,16 +70,19 @@ import {
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-} from "./ui.mjs?v=10";
+} from "./ui.mjs?v=11";
 import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=7";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=18";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=14";
+import { createAlbumComparisonToolbar, suggestDurationQueue } from "./music-qol.mjs?v=1";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=19";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=15";
 import { qobuzAlbumId } from "./qobuz.mjs?v=6";
 
 const musicService = createMusicServiceGate(localStorage);
 
 const STORAGE_KEY = "accord-album-pwa-v1";
+const LISTENING_QUEUE_KEY = "accord-listening-queue-v1";
+const ALBUM_DURATIONS_KEY = "accord-listening-album-durations-v1";
 const COVER_DATABASE = "accord-album-covers-v1";
 const COVER_STORE = "covers";
 const LASTFM_HISTORY_STORE = "lastfm-history";
@@ -110,6 +115,8 @@ const DISCOGS_COOLDOWN_KEY = "accord-discogs-cooldown-until-v1";
 localStorage.removeItem("accord-spotify-heard-artists-v1");
 localStorage.removeItem("accord-spotify-heard-artist-last-played-v1");
 const suggestedSourceAlbums = new Map();
+let listeningSuggestionComparison = null;
+let spotifySuggestionComparison = null;
 const spotifyJsonReader = createSpotifyJsonReader();
 const spotifyPlaylistSnapshots = new Map();
 const spotifyTransport = createSpotifyTransport({
@@ -142,6 +149,9 @@ const allTimeArtistCache = new Map();
 let suggestedMatchAlbumId = null;
 let topArtistPlaylistPreview = null;
 let playlistDiscoveryContinuation = null;
+let playlistCheckpointContext = null, playlistHistorical = false;
+let spotifyPlaylistAccount = null;
+const spotifyPlaylistUncertainKey = "accord-playlist-uncertain-spotify-v1";
 let lastListeningCatalogRequestAt = 0;
 let lastFmApiRequestQueue = Promise.resolve();
 let discogsApiRequestQueue = Promise.resolve();
@@ -1367,26 +1377,29 @@ function render(options = {}) {
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
     const link = card.querySelector(".album-player-link");
     const tidalAlbum = musicService.service === "tidal", qobuzAlbum = musicService.service === "qobuz";
-    const albumLink = musicAlbumLink(album, musicService.service);
+    let associated = null;
+    try { associated = editionLink(localStorage, album, musicService.service); }
+    catch (error) { showFeedback(error.message, true); }
+    const playbackAlbum = associated || album;
+    const albumLink = musicAlbumLink(playbackAlbum, musicService.service);
     link.hidden = false;
     link.removeAttribute("href");
     link.target = "_self";
     link.rel = "noopener noreferrer";
     const serviceLabel = tidalAlbum ? "TIDAL" : qobuzAlbum ? "Qobuz" : "Spotify";
     const query = `${album.artist} ${album.name}`;
-    const sameQobuz = qobuzAlbum && /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
-      && album.url === `https://play.qobuz.com/album/${album.id.slice(6)}`;
+    const sameQobuz = qobuzAlbum && /^qobuz:[A-Za-z0-9]{1,120}$/.test(playbackAlbum.id)
+      && playbackAlbum.url === `https://play.qobuz.com/album/${playbackAlbum.id.slice(6)}`;
     let label = `Apri nell'app ${serviceLabel}`;
     if (albumLink || sameQobuz) {
-      configureMusicAppLink(link, albumLink || album.url, { query, report: showFeedback });
+      configureMusicAppLink(link, albumLink || playbackAlbum.url, { query, report: showFeedback });
       if (!albumLink) label = "Copia artista e titolo per cercare nell'app Qobuz";
     } else {
       label = `Scegli l'edizione nel catalogo ${serviceLabel}`;
       link.setAttribute("role", "button"); link.tabIndex = 0;
       const search = (event) => {
         event.preventDefault();
-        if (tidalAlbum) tidalUI.openCatalog(query);
-        else qobuzUI.openCatalog(query);
+        chooseCollectionEdition(album);
       };
       link.addEventListener("click", search);
       link.addEventListener("keydown", (event) => {
@@ -1399,6 +1412,20 @@ function render(options = {}) {
     link.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="${iconPath}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     link.title = `${label}: ${album.artist} · ${album.name}`;
     link.setAttribute("aria-label", link.title);
+    if (tidalAlbum || qobuzAlbum) {
+      const change = document.createElement("button");
+      change.type = "button"; change.className = "secondary";
+      change.textContent = associated ? "Cambia edizione associata" : "Associa edizione";
+      change.addEventListener("click", () => chooseCollectionEdition(album)); quick.append(change);
+      if (associated) {
+        const forget = document.createElement("button");
+        forget.type = "button"; forget.className = "secondary"; forget.textContent = "Rimuovi associazione";
+        forget.addEventListener("click", () => {
+          try { setEditionLink(localStorage, album, musicService.service); render(); }
+          catch (error) { showFeedback(error.message, true); }
+        }); quick.append(forget);
+      }
+    }
     const orderControls = card.querySelector(".manual-order-controls");
     orderControls.hidden = !manualSorting;
     if (manualSorting) {
@@ -3074,6 +3101,8 @@ function renderListeningAlbumSuggestions(albums) {
   rememberSuggestionResult("lastfm", albums);
   albums = albums.filter(suggestionNotSnoozed);
   const container = $("#suggestionAlbums");
+  listeningSuggestionComparison?.destroy();
+  listeningSuggestionComparison = null;
   container.replaceChildren();
   suggestionCoverObserver?.disconnect();
   for (const cover of suggestedCoverFrames.values()) {
@@ -3089,9 +3118,12 @@ function renderListeningAlbumSuggestions(albums) {
     container.append(empty);
     return;
   }
+  listeningSuggestionComparison = createAlbumComparisonToolbar(container, () => state.albums,
+    $("#suggestionStatus"), "Last.fm");
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    listeningSuggestionComparison.append(card, { ...album, source: album.source || "Last.fm" });
     appendSuggestionActions(card, album, () => renderListeningAlbumSuggestions(albums));
     const cover = createAlbumCoverFrame(album.name);
     const rememberedMatch = suggestedSpotifyCoverMatches.get(album.id);
@@ -3410,13 +3442,13 @@ function spotifyDiscoveryFilters() {
 }
 
 async function buildSpotifyAlbumSuggestions(request, accessToken, status, {
-  maximum = 10, continuation = null, excludeCollectionAlbums = true, playlistRequest = null,
+  maximum = 10, continuation = null, excludeCollectionAlbums = true, playlistRequest = null, readBudget = null,
 } = {}) {
   if (!request || !spotifyTimeRanges.has(request.period)
       || !["none", ...spotifyTimeRanges].includes(request.exclusion)) {
     throw new Error("Periodo Spotify non valido.");
   }
-  const budget = createSpotifyReadBudget();
+  const budget = readBudget || createSpotifyReadBudget();
   let discovery = continuation;
   if (!discovery) {
     const topArtists = await readSpotifyTopArtists(request.period, accessToken, budget);
@@ -3513,10 +3545,17 @@ function renderSpotifyAlbumSuggestions(albums) {
   rememberSuggestionResult("spotify", albums);
   albums = albums.filter(suggestionNotSnoozed);
   const container = $("#spotifySuggestionAlbums");
+  spotifySuggestionComparison?.destroy();
+  spotifySuggestionComparison = null;
   container.replaceChildren();
+  if (albums.length) {
+    spotifySuggestionComparison = createAlbumComparisonToolbar(container, () => state.albums,
+      $("#spotifySuggestionStatus"), "Spotify");
+  }
   for (const album of albums) {
     const card = document.createElement("article");
     card.className = "suggestion-album";
+    spotifySuggestionComparison.append(card, { ...album, source: album.source || "Spotify" });
     appendSuggestionActions(card, album, () => renderSpotifyAlbumSuggestions(albums));
     if (typeof album.coverUrl === "string" && album.coverUrl.startsWith("https://i.scdn.co/image/")) {
       const cover = createAlbumCoverFrame(album.name);
@@ -3631,18 +3670,23 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
     period: $("#spotifySuggestionPeriod").value,
     exclusion: $("#spotifySuggestionExclusion").value,
   };
-  const key = JSON.stringify([accessToken, request, suggestionRequest, spotifyDiscoveryFilters(), state.albums]);
+  const readBudget = createSpotifyReadBudget();
+  const account = await spotifyPlaylistIdentity(readBudget);
+  const key = await fingerprint([account, request, suggestionRequest, spotifyDiscoveryFilters(), state.albums]);
+  playlistCheckpointContext = { identity: account, criteria: await spotifyPlaylistCriteria() };
   const continuation = playlistDiscoveryContinuation?.key === key
     ? playlistDiscoveryContinuation.discovery : null;
+  if (!continuation) playlistHistorical = false;
   const result = await buildSpotifyAlbumSuggestions(
     suggestionRequest, accessToken, $("#playlistBuilderStatus"), {
       maximum: Math.max(10, artistCount), continuation,
       playlistRequest: request,
+      readBudget,
     });
   playlistDiscoveryContinuation = result.continuation ? { key, discovery: result.continuation } : null;
-  const preview = spotifyDiscoveryPlaylistPreview(result.albums, request);
-  return {
-    ...preview,
+  const basePreview = spotifyDiscoveryPlaylistPreview(result.albums, request);
+  const preview = {
+    ...basePreview,
     sourceAlbums: result.albums,
     partialReason: [result.partialReason, result.discogs.unavailable,
       result.discogs.limited ? "budget Discogs raggiunto" : ""].filter(Boolean).join(" · "),
@@ -3650,6 +3694,53 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
     requestedArtists: artistCount,
     reads: result.reads,
   };
+  saveSpotifyPlaylistCheckpoint(preview);
+  return preview;
+}
+
+function chooseCollectionEdition(album) {
+  const provider = musicService.service, epoch = musicService.epoch;
+  const selected = (edition) => {
+    try {
+      musicService.assert(provider, epoch);
+      if (!state.albums.some((row) => row.id === album.id && row.artist === album.artist && row.name === album.name)) throw new Error("Album locale cambiato.");
+      if (!confirm(`Associare ${album.artist} · ${album.name} a ${edition.artist} · ${edition.name}? Solo apertura nel servizio; nessun album unito o voto trasferito.`)) return;
+      setEditionLink(localStorage, album, provider, edition);
+      selectMusicView("collection"); render();
+      showFeedback("Edizione associata sul dispositivo. Album e voti invariati.");
+    } catch (error) { showFeedback(error.message, true); }
+  };
+  (provider === "tidal" ? tidalUI : qobuzUI).openCatalog(`${album.artist} ${album.name}`, selected);
+}
+
+async function spotifyPlaylistIdentity(budget = null) {
+  const token = sessionStorage.getItem("accord-spotify-refresh-token") || sessionStorage.getItem("accord-spotify-access-token");
+  if (!token) throw new Error("Collega Spotify prima di riprendere l'anteprima.");
+  const epoch = musicService.epoch, session = await fingerprint([spotifySettings().clientId, token]);
+  musicService.assert("spotify", epoch);
+  if (spotifyPlaylistAccount?.session === session) return spotifyPlaylistAccount.identity;
+  const access = await spotifyAccessToken();
+  const profile = await spotifyRequest("me", access, budget);
+  musicService.assert("spotify", epoch);
+  if (!profile?.id || typeof profile.id !== "string") throw new Error("Account Spotify non verificabile.");
+  const identity = await fingerprint([spotifySettings().clientId, profile.id]);
+  spotifyPlaylistAccount = { session, identity };
+  return identity;
+}
+async function spotifyPlaylistCriteria() {
+  return fingerprint(spotifyPlaylistCriteriaValues());
+}
+function spotifyPlaylistCriteriaValues() {
+  return [$("#playlistArtistCount").value, $("#playlistTracksPerArtist").value,
+    $("#spotifySuggestionPeriod").value, $("#spotifySuggestionExclusion").value, spotifyDiscoveryFilters(), state.albums];
+}
+function saveSpotifyPlaylistCheckpoint(preview = topArtistPlaylistPreview) {
+  if (!preview || !playlistCheckpointContext) return;
+  saveCheckpoint(localStorage, "spotify", playlistCheckpointContext.identity, playlistCheckpointContext.criteria,
+    { artists: $("#playlistArtistCount").value, tracks: $("#playlistTracksPerArtist").value, name: $("#playlistBuilderName").value,
+      period: $("#spotifySuggestionPeriod").value, exclusion: $("#spotifySuggestionExclusion").value,
+      filters: Object.fromEntries(Object.keys(spotifySuggestionPreferences).map((selector) => [selector, $(selector).value])) },
+    preview, playlistDiscoveryContinuation);
 }
 
 function renderTopArtistPlaylistPreview(preview) {
@@ -3700,16 +3791,27 @@ function renderTopArtistPlaylistPreview(preview) {
     + (preview.hasMore ? " Premi Continua anteprima per un altro passaggio manuale." : " Nessun altro candidato nel campione; il numero richiesto non è garantito.")
     + (native ? " Primi brani verificati in ordine album, non classifiche native. Nessun ripiego sugli artisti ascoltati."
       : " Sono applicati i filtri di Suggerimenti Spotify; nessun ripiego sugli artisti ascoltati.");
+  if (!native && playlistHistorical) $("#playlistBuilderStatus").textContent += " Include risultati storici conservati, non riletti oggi.";
   $("#playlistPreviewButton").textContent = preview.hasMore ? "Continua anteprima" : "Genera anteprima";
   $("#playlistCreateButton").disabled = !preview.tracks.length;
 }
 
 async function createTopArtistPlaylist(name, preview, accessToken) {
   const serviceEpoch = musicService.epoch;
-  const guard = () => musicService.assert("spotify", serviceEpoch);
+  const criteria = JSON.stringify(spotifyPlaylistCriteriaValues());
+  const account = sessionStorage.getItem("accord-spotify-refresh-token") || sessionStorage.getItem("accord-spotify-access-token");
+  const guard = () => {
+    musicService.assert("spotify", serviceEpoch);
+    if (criteria !== JSON.stringify(spotifyPlaylistCriteriaValues())
+        || account !== (sessionStorage.getItem("accord-spotify-refresh-token") || sessionStorage.getItem("accord-spotify-access-token"))) {
+      throw new Error("Account o criteri cambiati: nessun nuovo invio; verifica l'esito nell'app.");
+    }
+  };
   guard();
   if (!commandGuard.acquire("playlist-write")) throw new Error("Creazione playlist già in corso. Nessuna seconda scrittura avviata.");
   try {
+  if (!navigator.locks?.request) throw new Error("Browser senza blocco scritture sicuro: creazione non disponibile.");
+  return await navigator.locks.request("accord-playlist-write-spotify-v1", async () => {
   if (!name || name.length > 100 || !preview || !Array.isArray(preview.tracks)
       || !preview.tracks.length || preview.tracks.length > 500) {
     throw new Error("Nome o anteprima playlist non validi.");
@@ -3720,7 +3822,10 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
     return track.uri;
   });
   if (new Set(uris).size !== uris.length) throw new Error("L'anteprima contiene brani duplicati; generala di nuovo.");
+  if (localStorage.getItem(spotifyPlaylistUncertainKey)) throw new Error("Verifica l'esito precedente nell'app Spotify; nessun nuovo invio.");
   guard();
+  if (pauseRemaining(localStorage, "spotify")) throw new Error("Pausa attiva: nessuna scrittura avviata.");
+  localStorage.setItem(spotifyPlaylistUncertainKey, "pending");
   const playlist = await spotifyWriteRequest("me/playlists", accessToken, {
     name,
     description: "Creata da Accord · artisti e album nuovi da Suggerimenti Spotify",
@@ -3738,7 +3843,10 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
     throw new Error(`Playlist creata ma aggiunta dei brani incompleta: ${error.message}`
       + (url ? ` Apri la playlist e verifica i brani: ${url}` : ` ID playlist: ${playlist.id}`));
   }
+  localStorage.removeItem(spotifyPlaylistUncertainKey);
+  clearCheckpoint(localStorage, "spotify");
   return { playlist, tracks: uris.length };
+  });
   } finally { commandGuard.release("playlist-write"); }
 }
 
@@ -3747,7 +3855,7 @@ function setPlaylistBuilderBusy(busy) {
   $("#playlistTracksPerArtist").disabled = busy;
   $("#playlistBuilderName").disabled = busy;
   $("#playlistPreviewButton").disabled = busy;
-  $("#playlistCreateButton").disabled = busy || !topArtistPlaylistPreview?.tracks.length;
+  $("#playlistCreateButton").disabled = busy || !topArtistPlaylistPreview?.tracks.length || Boolean(localStorage.getItem(spotifyPlaylistUncertainKey));
 }
 
 async function beginPlaylistBuilderPreview() {
@@ -3793,6 +3901,17 @@ async function beginPlaylistBuilderCreation() {
     $("#playlistBuilderStatus").textContent = "Inserisci un nome playlist (massimo 100 caratteri).";
     return;
   }
+  if (localStorage.getItem(spotifyPlaylistUncertainKey)) {
+    $("#playlistBuilderStatus").textContent = "Verifica l'esito precedente nell'app Spotify. Nessun nuovo invio.";
+    return;
+  }
+  if (playlistCheckpointContext && (playlistCheckpointContext.identity !== await spotifyPlaylistIdentity()
+      || playlistCheckpointContext.criteria !== await spotifyPlaylistCriteria())) {
+    $("#playlistBuilderStatus").textContent = "Account o criteri cambiati: genera una nuova anteprima.";
+    return;
+  }
+  if (!confirm(`Creare «${name}» privata con ${topArtistPlaylistPreview.tracks.length} brani?`
+      + (playlistHistorical ? " Risultati storici conservati, non riletti oggi: confermi l'uso?" : ""))) return;
   if (!commandGuard.acquire("playlist-builder")) { showFeedback("Operazione playlist già in corso · nessuna seconda scrittura"); return; }
   const preview = topArtistPlaylistPreview;
   setPlaylistBuilderBusy(true);
@@ -3805,6 +3924,7 @@ async function beginPlaylistBuilderCreation() {
       return;
     }
     topArtistPlaylistPreview = null;
+    saveSpotifyPlaylistCheckpoint(preview);
     const result = await createTopArtistPlaylist(name, preview, token);
     musicService.assert("spotify", serviceEpoch);
     $("#playlistBuilderStatus").textContent =
@@ -4318,6 +4438,188 @@ function pickLocalAlbum() {
   dialog.showModal();
 }
 
+function composeDurationQueue() {
+  const dialog = document.createElement("dialog");
+  dialog.className = "album-comparison-dialog";
+  const heading = document.createElement("h2");
+  heading.textContent = "Coda locale per tempo disponibile";
+  const hint = document.createElement("p");
+  hint.textContent = "Solo durate già note o inserite esplicitamente qui sono conteggiate. "
+    + "Gli album senza durata sono esclusi; nessun servizio viene interrogato e la riproduzione non parte.";
+  const budget = document.createElement("input");
+  budget.type = "number"; budget.min = "1"; budget.max = "1440"; budget.step = "1"; budget.value = "45";
+  budget.setAttribute("aria-label", "Tempo disponibile in minuti");
+  const mode = document.createElement("select");
+  mode.setAttribute("aria-label", "Aggiungere alla coda o sostituirla");
+  mode.add(new Option("Sostituisci la coda (consigliato)", "replace"));
+  mode.add(new Option("Aggiungi alla coda attuale", "add"));
+  const controls = document.createElement("div"); controls.className = "qol-actions";
+  controls.append(node("label", "Minuti disponibili "), budget, mode);
+  const durationsEditor = document.createElement("div"), list = document.createElement("div");
+  const dataSummary = document.createElement("p"), summary = document.createElement("p"), error = document.createElement("p");
+  error.setAttribute("role", "alert");
+  const confirm = document.createElement("button");
+  confirm.className = "primary"; confirm.type = "button"; confirm.textContent = "Conferma coda";
+  const cancel = document.createElement("button");
+  cancel.className = "secondary"; cancel.type = "button"; cancel.textContent = "Annulla";
+  const footer = document.createElement("div"); footer.className = "dialog-actions";
+  footer.append(confirm, cancel);
+  dialog.append(heading, hint, controls, dataSummary, durationsEditor, list, summary, error, footer);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+
+  const parseStored = (key, fallback) => {
+    try { return JSON.parse(localStorage.getItem(key) || "null") || fallback; }
+    catch (cause) { throw new Error(`Dati locali illeggibili (${key}): ${cause.message}`); }
+  };
+  const readSnapshot = () => {
+    const storedCollection = parseStored(STORAGE_KEY, {});
+    const storedAlbums = validateDocument({ format: "accord-album-collection", version: 1,
+      albums: Array.isArray(storedCollection.albums) ? storedCollection.albums : [] });
+    const queue = parseStored(LISTENING_QUEUE_KEY, { ids: [], resume: "", durations: {} });
+    const durations = parseStored(ALBUM_DURATIONS_KEY, {});
+    if (!Array.isArray(queue.ids) || !queue.ids.every((id) => typeof id === "string")
+        || !queue.durations || typeof queue.durations !== "object"
+        || !durations || typeof durations !== "object"
+        || Object.values({ ...queue.durations, ...durations }).some((value) =>
+          !Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error("Coda o durate locali non valide.");
+    }
+    return { albums: storedAlbums, queue, durations: { ...queue.durations, ...durations } };
+  };
+
+  let snapshot;
+  let selected = new Set();
+  let candidateById = new Map();
+  try { snapshot = readSnapshot(); }
+  catch (cause) { error.textContent = cause.message; confirm.disabled = true; dialog.showModal(); return; }
+
+  const durationText = (milliseconds) => {
+    const seconds = Math.floor(milliseconds / 1000);
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  };
+  function updatePreview() {
+    selected = new Set([...list.querySelectorAll("input[type=checkbox]:checked")].map((input) => input.value));
+    const targetIds = mode.value === "add"
+      ? [...new Set([...snapshot.queue.ids, ...selected])] : [...selected];
+    const unknown = targetIds.filter((id) => snapshot.durations[id] === undefined);
+    const total = targetIds.reduce((sum, id) => sum + (snapshot.durations[id] || 0), 0);
+    const selectedAlbums = targetIds.map((id) => snapshot.albums.find((album) => album.id === id)).filter(Boolean);
+    const duplicates = duplicateAlbumGroups(selectedAlbums).length;
+    const availableMs = Number(budget.value) * 60_000;
+    const over = !Number.isSafeInteger(availableMs) || availableMs <= 0 || total > availableMs;
+    summary.textContent = `Coda risultante: ${durationText(total)} / ${budget.value || 0}:00 disponibili`
+      + (unknown.length ? ` · ${unknown.length} album senza durata: limite non verificabile.` : "")
+      + (duplicates ? ` · ${duplicates} gruppo/i di possibili duplicati.` : "");
+    confirm.disabled = !selected.size || unknown.length > 0 || over;
+    for (const input of list.querySelectorAll("input[type=checkbox]")) {
+      input.disabled = snapshot.durations[input.value] === undefined;
+      input.checked = selected.has(input.value);
+    }
+  }
+  function refresh() {
+    try {
+      snapshot = readSnapshot();
+      const currentQueue = snapshot.queue;
+      const candidates = snapshot.albums.filter((album) => album.status !== "disliked"
+        && (mode.value !== "add" || !currentQueue.ids.includes(album.id)));
+      const proposed = suggestDurationQueue(candidates, snapshot.durations, Number(budget.value) * 60_000,
+        mode.value === "add" ? currentQueue.ids : []);
+      candidateById = new Map(candidates.map((album) => [album.id, album]));
+      const duplicateIds = new Set(duplicateAlbumGroups(candidates).flat().map((album) => album.id));
+      selected = selected.size ? new Set([...selected].filter((id) => candidateById.has(id)))
+        : new Set(proposed.ids);
+      list.replaceChildren();
+      for (const id of proposed.orderedIds) {
+        const album = candidateById.get(id);
+        const duration = snapshot.durations[id];
+        const label = document.createElement("label"); label.className = "check";
+        const input = document.createElement("input");
+        input.type = "checkbox"; input.value = id; input.checked = selected.has(id);
+        input.disabled = duration === undefined;
+        input.addEventListener("change", updatePreview);
+        label.append(input, document.createTextNode(
+          `${album.artist} — ${album.name} · ${album.year || "anno sconosciuto"} · ${labels[album.status]}`
+          + (album.rating === null || album.rating === undefined ? " · senza voto" : ` · voto personale ${album.rating}/5`)
+          + (duration ? ` · ${durationText(duration)}` : " · durata non disponibile")
+          + (duplicateIds.has(id) ? " · possibile edizione duplicata" : "")));
+        list.append(label);
+      }
+      const missingCount = proposed.missingDurationIds.length;
+      dataSummary.textContent = `${missingCount} album candidati senza durata nota. `
+        + `${proposed.duplicateSkippedIds.length} possibili edizioni duplicate escluse automaticamente.`;
+      updatePreview();
+    } catch (cause) {
+      error.textContent = cause.message;
+      confirm.disabled = true;
+    }
+  }
+  const editRow = document.createElement("div"); editRow.className = "qol-actions";
+  const durationAlbum = document.createElement("select");
+  durationAlbum.setAttribute("aria-label", "Album senza durata da aggiornare");
+  const seconds = document.createElement("input");
+  seconds.type = "number"; seconds.min = "1"; seconds.max = "86400"; seconds.step = "1"; seconds.value = "2400";
+  seconds.setAttribute("aria-label", "Durata nota dell'album in secondi");
+  const saveDuration = document.createElement("button");
+  saveDuration.type = "button"; saveDuration.className = "secondary"; saveDuration.textContent = "Registra durata nota";
+  editRow.append(durationAlbum, seconds, saveDuration);
+  durationsEditor.append(editRow);
+  function refreshDurationEditor() {
+    durationAlbum.replaceChildren(new Option("Scegli un album senza durata", ""));
+    for (const album of snapshot.albums) {
+      if (snapshot.durations[album.id] === undefined) {
+        durationAlbum.add(new Option(`${album.artist} — ${album.name}`, album.id));
+      }
+    }
+  }
+  saveDuration.addEventListener("click", () => {
+    const id = durationAlbum.value, value = Number(seconds.value);
+    if (!id || !Number.isSafeInteger(value) || value <= 0 || value > 86400) {
+      error.textContent = "Scegli un album e una durata positiva in secondi.";
+      return;
+    }
+    try {
+      const saved = parseStored(ALBUM_DURATIONS_KEY, {});
+      localStorage.setItem(ALBUM_DURATIONS_KEY, JSON.stringify({ ...saved, [id]: value * 1000 }));
+      selected.clear();
+      refresh();
+      refreshDurationEditor();
+      error.textContent = "Durata locale registrata esplicitamente; la coda non è stata modificata.";
+    } catch (cause) { error.textContent = `Durata non salvata: ${cause.message}`; }
+  });
+  budget.addEventListener("input", refresh);
+  mode.addEventListener("change", () => { selected.clear(); refresh(); });
+  cancel.addEventListener("click", () => dialog.close("cancel"));
+  confirm.addEventListener("click", () => {
+    try {
+      const current = readSnapshot();
+      if (JSON.stringify(current) !== JSON.stringify(snapshot)) {
+        throw new Error("Raccolta, durate o coda sono cambiate dopo l'anteprima. Riaprila.");
+      }
+      const selectedIds = [...list.querySelectorAll("input[type=checkbox]:checked")].map((input) => input.value);
+      const queueIds = mode.value === "add"
+        ? [...new Set([...current.queue.ids, ...selectedIds])] : selectedIds;
+      const unknown = queueIds.filter((id) => current.durations[id] === undefined);
+      const total = queueIds.reduce((sum, id) => sum + (current.durations[id] || 0), 0);
+      if (unknown.length || total > Number(budget.value) * 60_000) {
+        throw new Error("La coda risultante non rispetta il limite con durate tutte note.");
+      }
+      const updated = { ...current.queue, ids: queueIds,
+        resume: queueIds.includes(current.queue.resume) ? current.queue.resume : "",
+        durations: Object.fromEntries(queueIds.map((id) => [id, current.durations[id]])) };
+      const savedDurations = { ...(current.queue.durations || {}), ...current.durations };
+      for (const id of queueIds) savedDurations[id] = current.durations[id];
+      localStorage.setItem(ALBUM_DURATIONS_KEY, JSON.stringify(savedDurations));
+      localStorage.setItem(LISTENING_QUEUE_KEY, JSON.stringify(updated));
+      dialog.close("applied");
+      showFeedback("Coda locale aggiornata. Nessuna riproduzione avviata.");
+    } catch (cause) { error.textContent = cause.message; }
+  });
+  refresh();
+  refreshDurationEditor();
+  dialog.showModal();
+}
+
 function openBulkEditor(initialValues = {}) {
   if (!selectedAlbumIds.size) return;
   const ids = new Set(selectedAlbumIds);
@@ -4666,6 +4968,7 @@ function initializeCollectionQol() {
   });
   $("#smartCollectionList").addEventListener("change", render);
   $("#pickAlbumButton").addEventListener("click", pickLocalAlbum);
+  $("#durationQueueButton").addEventListener("click", composeDurationQueue);
   $("#bulkEditButton").addEventListener("click", openBulkEditor);
   $("#syncChangesButton").addEventListener("click", () => showMessage("Modifiche locali",
     changesText(albumChanges(state.base, state.albums)) || "Nessuna modifica da sincronizzare."));
@@ -5355,12 +5658,13 @@ async function finishSpotifyAuthorization() {
       } catch {
         throw new Error("Richiesta di creazione playlist non valida.");
       }
-      const result = await createTopArtistPlaylist(request.name, request.preview, tokens.access_token);
-      $("#playlistBuilderStatus").textContent =
-        `Playlist privata creata: ${result.playlist.name || request.name} · ${result.tracks} brani.`;
-      showMessage("Playlist Spotify creata",
-        `${result.playlist.name || request.name}: ${result.tracks} brani aggiunti. La playlist è privata.`
-        + (result.playlist.external_urls?.spotify ? ` ${result.playlist.external_urls.spotify}` : ""));
+      $("#playlistBuilderName").value = request.name;
+      topArtistPlaylistPreview = request.preview;
+      playlistHistorical = true;
+      playlistCheckpointContext = { identity: await spotifyPlaylistIdentity(), criteria: await spotifyPlaylistCriteria() };
+      renderTopArtistPlaylistPreview(topArtistPlaylistPreview);
+      saveSpotifyPlaylistCheckpoint();
+      $("#playlistBuilderStatus").textContent += " Autorizzazione completata: nessuna scrittura ripresa. Conferma nuovamente Crea playlist.";
     }
     else if (pendingPlaylist) await importSpotifyPlaylist(pendingPlaylist, tokens.access_token);
     else if (pendingAlbums) await loadSuggestedAlbums(pendingAlbums, null, tokens.access_token);
@@ -6040,19 +6344,27 @@ function receiveSharedAlbum() {
 $("#backupButton").addEventListener("click", () => {
   try {
     if (state.loadError) throw new Error(state.loadError);
-    const backup = createLocalBackup(state.albums, collectionPreferences, validateAlbum);
+    const listeningQueue = JSON.parse(localStorage.getItem(LISTENING_QUEUE_KEY)
+      || '{"ids":[],"resume":"","durations":{}}');
+    const durations = JSON.parse(localStorage.getItem(ALBUM_DURATIONS_KEY) || "{}");
+    const backup = createLocalBackup(state.albums, collectionPreferences, validateAlbum, {
+      manualOrder: state.manualOrder, listeningQueue, durations,
+    });
     const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `accord-backup-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showFeedback("Backup scaricato: album e preferenze consentite. Esclusi credenziali, bozze, ricerche, cronologia e immagini.");
+    showFeedback("Backup scaricato: raccolta, ordine manuale, coda, durate e preferenze consentite. "
+      + "Esclusi credenziali, bozze, ricerche, cronologia e immagini.");
   } catch (error) { showFeedback(`Backup non creato: ${error.message}`, true); }
 });
 
 function previewLocalRestore(backup) {
-  const snapshot = JSON.stringify(state);
+  const snapshot = JSON.stringify({
+    state, queue: localStorage.getItem(LISTENING_QUEUE_KEY), durations: localStorage.getItem(ALBUM_DURATIONS_KEY),
+  });
   const dialog = document.createElement("dialog");
   dialog.setAttribute("aria-label", "Anteprima ripristino selettivo");
   const title = document.createElement("h2");
@@ -6069,6 +6381,11 @@ function previewLocalRestore(backup) {
   const preferenceLabel = document.createElement("label");
   preferenceLabel.className = "check";
   preferenceLabel.append(preferences, " Ripristina anche layout, album fissati e accessibilità");
+  const restoreMusicData = document.createElement("input");
+  restoreMusicData.type = "checkbox";
+  const musicDataLabel = document.createElement("label");
+  musicDataLabel.className = "check";
+  musicDataLabel.append(restoreMusicData, " Sostituisci anche la coda locale e le durate");
   const accept = document.createElement("button");
   accept.type = "button";
   accept.textContent = "Conferma ripristino selezionati";
@@ -6080,10 +6397,18 @@ function previewLocalRestore(backup) {
   const updatePreview = () => {
     const next = prepareSelectiveRestore(state.albums, backup, selected, validateAlbum);
     const changes = albumChanges(state.albums, next);
+    const nextIds = new Set(next.map((album) => album.id));
+    const missingQueueAlbums = restoreMusicData.checked
+      ? backup.listeningQueue.ids.filter((id) => !nextIds.has(id)) : [];
     preview.textContent = `${selected.size} selezionati · ${changes.length} modifiche effettive\n${
       changesText(changes) || "Nessuna modifica agli album."}\n${
-      preferences.checked ? `Preferenze: ${JSON.stringify(backup.preferences)}\n` : ""}Le bozze esistenti non vengono applicate né eliminate.`;
-    accept.disabled = !selected.size && !preferences.checked;
+      preferences.checked ? `Preferenze: ${JSON.stringify(backup.preferences)}\n` : ""}${
+      restoreMusicData.checked ? `Coda: ${backup.listeningQueue.ids.length} album · durate: ${
+        Object.keys(backup.durations).length}\n` : ""}${
+      missingQueueAlbums.length ? `Album di coda non presenti dopo il ripristino: ${missingQueueAlbums.length}.\n` : ""
+    }Le bozze esistenti non vengono applicate né eliminate.`;
+    accept.disabled = (!selected.size && !preferences.checked && !restoreMusicData.checked)
+      || missingQueueAlbums.length > 0;
   };
   for (const album of backup.albums) {
     const label = document.createElement("label");
@@ -6101,15 +6426,28 @@ function previewLocalRestore(backup) {
     list.append(label);
   }
   preferences.addEventListener("change", updatePreview);
+  restoreMusicData.addEventListener("change", updatePreview);
   accept.addEventListener("click", () => {
     try {
       if (state.loadError) throw new Error(state.loadError);
-      if (JSON.stringify(state) !== snapshot) throw new Error("La raccolta è cambiata durante l'anteprima. Annulla e riapri il backup.");
+      if (JSON.stringify({
+        state, queue: localStorage.getItem(LISTENING_QUEUE_KEY), durations: localStorage.getItem(ALBUM_DURATIONS_KEY),
+      }) !== snapshot) throw new Error("Raccolta, coda o durate sono cambiate durante l'anteprima. Annulla e riapri il backup.");
       const albums = prepareSelectiveRestore(state.albums, backup, selected, validateAlbum);
+      const manualOrder = [...new Set([
+        ...state.manualOrder.filter((id) => !selected.has(id)),
+        ...backup.manualOrder.filter((id) => selected.has(id)),
+        ...albums.filter((album) => selected.has(album.id)).map((album) => album.id),
+      ])];
       const next = { ...state, albums,
-        manualOrder: [...new Set([...state.manualOrder, ...albums.map((album) => album.id)])],
+        manualOrder,
         preferences: preferences.checked ? backup.preferences : collectionPreferences };
-      commitLocalRestore(localStorage, STORAGE_KEY, state, next);
+      const related = restoreMusicData.checked ? {
+        [LISTENING_QUEUE_KEY]: { ...backup.listeningQueue },
+        [ALBUM_DURATIONS_KEY]: Object.fromEntries(Object.entries(backup.durations)
+          .filter(([id]) => albums.some((album) => album.id === id))),
+      } : {};
+      commitLocalRestore(localStorage, STORAGE_KEY, state, next, related);
       collectionPreferences = portablePreferences(state.preferences);
       $("#collectionLayout").value = collectionPreferences.layout;
       $("#albumList").dataset.layout = collectionPreferences.layout;
@@ -6123,7 +6461,7 @@ function previewLocalRestore(backup) {
   });
   cancel.addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
-  dialog.append(title, notice, list, preferenceLabel, preview, errorOutput, accept, cancel);
+  dialog.append(title, notice, list, preferenceLabel, musicDataLabel, preview, errorOutput, accept, cancel);
   document.body.append(dialog);
   updatePreview();
   dialog.showModal();
@@ -6387,8 +6725,82 @@ catalogPlaylistUI = initializeCatalogPlaylistUI({
   gate: musicService, providers: { tidal: tidalUI, qobuz: qobuzUI }, discoveryUI: catalogSuggestionsUI,
   render: renderTopArtistPlaylistPreview,
   clearSpotifyPreview: () => { topArtistPlaylistPreview = null; setPlaylistBuilderBusy(false); },
+  spotifyPreview: () => topArtistPlaylistPreview,
   selectView: selectMusicView,
 });
+const spotifyResume = document.createElement("button"), spotifyVerify = document.createElement("button");
+for (const button of [spotifyResume, spotifyVerify]) {
+  button.type = "button"; button.className = "secondary"; $("#playlistManageButton").parentElement.append(button);
+}
+spotifyResume.textContent = "Riprendi anteprima Spotify conservata";
+spotifyVerify.textContent = "Verifica esito Spotify precedente";
+spotifyResume.addEventListener("click", async () => {
+  if (musicService.service !== "spotify" || commandGuard.isBusy()) return;
+  if (!commandGuard.acquire("playlist-resume")) return;
+  const epoch = musicService.epoch;
+  try {
+    const record = readCheckpoint(localStorage, "spotify");
+    if (!record) throw new Error("Nessuna anteprima conservata.");
+    $("#playlistArtistCount").value = record.parameters.artists;
+    $("#playlistTracksPerArtist").value = record.parameters.tracks;
+    $("#playlistBuilderName").value = record.parameters.name;
+    if (record.parameters.period) $("#spotifySuggestionPeriod").value = record.parameters.period;
+    if (record.parameters.exclusion) $("#spotifySuggestionExclusion").value = record.parameters.exclusion;
+    for (const selector of Object.keys(spotifySuggestionPreferences)) {
+      if (record.parameters.filters && typeof record.parameters.filters[selector] === "string") {
+        $(selector).value = record.parameters.filters[selector];
+      }
+    }
+    topArtistPlaylistPreview = null; playlistCheckpointContext = null;
+    renderTopArtistPlaylistPreview(record.preview); setPlaylistBuilderBusy(true);
+    const identity = await spotifyPlaylistIdentity(), criteria = await spotifyPlaylistCriteria();
+    musicService.assert("spotify", epoch); validateCheckpoint(record, identity, criteria);
+    playlistDiscoveryContinuation = record.state;
+    playlistCheckpointContext = { identity, criteria };
+    topArtistPlaylistPreview = record.preview; playlistHistorical = true;
+    renderTopArtistPlaylistPreview(topArtistPlaylistPreview); setPlaylistBuilderBusy(false);
+    $("#playlistBuilderStatus").textContent += " Risultati storici conservati, non riletti oggi. Continua riprende solo le letture mancanti, mai le scritture.";
+  } catch (error) { $("#playlistBuilderStatus").textContent = `Risultati conservati consultabili. Ripresa non disponibile: ${error.message}`; }
+  finally { commandGuard.release("playlist-resume"); setPlaylistBuilderBusy(false); }
+});
+spotifyVerify.addEventListener("click", async () => {
+  if (musicService.service !== "spotify" || commandGuard.isBusy()) return;
+  const epoch = musicService.epoch;
+  try {
+    if (!navigator.locks?.request) throw new Error("Browser senza blocco scritture sicuro: verifica non disponibile.");
+    await navigator.locks.request("accord-playlist-write-spotify-v1", { ifAvailable: true }, (lock) => {
+      musicService.assert("spotify", epoch);
+      if (!lock) throw new Error("Scrittura ancora in corso in un'altra scheda.");
+      if (!confirm("Hai controllato playlist e brani nell'app Spotify, anche parziali? Sbloccare non ripete l'operazione.")) return;
+      localStorage.removeItem(spotifyPlaylistUncertainKey);
+      topArtistPlaylistPreview = null; playlistDiscoveryContinuation = null;
+      clearCheckpoint(localStorage, "spotify"); setPlaylistBuilderBusy(false);
+      $("#playlistBuilderStatus").textContent = "Verifica confermata. Genera una nuova anteprima; nessun invio ripetuto.";
+    });
+  } catch (error) { $("#playlistBuilderStatus").textContent = error.message; }
+});
+$("#playlistBuilderName").addEventListener("input", () => {
+  if (musicService.service !== "spotify") return;
+  try { saveSpotifyPlaylistCheckpoint(); } catch (error) { $("#playlistBuilderStatus").textContent = `Parametri non conservati: ${error.message}`; }
+});
+function updateSpotifyPlaylistPause() {
+  const spotify = musicService.service === "spotify";
+  spotifyResume.hidden = spotifyVerify.hidden = !spotify;
+  if (!spotify) return;
+  try {
+    spotifyResume.disabled = commandGuard.isBusy() || !readCheckpoint(localStorage, "spotify");
+    spotifyVerify.hidden = !localStorage.getItem(spotifyPlaylistUncertainKey);
+    spotifyVerify.disabled = commandGuard.isBusy();
+    const remaining = pauseRemaining(localStorage, "spotify");
+    if (remaining) {
+      $("#playlistPreviewButton").disabled = true;
+      $("#playlistCreateButton").disabled = true;
+    } else if (!commandGuard.isBusy()) setPlaylistBuilderBusy(false);
+  } catch (error) { $("#playlistBuilderStatus").textContent = error.message; }
+}
+setInterval(updateSpotifyPlaylistPause, 1000);
+window.addEventListener("storage", updateSpotifyPlaylistPause);
+updateSpotifyPlaylistPause();
 for (const provider of [tidalUI, qobuzUI]) provider.suggestionAPI.prepare = catalogPlaylistUI.prepareRecords;
 render({ remoteCovers: !incomingShare && !updateView });
 receiveSharedAlbum();

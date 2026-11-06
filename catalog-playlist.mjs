@@ -1,4 +1,4 @@
-import { normalized } from "./catalog-suggestions.mjs?v=2";
+import { normalized } from "./catalog-suggestions.mjs?v=3";
 
 export class CatalogPlaylist {
   constructor(discovery, tracksPerArtist) {
@@ -13,6 +13,14 @@ export class CatalogPlaylist {
   get canContinue() {
     return this.discovery.canContinue || this.current !== null
       || this.discovery.results.some((row) => !this.processed.has(row.album.id));
+  }
+  checkpoint() {
+    return { ...this, discovery: this.discovery.checkpoint() };
+  }
+  static restore(saved, discovery) {
+    const state = new CatalogPlaylist(discovery, saved.perArtist);
+    if (Object.keys(saved).sort().join() !== Object.keys(state.checkpoint()).sort().join()) throw new Error("Stato playlist non valido.");
+    return Object.assign(state, saved, { discovery });
   }
   async step({ discover, albumTracks, guard = () => {} }) {
     guard();

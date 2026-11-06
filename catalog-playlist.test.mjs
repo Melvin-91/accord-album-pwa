@@ -119,14 +119,17 @@ test("playlist UI preserves its preview after preflight cooldown and can create 
       else delete globalThis[name];
     }
   });
-  const nodes = new Map(), data = new Map();
+  const nodes = new Map(), data = new Map(), created = [];
   function node(id) {
-    if (!nodes.has(id)) nodes.set(id, { value: "", textContent: "", parentElement: {},
-      addEventListener() {}, replaceChildren() {}, querySelector: (selector) => node(selector) });
+    if (!nodes.has(id)) nodes.set(id, { value: "", textContent: "", parentElement: { append() {} },
+      listeners: new Map(), addEventListener(name, callback) { this.listeners.set(name, callback); },
+      setAttribute() {}, before() {}, replaceChildren() {}, querySelector: (selector) => node(selector) });
     return nodes.get(id);
   }
   const settings = {
-    document: { getElementById: node, querySelector: () => node("root") },
+    document: { getElementById: node, createElement: (tag) => {
+      const result = node(`created-${tag}-${created.length}`); created.push(result); return result;
+    }, querySelector: () => node("root") },
     window: { addEventListener() {} }, confirm: () => true,
     localStorage: { getItem: (key) => data.get(key) ?? null,
       setItem: (key, value) => data.set(key, value), removeItem: (key) => data.delete(key) },
@@ -139,6 +142,7 @@ test("playlist UI preserves its preview after preflight cooldown and can create 
     let paused = true, creations = 0, additions = 0, preparations = 0;
     const api = {
       revision: () => "account", batchSize: service === "tidal" ? 50 : 100,
+      identity: () => "account",
       preflight: async () => { if (paused) throw new Error("attendi 120 secondi"); },
       create: async () => { creations += 1; return { id: "p1", name: "New" }; },
       add: async () => { additions += 1; },
@@ -147,16 +151,29 @@ test("playlist UI preserves its preview after preflight cooldown and can create 
     };
     const ui = initializeCatalogPlaylistUI({
       gate: { service, epoch: 1, assert() {} }, providers: { [service]: { playlistAPI: api } },
-      discoveryUI: { playlistSignature: () => "filters" },
+      discoveryUI: { playlistSignature: () => "filters", playlistDurableSignature: () => "filters" },
       render() {}, clearSpotifyPreview() {}, selectView() {},
     });
     node("playlistBuilderName").value = "New";
     await ui.prepareRecords([{}]);
     await ui.create();
     assert.equal(creations, 0);
-    assert.equal(data.size, 0);
+    assert.equal(data.size, 1);
     assert.equal(node("playlistCreateButton").disabled, false);
     assert.match(node("playlistBuilderStatus").textContent, /Creazione non avviata.*attendi 120/);
+    let historical = null;
+    initializeCatalogPlaylistUI({
+      gate: { service, epoch: 2, assert() {} }, providers: { [service]: { playlistAPI: api } },
+      discoveryUI: { playlistSignature: () => "filters", playlistDurableSignature: () => "filters" },
+      render: (preview) => { historical = preview; }, clearSpotifyPreview() {}, selectView() {},
+    });
+    const resume = created.filter((item) => item.textContent === "Riprendi anteprima conservata").at(-1);
+    await resume.listeners.get("click")();
+    assert.equal(historical.tracks[0].name, "First");
+    assert.match(node("playlistBuilderStatus").textContent, /Risultati storici/);
+    assert.equal(preparations, 1);
+    assert.equal(creations, 0);
+    assert.equal(node("playlistCreateButton").disabled, false);
     paused = false;
     await ui.create();
     assert.equal(creations, 1);

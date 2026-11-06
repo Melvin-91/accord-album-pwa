@@ -45,6 +45,14 @@ export class CatalogSuggestions {
     for (const row of albums) this.tasks.push(["verify", row.album ? row : { album: row }]);
   }
   get canContinue() { return this.tasks.length > 0 && this.results.length < this.target; }
+  checkpoint() {
+    return Object.fromEntries(Object.entries(this).filter(([key]) => key !== "allowed"));
+  }
+  static restore(saved, allowed = () => true) {
+    const state = new CatalogSuggestions({ target: saved.target, allowed });
+    if (Object.keys(saved).sort().join() !== Object.keys(state.checkpoint()).sort().join()) throw new Error("Stato scoperta non valido.");
+    return Object.assign(state, saved);
+  }
   async step({ similar, topAlbums, search, genres, guard = () => {} }) {
     let used = 0;
     while (this.canContinue && used < 20) {

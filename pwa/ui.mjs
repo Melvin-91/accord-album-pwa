@@ -330,31 +330,99 @@ export function portablePreferences(value = {}) {
   return { ...normalizeCollectionPreferences(value), ...normalizeAccessibility(value) };
 }
 
-export function createLocalBackup(albums, preferences, validate) {
-  return { format: "accord-local-backup", version: 1,
-    albums: albums.map((album) => {
-      const record = validate(album);
-      return { ...record, url: record.id.startsWith("tidal:")
-        ? `https://tidal.com/browse/album/${record.id.slice(6)}`
-        : record.id.startsWith("qobuz:")
-          ? `https://play.qobuz.com/album/${record.id.slice(6)}`
-        : `https://open.spotify.com/album/${record.id}` };
-    }), preferences: portablePreferences(preferences) };
+const portableAlbumId = (id) => typeof id === "string"
+  && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id);
+
+function portableIds(value, knownIds, label) {
+  if (!Array.isArray(value) || value.some((id) => !portableAlbumId(id) || !knownIds.has(id))) {
+    throw new Error(`${label} non validi o riferiti ad album non presenti.`);
+  }
+  return [...new Set(value)];
+}
+
+function portableDurations(value, knownIds, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.entries(value).some(([id, duration]) =>
+        !portableAlbumId(id) || !knownIds.has(id) || !Number.isSafeInteger(duration) || duration <= 0)) {
+    throw new Error(`${label} non valide o riferite ad album non presenti.`);
+  }
+  return { ...value };
+}
+
+export function createLocalBackup(albums, preferences, validate, music = {}) {
+  const records = albums.map((album) => {
+    const record = validate(album);
+    return { ...record, url: record.id.startsWith("tidal:")
+      ? `https://tidal.com/browse/album/${record.id.slice(6)}`
+      : record.id.startsWith("qobuz:")
+        ? `https://play.qobuz.com/album/${record.id.slice(6)}`
+      : `https://open.spotify.com/album/${record.id}` };
+  });
+  const knownIds = new Set(records.map((album) => album.id));
+  const manualOrder = portableIds(music.manualOrder || [], knownIds, "Ordine manuale");
+  const rawQueue = music.listeningQueue || { ids: [], resume: "", durations: {} };
+  if (!rawQueue || typeof rawQueue !== "object" || Array.isArray(rawQueue)
+      || Object.keys(rawQueue).some((key) => !["ids", "resume", "durations"].includes(key))) {
+    throw new Error("Coda locale non valida.");
+  }
+  const queueIds = portableIds(rawQueue.ids || [], knownIds, "Coda locale");
+  const queueDurations = portableDurations(rawQueue.durations || {}, knownIds, "Durate della coda");
+  const resume = rawQueue.resume || "";
+  if (resume && !queueIds.includes(resume)) throw new Error("Ripresa della coda non valida.");
+  return { format: "accord-local-backup", version: 2, albums: records,
+    preferences: portablePreferences(preferences), manualOrder,
+    listeningQueue: { ids: queueIds, resume, durations: queueDurations },
+    durations: portableDurations(music.durations || {}, knownIds, "Durate locali") };
 }
 
 export function validateLocalBackup(value, validateDocument) {
   if (!value || value.format !== "accord-local-backup" || value.version !== 1
       || !value.preferences || typeof value.preferences !== "object" || Array.isArray(value.preferences)
-      || Object.keys(value).some((key) => !["format", "version", "albums", "preferences"].includes(key))
+      || Object.keys(value).some((key) => !["format", "version", "albums", "preferences",
+        ...(value.version === 2 ? ["manualOrder", "listeningQueue", "durations"] : [])].includes(key))
       || Object.keys(value.preferences).some((key) =>
         !["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
+    if (value?.format === "accord-local-backup" && value.version === 2
+        && value.preferences && typeof value.preferences === "object" && !Array.isArray(value.preferences)
+        && Object.keys(value).every((key) => ["format", "version", "albums", "preferences",
+          "manualOrder", "listeningQueue", "durations"].includes(key))
+        && Object.keys(value.preferences).every((key) =>
+          ["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
+      return validateVersionTwoBackup(value, validateDocument);
+    }
     throw new Error("Backup locale non valido o contenente campi non consentiti.");
   }
   const preferences = portablePreferences(value.preferences);
   if (Object.entries(value.preferences).some(([key, field]) =>
     JSON.stringify(field) !== JSON.stringify(preferences[key]))) throw new Error("Preferenze backup non valide.");
-  return { albums: validateDocument({ format: "accord-album-collection", version: 3, albums: value.albums }),
-    preferences };
+  const albums = validateDocument({ format: "accord-album-collection", version: 3, albums: value.albums });
+  const knownIds = new Set(albums.map((album) => album.id));
+  return { albums, preferences, manualOrder: albums.map((album) => album.id),
+    listeningQueue: { ids: [], resume: "", durations: {} }, durations: {} };
+}
+
+function validateVersionTwoBackup(value, validateDocument) {
+  if (!Array.isArray(value.albums) || !Array.isArray(value.manualOrder)
+      || !value.listeningQueue || typeof value.listeningQueue !== "object"
+      || Array.isArray(value.listeningQueue) || !value.durations || typeof value.durations !== "object"
+      || Array.isArray(value.durations)) {
+    throw new Error("Backup locale non valido o contenente campi non consentiti.");
+  }
+  const preferences = portablePreferences(value.preferences);
+  if (Object.entries(value.preferences).some(([key, field]) =>
+    JSON.stringify(field) !== JSON.stringify(preferences[key]))) throw new Error("Preferenze backup non valide.");
+  const albums = validateDocument({ format: "accord-album-collection", version: 3, albums: value.albums });
+  const knownIds = new Set(albums.map((album) => album.id));
+  const manualOrder = portableIds(value.manualOrder, knownIds, "Ordine manuale");
+  const queue = value.listeningQueue;
+  if (Object.keys(queue).some((key) => !["ids", "resume", "durations"].includes(key))
+      || typeof (queue.resume || "") !== "string") throw new Error("Coda locale non valida.");
+  const queueIds = portableIds(queue.ids, knownIds, "Coda locale");
+  const queueDurations = portableDurations(queue.durations, knownIds, "Durate della coda");
+  const resume = queue.resume || "";
+  if (resume && !queueIds.includes(resume)) throw new Error("Ripresa della coda non valida.");
+  return { albums, preferences, manualOrder, listeningQueue: { ids: queueIds, resume, durations: queueDurations },
+    durations: portableDurations(value.durations, knownIds, "Durate locali") };
 }
 
 export function prepareSelectiveRestore(current, backup, ids, validate) {
@@ -365,7 +433,32 @@ export function prepareSelectiveRestore(current, backup, ids, validate) {
   return [...next.values()];
 }
 
-export function commitLocalRestore(storage, key, current, next) {
-  storage.setItem(key, JSON.stringify(next));
+export function commitLocalRestore(storage, key, current, next, related = {}) {
+  const writes = [[key, JSON.stringify(next)]];
+  for (const [relatedKey, value] of Object.entries(related)) {
+    writes.push([relatedKey, value === null ? null : JSON.stringify(value)]);
+  }
+  const originals = writes.map(([writeKey]) => [
+    writeKey, typeof storage.getItem === "function" ? storage.getItem(writeKey) : undefined,
+  ]);
+  let written = 0;
+  try {
+    for (const [writeKey, value] of writes) {
+      if (value === null) storage.removeItem(writeKey);
+      else storage.setItem(writeKey, value);
+      written += 1;
+    }
+  } catch (error) {
+    let rollbackError = null;
+    for (const [writeKey, value] of originals.slice(0, written).reverse()) {
+      if (value === undefined) continue;
+      try {
+        if (value === null) storage.removeItem(writeKey);
+        else storage.setItem(writeKey, value);
+      } catch (failure) { rollbackError ||= failure; }
+    }
+    if (rollbackError) throw new AggregateError([error, rollbackError], "Ripristino locale e recupero dei dati non riusciti.");
+    throw error;
+  }
   Object.assign(current, next);
 }

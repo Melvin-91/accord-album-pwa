@@ -3,6 +3,7 @@ import {
 } from "./tidal.mjs?v=7";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
+import { bindPauseNotice } from "./music-continuity.mjs?v=1";
 
 const CLIENT = "accord-tidal-client-id-v1";
 const EXCLUDED_ARTISTS = "accord-tidal-suggestion-excluded-artists-v1";
@@ -328,6 +329,10 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       element("span", `${row.album.artist} · ${row.album.year || "Anno sconosciuto"}`, { class: "suggestion-detail" }));
     choice.append(row.check, cover, info);
     item.append(choice);
+    if (editionSelection) button(item, "Associa questa edizione", () => {
+      if (!editionSelection) { status.textContent = "Apri Associa edizione dalla raccolta prima di scegliere."; return; }
+      const callback = editionSelection; editionSelection = null; callback(row.album);
+    });
     button(item, "Usa per suggerimenti", () => useSeed(row.album.id.slice(6), `${row.album.artist} · ${row.album.name}`, "similarAlbums"));
     if (row.resource?.id) {
       item.append(configureMusicAppLink(element("a", "Apri in TIDAL ↗", { class: "tidal-result-link" }),
@@ -478,9 +483,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }
   async function read(action) {
     return run(async () => {
-      const current = epoch(); clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
-      suggestionResultsActive = action === "suggestions";
-      refreshSelectionControls();
+      const current = epoch();
       if (["search", "album", "collection"].includes(action)) collectionDetails.open = true;
       if (!/^[A-Za-z]{2}$/.test(country.value)) throw new Error("Immetti un codice paese ISO di due lettere.");
       const requestedPlaylist = ["playlist", "importPlaylist"].includes(action)
@@ -541,6 +544,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
         documents = [...documents, await transport.request(catalogPath(`albums/${tidalAlbumId(resource.id)}`, "artists,coverArt"), token)];
       }
       gate.assert("tidal", current);
+      clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
+      suggestionResultsActive = action === "suggestions";
+      refreshSelectionControls();
       const albums = tidalAlbumRecords(documents), all = tidalResources(documents), artwork = tidalAlbumArtwork(documents);
       const albumArtists = tidalAlbumArtists(all);
       const albumMap = new Map(albums.map((album) => [album.id.slice(6), album]));
@@ -701,7 +707,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     gate.assert("tidal"); selectView("collection");
     importDetails.open = true; moveOutput(); listImportPlaylists.focus();
   }
-  function openCatalog(value = "") {
+  let editionSelection = null;
+  function openCatalog(value = "", selection = null) {
+    editionSelection = selection;
     gate.assert("tidal"); selectView("collection");
     collectionDetails.open = true; query.value = value; moveOutput(); query.focus();
   }
@@ -798,6 +806,16 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       type: "tracks", id: track.id, attributes: { title: track.name },
     }))),
     revision: () => `${accountRevision}|${client.value}|${country.value}`,
+    identity: async () => {
+      const value = JSON.parse(sessionStorage.getItem("accord-tidal-token-v1") || "null");
+      if (!value || value.clientId !== client.value) throw new Error("Collega TIDAL prima di riprendere.");
+      const current = epoch(), account = accountRevision;
+      const token = await auth.access(client.value.trim());
+      const document = await transport.request("users/me", token);
+      gate.assert("tidal", current);
+      if (account !== accountRevision || document.data?.type !== "users" || !document.data.id) throw new Error("Account TIDAL non verificabile.");
+      return [client.value, country.value, String(document.data.id)];
+    },
     batchSize: 50,
     preflight: async () => {
       gate.assert("tidal"); transport.ready(); await auth.access(client.value.trim()); transport.ready();
@@ -854,5 +872,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       return { tracks: [...tracks.values()].slice(0, 250), partial: partial || tracks.size > 250 };
     },
   };
+  bindPauseNotice(status, { storage: localStorage, provider: () => "tidal",
+    describe: () => "potrai rilanciare la lettura del catalogo o della playlist; Continua riprende le letture mancanti dell'anteprima." });
   return { auth, transport, openImport, openCatalog, loadArtwork, suggestionAPI, playlistAPI };
 }
