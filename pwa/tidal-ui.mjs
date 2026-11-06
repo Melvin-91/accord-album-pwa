@@ -1,8 +1,11 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=2";
+} from "./tidal.mjs?v=4";
+import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
+import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 
 const CLIENT = "accord-tidal-client-id-v1";
+const EXCLUDED_ARTISTS = "accord-tidal-suggestion-excluded-artists-v1";
 const element = (tag, text, attributes = {}) => {
   const node = document.createElement(tag);
   if (text) node.textContent = text;
@@ -22,8 +25,17 @@ const selection = (parent, label, values) => {
   for (const [value, text] of values) select.append(element("option", text, { value }));
   wrapper.append(select); parent.append(wrapper); return select;
 };
+const tidalAlbumArtists = (resources) => {
+  const artists = new Map(resources.filter((item) => item.type === "artists" && item.attributes?.name)
+    .map((item) => [item.id, item.attributes.name]));
+  return new Map(resources.filter((item) => item.type === "albums").map((album) => {
+    const data = album.relationships?.artists?.data;
+    const refs = Array.isArray(data) ? data : data ? [data] : [];
+    return [album.id, refs.map((ref) => artists.get(ref.id)).filter(Boolean)];
+  }));
+};
 
-export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {} }) {
+export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {}, playlistPrepared = null }) {
   const epoch = () => gate.epoch;
   const transport = createTidalTransport({
     storage: localStorage, writeStorage: localStorage, active: () => gate.service === "tidal",
@@ -36,13 +48,19 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const auth = createTidalAuth({ session: sessionStorage, transport });
   const serviceBox = element("section", "", { class: "music-service-picker", "aria-label": "Servizio musicale" });
   serviceBox.append(element("p", "SERVIZIO MUSICALE", { class: "eyebrow" }));
-  const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"]]);
+  const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"], ["qobuz", "Qobuz"]]);
   provider.id = "musicService"; provider.value = gate.service;
   serviceBox.append(element("p", "La raccolta locale è unica; il servizio scelto cambia solo le funzioni online.", { class: "summary" }));
+  const spotifyCapabilities = element("p",
+    "Spotify · Cerca musica, scopri album, crea playlist e apri Spotify.",
+    { class: "summary", id: "spotifyCapabilities" });
   const capabilities = element("p",
-    "TIDAL: catalogo, preferiti, importazione e gestione playlist, album simili e mix ufficiali. Classifiche e cronologia Spotify non vengono usate come dati TIDAL. Il browser non può controllare l'app TIDAL Windows; Last.fm e i dati locali restano separati.",
+    "TIDAL · Cerca musica, scopri album, gestisci playlist e apri TIDAL.",
     { class: "summary", id: "tidalCapabilities" });
-  serviceBox.append(capabilities);
+  const qobuzCapabilities = element("p",
+    "Qobuz · Cerca musica, scopri album, gestisci playlist e riproduci musica.",
+    { class: "summary", id: "qobuzCapabilities" });
+  serviceBox.append(spotifyCapabilities, capabilities, qobuzCapabilities);
   const configuration = element("fieldset", "", { class: "preference-group", id: "tidalConfiguration" });
   configuration.append(element("legend", "TIDAL · accesso con PKCE"));
   const client = input(configuration, "Client ID dell’app TIDAL (non Client Secret)",
@@ -61,8 +79,11 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   configuration.append(element("p", "Se il portale mostra Allowed scopes: None, l’app non dispone dei permessi richiesti da Accord. Abilitali nelle impostazioni dell’app; se non sono modificabili, contatta il supporto TIDAL Developer. L’errore 1002 prima del login va verificato nel portale: salvare il Client ID qui non abilita i permessi. Non inserire Client Secret o password e non ripetere automaticamente il collegamento.", { class: "notice", id: "tidalAuthorizationHelp" }));
   const authStatus = element("p", "", { id: "tidalAuthStatus", role: "status", class: "summary" });
   configuration.append(authStatus);
+  let accountRevision = 0;
   const saveClient = button(configuration, "Salva Client ID", () => {
-    if (client.value.trim() !== localStorage.getItem(CLIENT)) auth.disconnect();
+    if (client.value.trim() !== localStorage.getItem(CLIENT)) {
+      accountRevision += 1; auth.disconnect(); clearDestination();
+    }
     localStorage.setItem(CLIENT, client.value.trim());
     authStatus.textContent = "Client ID salvato sul dispositivo. Nessun token o secret salvato nel repository.";
   });
@@ -73,7 +94,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }, authStatus), "primary");
   connect.id = "tidalConnectButton";
   const disconnect = button(configuration, "Scollega TIDAL", () => {
-    auth.disconnect(); clearPreview(); results.replaceChildren(); status.textContent = "Sessione TIDAL rimossa.";
+    accountRevision += 1; auth.disconnect(); clearDestination(); clearPreview();
+    results.replaceChildren(); rows = []; lastPlaylist = null; refreshSelectionControls();
+    status.textContent = "Sessione TIDAL rimossa.";
   });
   disconnect.id = "tidalDisconnectButton";
   const settings = document.querySelector("#settingsDialog .dialog-scroll");
@@ -81,8 +104,10 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   document.querySelector(".view-tabs").before(serviceBox);
 
   const sections = ["collectionPanel", "suggestionsPanel", "playlistBuilderPanel"].map((id) => {
-    const node = element("section", "", { class: "tidal-panel", "data-tidal-panel": id });
+    const node = element(id === "playlistBuilderPanel" ? "details" : "section", "", { class: "tidal-panel", "data-tidal-panel": id });
+    if (id === "playlistBuilderPanel") node.append(element("summary", "Gestisci playlist TIDAL esistenti"));
     if (id === "collectionPanel") document.getElementById("tidalCollectionMount").append(node);
+    else if (id === "playlistBuilderPanel") document.getElementById(id).append(node);
     else document.getElementById(id).prepend(node);
     return node;
   });
@@ -93,7 +118,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     element("strong", "Cerca e importa album TIDAL"));
   collectionDetails.append(collectionSummary);
   const collectionControls = element("div", "", { class: "tidal-controls tidal-collection-controls" });
-  const country = input(collectionControls, "Paese del catalogo (ISO, es. IT)", "IT", { maxlength: "2", pattern: "[A-Za-z]{2}" });
+  const catalogOptions = element("details", "", { class: "tidal-secondary-details" });
+  catalogOptions.append(element("summary", "Opzioni catalogo"));
+  const country = input(catalogOptions, "Paese del catalogo (ISO, es. IT)", "IT", { maxlength: "2", pattern: "[A-Za-z]{2}" });
   const query = input(collectionControls, "Titolo, artista o link album TIDAL", "", { maxlength: "300" });
   query.id = "tidalAlbumQuery";
   const kind = selection(collectionControls, "Ricerca pubblica", [
@@ -101,7 +128,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   ]);
   button(collectionControls, "Cerca · anteprima", () => read("search"), "primary");
   button(collectionControls, "Leggi album dal link / ID", () => read("album"));
-  collectionDetails.append(collectionControls,
+  collectionDetails.append(collectionControls, catalogOptions,
     element("p", "L’importazione aggiunge soltanto gli album selezionati alla raccolta locale. I preferiti TIDAL restano separati da stato e voto Accord.", { class: "summary" }));
   const favoriteDetails = element("details", "", { class: "tidal-secondary-details" });
   favoriteDetails.append(element("summary", "Mostra altre azioni"));
@@ -110,10 +137,13 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const importDetails = element("details", "", { class: "tidal-playlist-import" });
   importDetails.append(element("summary", "Importa album da una playlist TIDAL"));
   const importControls = element("div", "", { class: "tidal-controls" });
-  const importPlaylist = input(importControls, "Playlist TIDAL da importare · ID o link", "", { maxlength: "300" });
+  const importAdvanced = element("details", "", { class: "tidal-secondary-details" });
+  importAdvanced.append(element("summary", "Usa un link o ID playlist"));
+  const importPlaylist = input(importAdvanced, "Playlist TIDAL da importare · ID o link", "", { maxlength: "300" });
   importPlaylist.id = "tidalImportPlaylist";
+  importControls.append(importAdvanced);
   importDetails.append(importControls);
-  button(importDetails, "Elenca playlist TIDAL da importare", () => read("importPlaylists"));
+  const listImportPlaylists = button(importDetails, "Elenca playlist TIDAL da importare", () => read("importPlaylists"));
   button(importDetails, "Anteprima album della playlist TIDAL", () => read("importPlaylist"), "primary");
   importPlaylist.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); void read("importPlaylist"); }
@@ -132,12 +162,33 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   suggestionInfo.append(element("p", "Album/artisti simili e mix ufficiali TIDAL, non statistiche di ascolto. Daily, Discovery e New Release dipendono dall’account e dalla disponibilità del servizio. Nessun widget remoto, brano attuale o cronologia ascolti: l’API pubblica non espone PlaybackStates o RecommendationBlocks."));
   suggestions.append(suggestionInfo);
   const suggestionControls = element("div", "", { class: "tidal-controls" });
-  const seed = input(suggestionControls, "ID / link album, oppure ID artista per artisti simili", "", { maxlength: "300" });
+  const seedChoice = element("p", "Nessun album o artista selezionato.", { class: "summary" });
+  suggestionControls.append(seedChoice);
+  button(suggestionControls, "Cerca un album o artista TIDAL…", () => openCatalog());
+  const seedAdvanced = element("details", "", { class: "tidal-secondary-details" });
+  seedAdvanced.append(element("summary", "Usa un link o ID"));
+  const seed = input(seedAdvanced, "ID / link album, oppure ID artista per artisti simili", "", { maxlength: "300" });
+  seed.addEventListener("input", () => { seedChoice.textContent = "Album o artista specificato tramite collegamento o ID."; });
+  suggestionControls.append(seedAdvanced);
   const source = selection(suggestionControls, "Fonte dei suggerimenti", [
     ["similarAlbums", "Album simili a un album"], ["similarArtists", "Artisti simili a un artista"],
     ["userDailyMixes", "Daily Mix TIDAL"], ["userDiscoveryMixes", "Discovery Mix TIDAL"],
     ["userNewReleaseMixes", "New Release Mix TIDAL"],
   ]);
+  const suggestionFilters = element("details", "", { class: "tidal-secondary-details" });
+  suggestionFilters.append(element("summary", "Filtri suggerimenti"));
+  const excludedInput = input(suggestionFilters, "Artisti da escludere",
+    localStorage.getItem(EXCLUDED_ARTISTS) || "", { placeholder: "Nomi esatti separati da ;" });
+  suggestionFilters.append(element("p", "Il filtro riguarda gli album e gli artisti mostrati, non i singoli brani dei mix.",
+    { class: "summary" }));
+  button(suggestionFilters, "Salva filtri", () => void run(async () => {
+    localStorage.setItem(EXCLUDED_ARTISTS, excludedInput.value);
+    if (suggestionResultsActive) {
+      clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null; refreshSelectionControls();
+    }
+    status.textContent = "Filtri salvati. Rileggi i suggerimenti per applicarli.";
+  }));
+  suggestionControls.append(suggestionFilters);
   button(suggestionControls, "Leggi suggerimenti ufficiali · anteprima", () => read("suggestions"), "primary");
   suggestions.append(suggestionControls);
 
@@ -147,10 +198,30 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   playlists.append(playlistsHeading);
   playlists.append(element("p", "Ogni modifica richiede anteprima e conferma. Le playlist create sono UNLISTED (non private): chi conosce il link può accedere.", { class: "notice" }));
   const playlistControls = element("div", "", { class: "tidal-controls tidal-playlist-controls" });
-  const playlist = input(playlistControls, "ID / link playlist TIDAL", "", { maxlength: "300" });
+  const playlistChoice = element("p", "Nessuna playlist selezionata.", { class: "summary" });
+  playlistControls.append(playlistChoice);
+  const playlistDestination = selection(playlistControls, "Playlist di destinazione", [["", "Scegli una playlist"]]);
+  button(playlistControls, "Carica playlist di destinazione", () => void loadPlaylistDestinations());
+  const playlistAdvanced = element("details", "", { class: "tidal-secondary-details" });
+  playlistAdvanced.append(element("summary", "Usa un link o ID playlist"));
+  const playlist = input(playlistAdvanced, "ID / link playlist TIDAL", "", { maxlength: "300" });
+  playlistControls.append(playlistAdvanced);
+  playlistDestination.addEventListener("change", () => {
+    playlist.value = playlistDestination.value ? tidalPlaylistId(playlistDestination.value) : "";
+    playlistChoice.textContent = playlist.value
+      ? `Playlist selezionata: ${playlistDestination.selectedOptions[0].textContent}` : "Nessuna playlist selezionata.";
+    clearPreview();
+  });
+  function clearDestination() {
+    playlistDestination.replaceChildren(element("option", "Scegli una playlist", { value: "" }));
+    playlistDestination.value = ""; playlist.value = ""; playlistChoice.textContent = "Nessuna playlist selezionata.";
+  }
   const playlistName = input(playlistControls, "Nome playlist", "Nuove scoperte", { maxlength: "250" });
   const description = input(playlistControls, "Descrizione playlist", "", { maxlength: "500" });
-  const position = input(playlistControls, "Sposta prima dell’itemId (vuoto = in fondo)", "", { maxlength: "36" });
+  const moveOptions = element("details", "", { class: "tidal-secondary-details" });
+  moveOptions.append(element("summary", "Opzioni avanzate per il riordino"));
+  const position = input(moveOptions, "Sposta prima dell’itemId (vuoto = in fondo)", "", { maxlength: "36" });
+  playlistControls.append(moveOptions);
   const playlistActions = element("div", "", { class: "tidal-actions" });
   button(playlistActions, "Leggi playlist · anteprima importazione album / brani", () => read("playlist"), "primary");
   button(playlistActions, "Elenca le mie playlist", () => read("playlists"));
@@ -171,7 +242,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const actions = element("div", "", { class: "tidal-actions" });
   const selectionCount = element("p", "Nessun elemento selezionato", { id: "tidalSelectionCount", class: "summary" });
   actions.append(selectionCount);
-  let rows = [], plan = null, busy = false, lastPlaylist = null;
+  let rows = [], plan = null, busy = false, lastPlaylist = null, suggestionResultsActive = false;
   const importButton = button(actions, "Importa album selezionati nella raccolta locale", () => run(async () => {
     const selected = chosen().filter((row) => row.album);
     if (!selected.length) throw new Error("Seleziona almeno un album con metadati completi.");
@@ -184,21 +255,29 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     for (const row of rows) row.check.checked = false;
     clearPreview(); refreshSelectionControls();
   });
+  const albumTracksButton = button(actions, "Prepara brani dagli album selezionati", () => void prepareAlbumTracks());
+  const addTracksButton = button(actions, "Prepara aggiunta brani alla playlist", () => prepare("add"));
   const resultManagement = element("details", "", { class: "tidal-secondary-details" });
   resultManagement.append(element("summary", "Mostra altre azioni"));
   button(resultManagement, "Prepara aggiunta album ai preferiti TIDAL", () => prepare("favorite"));
   button(resultManagement, "Prepara rimozione album dai preferiti TIDAL", () => prepare("unfavorite"));
-  button(resultManagement, "Prepara aggiunta brani alla playlist", () => prepare("add"));
   button(resultManagement, "Prepara rimozione occorrenze dalla playlist letta", () => prepare("remove"));
   button(resultManagement, "Prepara spostamento occorrenze nella playlist letta", () => prepare("move"));
   actions.append(resultManagement);
   refreshSelectionControls();
+  const mutationSummary = element("p", "", { class: "summary" });
   const mutation = element("pre", "", { class: "tidal-mutation" });
+  const mutationDetails = element("details", "", { class: "tidal-secondary-details" });
+  mutationDetails.append(element("summary", "Dettagli tecnici della modifica"), mutation);
+  mutationDetails.hidden = true;
   const commit = button(output, "Conferma e invia UNA volta a TIDAL", () => run(async () => {
+    if (localStorage.getItem("accord-catalog-playlist-uncertain-tidal-v1")) {
+      throw new Error("Verifica prima l'esito della creazione precedente dalla scheda Crea playlist.");
+    }
     if (!plan) throw new Error("Prepara una nuova anteprima.");
     const operation = plan;
     gate.assert("tidal", operation.epoch);
-    if (!confirm(`Confermi la scrittura TIDAL?\n${operation.summary}\nNessun retry automatico; verifica lo stato remoto se l’esito è incerto.`)) return;
+    if (!confirm(`Confermi la scrittura TIDAL?\n${operation.summary}${operation.target || ""}\nNessun retry automatico; verifica lo stato remoto se l’esito è incerto.`)) return;
     clearPreview();
     const token = await auth.access(client.value.trim());
     gate.assert("tidal", operation.epoch);
@@ -207,12 +286,17 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     results.replaceChildren(); rows = [];
     if (operation.path === "playlists" && operation.options.method === "POST" && response.data?.id) {
       playlist.value = tidalPlaylistId(response.data.id);
-      status.textContent = `Playlist UNLISTED creata: https://tidal.com/browse/playlist/${playlist.value}. Rileggi la playlist prima di altre modifiche.`;
+      playlistDestination.value = "";
+      playlistChoice.textContent = `Playlist selezionata: ${playlistName.value.trim()}`;
+      status.textContent = "Playlist non in elenco creata. Rileggila prima di altre modifiche.";
     } else status.textContent = "Scrittura inviata e confermata da TIDAL. Rileggi lo stato remoto prima di altre modifiche.";
   }), "primary");
-  output.prepend(status, results, actions, mutation);
+  output.prepend(status, results, actions, mutationSummary, mutationDetails);
   commit.disabled = true; commit.hidden = true;
-  function clearPreview() { plan = null; commit.disabled = true; commit.hidden = true; mutation.textContent = ""; }
+  function clearPreview() {
+    plan = null; commit.disabled = true; commit.hidden = true;
+    mutationSummary.textContent = ""; mutation.textContent = ""; mutationDetails.hidden = true;
+  }
   function chosen() { return rows.filter((row) => row.check.checked); }
   function refreshSelectionControls() {
     if (!importButton || !clearSelection) return;
@@ -221,6 +305,8 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       : selected.length ? `${selected.length} elementi selezionati` : "Nessun elemento selezionato";
     importButton.disabled = !selected.some((row) => row.album);
     clearSelection.disabled = !selected.length;
+    albumTracksButton.disabled = !selected.some((row) => row.album);
+    addTracksButton.disabled = !selected.some((row) => ["tracks", "videos"].includes(row.resource?.type));
   }
   function renderAlbumResult(row) {
     const item = element("article", "", { class: "suggestion-album tidal-album-result" });
@@ -239,13 +325,104 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       element("span", `${row.album.artist} · ${row.album.year || "Anno sconosciuto"}`, { class: "suggestion-detail" }));
     choice.append(row.check, cover, info);
     item.append(choice);
+    button(item, "Usa per suggerimenti", () => useSeed(row.album.id.slice(6), `${row.album.artist} · ${row.album.name}`, "similarAlbums"));
     if (row.resource?.id) {
-      item.append(element("a", "Apri in TIDAL ↗", {
-        href: `https://tidal.com/browse/album/${encodeURIComponent(row.resource.id)}`,
-        target: "_blank", rel: "noopener noreferrer", class: "tidal-result-link",
-      }));
+      item.append(configureMusicAppLink(element("a", "Apri in TIDAL ↗", { class: "tidal-result-link" }),
+        `https://tidal.com/browse/album/${encodeURIComponent(row.resource.id)}`));
     }
     return item;
+  }
+  async function loadPlaylistDestinations() {
+    return run(async () => {
+      const current = epoch(), account = accountRevision, token = await auth.access(client.value.trim());
+      gate.assert("tidal", current);
+      if (account !== accountRevision) throw new Error("Sessione TIDAL cambiata: ricarica le playlist.");
+      const page = await transport.pages("userCollectionPlaylists/me/relationships/items?include=items", token);
+      gate.assert("tidal", current);
+      if (account !== accountRevision) throw new Error("Sessione TIDAL cambiata: ricarica le playlist.");
+      const resources = new Map(tidalResources(page.documents).map((resource) => [`${resource.type}:${resource.id}`, resource]));
+      const targets = new Map();
+      let complete = page.complete;
+      for (const document of page.documents) for (const item of Array.isArray(document.data) ? document.data : []) {
+        if (item.type !== "playlists") { complete = false; continue; }
+        const resource = resources.get(`playlists:${item.id}`);
+        const name = resource?.attributes?.name || resource?.attributes?.title;
+        if (typeof name !== "string" || !name.trim()) { complete = false; continue; }
+        const id = tidalPlaylistId(item.id);
+        if (!targets.has(id)) targets.set(id, name.trim());
+      }
+      const previous = playlistDestination.value;
+      playlistDestination.replaceChildren(element("option", "Scegli una playlist", { value: "" }));
+      for (const [id, name] of targets) playlistDestination.append(element("option", name, { value: id }));
+      playlistDestination.value = targets.has(previous) ? previous : "";
+      status.textContent = `${targets.size} playlist di destinazione disponibili. `
+        + (complete ? "" : "Elenco parziale: limite di lettura o metadati mancanti. ")
+        + "La selezione dei brani resta invariata.";
+    });
+  }
+  async function prepareAlbumTracks() {
+    return run(async () => {
+      const selected = chosen().filter((row) => row.album);
+      if (!selected.length || selected.length > 10) throw new Error("Seleziona da 1 a 10 album per preparare i brani.");
+      if (playlistPrepared) {
+        status.textContent = await playlistPrepared(selected);
+        return;
+      }
+      if (!/^[A-Za-z]{2}$/.test(country.value)) throw new Error("Immetti un codice paese ISO di due lettere.");
+      const current = epoch(), account = accountRevision;
+      clearPreview();
+      const token = await auth.access(client.value.trim());
+      const documents = [];
+      let complete = true;
+      for (const row of selected) {
+        gate.assert("tidal", current);
+        if (account !== accountRevision) throw new Error("Sessione TIDAL cambiata: ripeti l'anteprima.");
+        const page = await transport.pages(catalogPath(`albums/${tidalAlbumId(row.album.id)}/relationships/items`,
+          "items.artists,items.albums"), token, { maxPages: 2, maxItems: 100 });
+        gate.assert("tidal", current);
+        if (account !== accountRevision) throw new Error("Sessione TIDAL cambiata: ripeti l'anteprima.");
+        complete &&= page.complete;
+        documents.push(...page.documents);
+      }
+      const resources = new Map(tidalResources(documents).map((resource) => [`${resource.type}:${resource.id}`, resource]));
+      const tracks = new Map();
+      for (const document of documents) for (const item of Array.isArray(document.data) ? document.data : []) {
+        if (item.type !== "tracks") { complete = false; continue; }
+        if (!/^[1-9][0-9]*$/.test(item.id)) throw new Error("Brano TIDAL non valido nell'anteprima album.");
+        const resource = resources.get(`tracks:${item.id}`);
+        if (!resource?.attributes?.title) { complete = false; continue; }
+        if (!tracks.has(item.id)) tracks.set(item.id, resource);
+      }
+      if (tracks.size > 250) complete = false;
+      gate.assert("tidal", current);
+      const currentAlbums = chosen().filter((row) => row.album);
+      if (currentAlbums.length !== selected.length || selected.some((row) => !currentAlbums.includes(row))) {
+        throw new Error("Selezione cambiata durante la lettura: ripeti l'anteprima.");
+      }
+      showPreparedResources([...tracks.values()].slice(0, 250));
+      selectView("playlists"); moveOutput();
+      if (!rows.length) results.append(element("p", "Nessun brano TIDAL disponibile per gli album selezionati.", { class: "summary" }));
+      status.textContent = `${rows.length} brani TIDAL pronti da ${selected.length} album. `
+        + (complete ? "" : "Risultato parziale: limite di lettura o metadati mancanti. ")
+        + "Scegli una playlist, seleziona i brani e prepara l'aggiunta; nessuna scrittura e' stata eseguita.";
+      refreshSelectionControls();
+    });
+  }
+  function showPreparedResources(resources) {
+    clearPreview();
+    results.replaceChildren(); rows = []; lastPlaylist = null; suggestionResultsActive = false;
+    for (const resource of resources) {
+      const row = { resource, label: `Brano · ${resource.attributes.title}` };
+      const item = element("div", "", { class: "tidal-result" });
+      const choice = element("label", row.label, { class: "tidal-result-choice" });
+      row.check = element("input", "", { type: "checkbox", "aria-label": `Seleziona ${row.label}` });
+      row.check.addEventListener("change", () => { clearPreview(); refreshSelectionControls(); });
+      choice.prepend(row.check); item.append(choice);
+      item.append(configureMusicAppLink(element("a", "Apri in TIDAL ↗", { class: "tidal-result-link" }),
+        `https://tidal.com/browse/track/${resource.id}`));
+      rows.push(row); results.append(item);
+    }
+    refreshSelectionControls();
   }
   function moveOutput() {
     const active = document.querySelector(".view-tabs [aria-selected='true']");
@@ -257,22 +434,30 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   function updateService() {
     gate.select(provider.value);
     const tidal = gate.service === "tidal";
+    const qobuz = gate.service === "qobuz";
+    spotifyCapabilities.hidden = tidal || qobuz;
     capabilities.hidden = !tidal;
-    document.getElementById("playlistImportButton").textContent = `Importa playlist ${tidal ? "TIDAL" : "Spotify"}…`;
-    for (const section of sections) section.hidden = !tidal;
+    qobuzCapabilities.hidden = !qobuz;
+    document.getElementById("playlistImportButton").hidden = false;
+    document.getElementById("playlistImportButton").textContent = `Importa playlist ${tidal ? "TIDAL" : qobuz ? "Qobuz" : "Spotify"}…`;
+    for (const section of sections) section.hidden = !tidal || section.dataset.tidalPanel === "suggestionsPanel";
     for (const id of ["suggestionsPanel", "playlistBuilderPanel"]) {
-      for (const child of document.getElementById(id).children) if (!child.dataset.tidalPanel) child.hidden = tidal;
+      for (const child of document.getElementById(id).children) {
+        if (child.dataset.qobuzPanel) child.hidden = !qobuz || id === "suggestionsPanel";
+        else if (!child.dataset.tidalPanel) child.hidden = false;
+      }
     }
     for (const id of ["manualAlbumDialog", "playlistDialog", "playlistMatchDialog"]) {
       const dialog = document.getElementById(id);
-      if (tidal && dialog?.open) dialog.close();
+      if ((tidal || qobuz) && dialog?.open) dialog.close();
     }
     clearPreview(); moveOutput(); changed();
   }
   provider.addEventListener("change", updateService);
   window.addEventListener("storage", (event) => {
     if (event.key === "accord-music-service-v1") {
-      provider.value = localStorage.getItem(event.key) === "tidal" ? "tidal" : "spotify";
+      const saved = localStorage.getItem(event.key);
+      provider.value = ["spotify", "tidal", "qobuz"].includes(saved) ? saved : "spotify";
       updateService();
     }
   });
@@ -291,6 +476,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   async function read(action) {
     return run(async () => {
       const current = epoch(); clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
+      suggestionResultsActive = action === "suggestions";
       refreshSelectionControls();
       if (["search", "album", "collection"].includes(action)) collectionDetails.open = true;
       if (!/^[A-Za-z]{2}$/.test(country.value)) throw new Error("Immetti un codice paese ISO di due lettere.");
@@ -313,7 +499,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       } else if (["playlist", "importPlaylist"].includes(action)) {
         playlistId = requestedPlaylist;
         path = catalogPath(`playlists/${playlistId}/relationships/items`, "items.albums.artists,items.albums.coverArt");
-        label = `Playlist TIDAL ${playlistId}`;
+        label = "Playlist TIDAL";
       } else if (["playlists", "importPlaylists"].includes(action)) {
         path = "userCollectionPlaylists/me/relationships/items?include=items";
         label = "Playlist della raccolta TIDAL";
@@ -353,28 +539,36 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       }
       gate.assert("tidal", current);
       const albums = tidalAlbumRecords(documents), all = tidalResources(documents), artwork = tidalAlbumArtwork(documents);
+      const albumArtists = tidalAlbumArtists(all);
       const albumMap = new Map(albums.map((album) => [album.id.slice(6), album]));
       const albumRows = albums.map((album) => ({ album, coverUrl: artwork.get(album.id),
         resource: all.find((item) => item.type === "albums" && `tidal:${item.id}` === album.id), label: `${album.name} · ${album.artist}` }));
+      const excluded = action === "suggestions"
+        ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
+      const visibleAlbums = albumRows.filter((row) => ![row.album.artist, ...(albumArtists.get(row.album.id.slice(6)) || [])]
+        .some((name) => artistIsExcluded(name, excluded)));
+      const typeNames = { tracks: "Brano", videos: "Video", playlists: "Playlist", artists: "Artista" };
       let otherRows = all.filter((item) => ["tracks", "videos", "playlists", "artists"].includes(item.type)
         && (item.attributes?.title || item.attributes?.name)).map((resource) => ({
-        resource, label: `${resource.type} · ${resource.attributes.title || resource.attributes.name} · ${resource.id}`,
+        resource, label: `${typeNames[resource.type]} · ${resource.attributes.title || resource.attributes.name}`,
       }));
       const directItems = documents.flatMap((document) => Array.isArray(document.data) ? document.data : []);
       if (playlistId) {
         const occurrences = directItems.filter((item) => ["tracks", "videos"].includes(item.type) && item.meta?.itemId);
         otherRows = [
           ...otherRows.filter((row) => !["tracks", "videos"].includes(row.resource.type)),
-          ...occurrences.map((ref) => {
+          ...occurrences.map((ref, index) => {
             const resource = { ...all.find((item) => item.type === ref.type && item.id === ref.id), ...ref,
               attributes: all.find((item) => item.type === ref.type && item.id === ref.id)?.attributes };
-            return { resource, label: `${resource.type} · ${resource.attributes?.title || resource.id} · itemId ${ref.meta.itemId}` };
+            return { resource, label: `${typeNames[resource.type]} · ${resource.attributes?.title || "Senza titolo"} · posizione ${index + 1}` };
           }),
         ];
       }
       if (playlistId) lastPlaylist = playlistId;
       if (action === "importPlaylist") otherRows = [];
-      for (const row of [...albumRows, ...otherRows].slice(0, 250)) {
+      if (action === "suggestions") otherRows = otherRows.filter((row) =>
+        row.resource.type !== "artists" || !artistIsExcluded(row.resource.attributes.name || row.resource.attributes.title, excluded));
+      for (const row of [...visibleAlbums, ...otherRows].slice(0, 250)) {
         const resource = row.resource;
         if (row.album) {
           results.append(renderAlbumResult(row));
@@ -389,20 +583,28 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
         item.append(choice);
         if (["albums", "artists", "tracks", "playlists", "videos"].includes(resource.type)) {
           const singular = { albums: "album", artists: "artist", tracks: "track", playlists: "playlist", videos: "video" }[resource.type];
-          item.append(element("a", "Apri in TIDAL ↗", { href: `https://tidal.com/browse/${singular}/${encodeURIComponent(resource.id)}`, target: "_blank", rel: "noopener noreferrer", class: "tidal-result-link" }));
+          item.append(configureMusicAppLink(element("a", "Apri in TIDAL ↗", { class: "tidal-result-link" }),
+            `https://tidal.com/browse/${singular}/${encodeURIComponent(resource.id)}`));
         }
-        if (resource.type === "artists") button(item, "Album dell’artista", () => readArtist(resource.id));
+        if (resource.type === "artists") {
+          button(item, "Album dell’artista", () => readArtist(resource.id));
+          button(item, "Usa per suggerimenti", () => useSeed(resource.id, resource.attributes.name, "similarArtists"));
+        }
         if (resource.type === "playlists") button(item, "Usa questa playlist", () => {
           if (action === "importPlaylists") { importPlaylist.value = resource.id; return read("importPlaylist"); }
-          playlist.value = resource.id; return read("playlist");
+          playlist.value = resource.id;
+          playlistDestination.value = [...playlistDestination.children].some((option) => option.value === resource.id)
+            ? resource.id : "";
+          playlistChoice.textContent = `Playlist selezionata: ${resource.attributes.title || resource.attributes.name}`;
+          return read("playlist");
         });
         rows.push(row); results.append(item);
       }
       if (!rows.length) results.append(element("p", "Nessun risultato TIDAL disponibile per questa ricerca.", { class: "summary" }));
       const omitted = !mixesComplete || missing.length > 10 || all.filter((item) => item.type === "albums").length > albumMap.size;
-      status.textContent = `${label}: ${rows.length} risultati mostrati; ${albums.length} album importabili. `
-        + (page.complete && !omitted && albumRows.length + otherRows.length <= 250
-          ? "Pagine disponibili lette entro il limite." : "Risultato PARZIALE: limite 5 pagine / 250 risorse, 3 playlist mix (1 pagina ciascuna), 10 dettagli album; metadati mancanti non inventati.")
+      status.textContent = `${label}: ${rows.length} risultati mostrati; ${visibleAlbums.length} album importabili. `
+        + (page.complete && !omitted && visibleAlbums.length + otherRows.length <= 250
+          ? "Risultati disponibili caricati." : "Risultato parziale: raggiunto il limite di ricerca o mancano alcuni dettagli.")
         + " Seleziona le righe per importare o preparare una modifica.";
       refreshSelectionControls();
     });
@@ -415,7 +617,11 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       gate.assert("tidal", current);
       clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
       const artwork = tidalAlbumArtwork(page.documents);
-      for (const album of tidalAlbumRecords(page.documents)) {
+      const excluded = suggestionResultsActive
+        ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
+      const albumArtists = tidalAlbumArtists(tidalResources(page.documents));
+      for (const album of tidalAlbumRecords(page.documents).filter((record) =>
+        ![record.artist, ...(albumArtists.get(record.id.slice(6)) || [])].some((name) => artistIsExcluded(name, excluded)))) {
         const row = { album, coverUrl: artwork.get(album.id), resource: { type: "albums", id: album.id.slice(6) } };
         results.append(renderAlbumResult(row)); rows.push(row);
       }
@@ -429,7 +635,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     try {
       gate.assert("tidal"); clearPreview();
       const selected = chosen();
-      let path, method, body, summary;
+      let path, method, body, summary, target = "";
       if (["favorite", "unfavorite"].includes(action)) {
         const data = selected.filter((row) => row.album).map((row) => ({ type: "albums", id: row.album.id.slice(6) }));
         if (!data.length || data.length > 50) throw new Error("Seleziona da 1 a 50 album.");
@@ -438,6 +644,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
         summary = `${action === "favorite" ? "Aggiungi" : "Rimuovi"} ${data.length} album dai preferiti TIDAL.`;
       } else {
         const id = action === "create" ? null : tidalPlaylistId(playlist.value);
+        if (id) target = `\nPlaylist: ${id}`;
         path = id ? `playlists/${id}` : "playlists";
         const attributes = { name: playlistName.value.trim(), description: description.value };
         if (["create", "edit"].includes(action) && !attributes.name) throw new Error("Immetti un nome playlist.");
@@ -446,11 +653,11 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
           summary = `Crea playlist non in elenco (UNLISTED) «${attributes.name}», accessibile a chi ha il link; non privata.`;
         } else if (action === "edit") {
           method = "PATCH"; body = { data: { type: "playlists", id, attributes } };
-          summary = `Modifica nome e descrizione della playlist ${id}.`;
+          summary = "Modifica nome e descrizione della playlist selezionata.";
         } else if (action === "delete") {
-          method = "DELETE"; summary = `Elimina definitivamente la playlist ${id}.`;
+          method = "DELETE"; summary = "Elimina definitivamente la playlist selezionata.";
         } else {
-          let data = selected.filter((row) => ["tracks", "videos"].includes(row.resource.type)).map((row) => {
+          let data = selected.filter((row) => ["tracks", "videos"].includes(row.resource?.type)).map((row) => {
             const resource = row.resource;
             if (action === "remove" || action === "move") {
               if (lastPlaylist !== id || !resource.meta?.itemId) throw new Error("Rileggi questa playlist: servono gli itemId delle occorrenze selezionate.");
@@ -464,16 +671,21 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
           path += "/relationships/items"; method = action === "add" ? "POST" : action === "move" ? "PATCH" : "DELETE";
           body = { data, ...(action === "add" ? { meta: { onDuplicates: "SKIP" } }
             : action === "move" ? { meta: { mode: "INCREMENTAL", ...(position.value.trim() ? { positionBefore: position.value.trim() } : {}) } } : {}) };
-          summary = `${action === "add" ? "Aggiungi (salta duplicati)" : action === "move" ? "Sposta occorrenze" : "Rimuovi occorrenze"}: ${data.length} elementi, playlist ${id}.`;
+          summary = `${action === "add" ? "Aggiungi (salta duplicati)" : action === "move" ? "Sposta" : "Rimuovi"} ${data.length} elementi nella playlist selezionata.`;
         }
       }
-      plan = { path, options: { method, ...(body ? { body } : {}) }, summary, epoch: epoch() };
+      plan = { path, options: { method, ...(body ? { body } : {}) }, summary, target, epoch: epoch() };
+      mutationSummary.textContent = summary;
       mutation.textContent = `${summary}\n${method} ${path}\n${body ? JSON.stringify(body, null, 2) : ""}`;
+      mutationDetails.hidden = false;
       commit.disabled = false; commit.hidden = false;
       status.textContent = "Anteprima pronta. Nessuna scrittura ancora eseguita.";
     } catch (error) { status.textContent = error.message; }
   }
   for (const field of [client, playlist, playlistName, description, position]) field.addEventListener("input", clearPreview);
+  playlist.addEventListener("input", () => {
+    playlistDestination.value = ""; playlistChoice.textContent = "Playlist specificata tramite collegamento o ID.";
+  });
   updateService();
   if (new URL(location.href).searchParams.get("state")?.startsWith("tidal.")) {
     document.getElementById("settingsDialog").showModal();
@@ -484,11 +696,17 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }
   function openImport() {
     gate.assert("tidal"); selectView("collection");
-    importDetails.open = true; moveOutput(); importPlaylist.focus();
+    importDetails.open = true; moveOutput(); listImportPlaylists.focus();
   }
   function openCatalog(value = "") {
     gate.assert("tidal"); selectView("collection");
     collectionDetails.open = true; query.value = value; moveOutput(); query.focus();
+  }
+  function useSeed(id, label, kind) {
+    gate.assert("tidal");
+    if (busy) return;
+    seed.value = id; source.value = kind; seedChoice.textContent = `Selezionato: ${label}`;
+    selectView("suggestions"); moveOutput();
   }
   async function loadArtwork(albums) {
     return run(async () => {
@@ -512,5 +730,124 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       return artwork;
     });
   }
-  return { auth, transport, openImport, openCatalog, loadArtwork };
+  async function suggestionAlbums(path, { maxPages = 1, maxItems = 100 } = {}) {
+    const current = epoch(); gate.assert("tidal", current);
+    const token = await auth.access(client.value.trim()); gate.assert("tidal", current);
+    const page = await transport.pages(path, token, { maxPages, maxItems });
+    gate.assert("tidal", current);
+    const resources = tidalResources(page.documents), art = tidalAlbumArtwork(page.documents);
+    const names = tidalAlbumArtists(resources);
+    return { rows: tidalAlbumRecords(page.documents).map((album) => ({
+      album, coverUrl: art.get(album.id), artistNames: names.get(album.id.slice(6)) || [album.artist],
+      resource: { type: "albums", id: album.id.slice(6) },
+    })), complete: page.complete };
+  }
+  const suggestionAPI = {
+    revision: () => accountRevision,
+    seed: () => ({ id: seed.value, label: seedChoice.textContent }),
+    search: async (text) => suggestionAlbums(catalogPath(
+      `searchResults/${encodeURIComponent(text)}/relationships/albums`, "albums.artists,albums.coverArt")),
+    native: async (mode, guard = () => {}) => {
+      guard();
+      if (mode === "album") return suggestionAlbums(catalogPath(
+        `albums/${tidalAlbumId(seed.value)}/relationships/similarAlbums`, "similarAlbums.artists,similarAlbums.coverArt"));
+      if (mode === "favorites") {
+        const favorites = await suggestionAlbums("userCollectionAlbums/me/relationships/items?include=items.artists,items.coverArt");
+        const known = new Set(favorites.rows.map((row) => row.album.id)), found = new Map();
+        let complete = favorites.complete;
+        for (const row of favorites.rows.slice(0, 5)) {
+          guard();
+          const page = await suggestionAlbums(catalogPath(
+            `albums/${tidalAlbumId(row.album.id)}/relationships/similarAlbums`, "similarAlbums.artists,similarAlbums.coverArt"));
+          guard();
+          complete &&= page.complete;
+          for (const item of page.rows) if (!known.has(item.album.id)) found.set(item.album.id, item);
+        }
+        if (!favorites.rows.length) throw new Error("Nessun preferito TIDAL nel campione disponibile.");
+        return { rows: [...found.values()], complete: complete && favorites.rows.length <= 5 };
+      }
+      const modes = { discovery: "userDiscoveryMixes", daily: "userDailyMixes", new: "userNewReleaseMixes" };
+      if (!modes[mode]) throw new Error("Fonte suggerimenti TIDAL non valida.");
+      const current = epoch(), token = await auth.access(client.value.trim()); gate.assert("tidal", current);
+      const page = await transport.pages(`${modes[mode]}/me?include=items`, token, { maxPages: 1, maxItems: 100 });
+      gate.assert("tidal", current);
+      const mixLists = tidalResources(page.documents).filter((row) => row.type === "playlists");
+      const found = new Map(); let complete = page.complete && mixLists.length <= 3;
+      for (const list of mixLists.slice(0, 3)) {
+        guard();
+        const items = await suggestionAlbums(catalogPath(`playlists/${tidalPlaylistId(list.id)}/relationships/items`,
+          "items.albums.artists,items.albums.coverArt"));
+        guard();
+        complete &&= items.complete;
+        for (const row of items.rows) found.set(row.album.id, row);
+      }
+      return { rows: [...found.values()], complete };
+    },
+    prepare: async (records) => {
+      gate.assert("tidal"); clearPreview();
+      rows = records.map((row) => ({ ...row, resource: { type: "albums", id: row.album.id.slice(6) }, check: { checked: true } }));
+      await prepareAlbumTracks();
+      return status.textContent;
+    },
+  };
+  const playlistAPI = {
+    adopt: (tracks) => showPreparedResources(tracks.map((track) => ({
+      type: "tracks", id: track.id, attributes: { title: track.name },
+    }))),
+    revision: () => `${accountRevision}|${client.value}|${country.value}`,
+    batchSize: 50,
+    preflight: async () => { gate.assert("tidal"); await auth.access(client.value.trim()); },
+    albumTracks: async (id) => {
+      const current = epoch(), account = accountRevision;
+      gate.assert("tidal", current);
+      const token = await auth.access(client.value.trim());
+      gate.assert("tidal", current);
+      if (account !== accountRevision) throw new Error("Account cambiato.");
+      const page = await transport.pages(catalogPath(`albums/${tidalAlbumId(id)}/relationships/items`,
+        "items.artists,items.albums"), token, { maxPages: 2, maxItems: 100 });
+      gate.assert("tidal", current);
+      if (account !== accountRevision) throw new Error("Account cambiato.");
+      const resources = new Map(tidalResources(page.documents).map((row) => [`${row.type}:${row.id}`, row]));
+      const tracks = [], seen = new Set(); let complete = page.complete;
+      for (const document of page.documents) for (const item of Array.isArray(document.data) ? document.data : []) {
+        if (item.type !== "tracks") { complete = false; continue; }
+        const resource = resources.get(`tracks:${item.id}`);
+        if (!resource?.attributes?.title || seen.has(item.id)) { complete = false; continue; }
+        const refs = resource.relationships?.artists?.data || [];
+        tracks.push({ id: item.id, name: resource.attributes.title,
+          artist: refs.map((ref) => resources.get(`artists:${ref.id}`)?.attributes?.name).filter(Boolean).join(", "),
+          uri: `tidal:track:${item.id}` });
+        seen.add(item.id);
+      }
+      return { tracks, next: null, complete };
+    },
+    create: async (name, guard = () => {}) => {
+      const token = await auth.access(client.value.trim());
+      guard();
+      const result = await transport.request("playlists", token, { method: "POST",
+        body: { data: { type: "playlists", attributes: {
+          name, description: "Creata da Accord · nuovi artisti e album verificati", accessType: "UNLISTED" } } } });
+      const id = tidalPlaylistId(result.data?.id);
+      if (result.data?.attributes?.accessType !== "UNLISTED") throw new Error("Privacy TIDAL non verificata: controlla la playlist.");
+      return { id, name: result.data.attributes.name || name };
+    },
+    add: async (id, ids, guard = () => {}) => {
+      const token = await auth.access(client.value.trim());
+      guard();
+      return transport.request(`playlists/${tidalPlaylistId(id)}/relationships/items`, token, { method: "POST",
+        body: { data: ids.map((id) => ({ type: "tracks", id })), meta: { onDuplicates: "SKIP" } } });
+    },
+    management: () => { selectView("playlists"); playlists.open = true; playlists.hidden = false; moveOutput(); },
+    prepare: async (records, guard) => {
+      const tracks = new Map(); let partial = false;
+      if (!records.length || records.length > 10) throw new Error("Seleziona da 1 a 10 album.");
+      for (const record of records) {
+        guard();
+        const page = await playlistAPI.albumTracks(record.album.id); guard(); partial ||= !page.complete;
+        for (const track of page.tracks) tracks.set(track.id, track);
+      }
+      return { tracks: [...tracks.values()].slice(0, 250), partial: partial || tracks.size > 250 };
+    },
+  };
+  return { auth, transport, openImport, openCatalog, loadArtwork, suggestionAPI, playlistAPI };
 }

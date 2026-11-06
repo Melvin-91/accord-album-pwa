@@ -1,3 +1,6 @@
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=3";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=1";
+import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=2";
 import {
   addPlaylistAlbums,
   albumPrimaryGenre,
@@ -7,6 +10,7 @@ import {
   createSpotifyJsonReader,
   createSpotifyTransport,
   createSpotifyReadBudget,
+  createSyncDocument,
   collectSpotifyDiscoveryAlbums,
   spotifyDiscoveryPlaylistPreview,
   createTimedJsonCache,
@@ -50,7 +54,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=45";
+} from "./core.mjs?v=46";
 import {
   localCommandResults,
   collectionAuditSummary,
@@ -64,9 +68,12 @@ import {
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-} from "./ui.mjs?v=9";
-import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=2";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=5";
+} from "./ui.mjs?v=10";
+import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=4";
+import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=15";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=12";
+import { qobuzAlbumId } from "./qobuz.mjs?v=4";
 
 const musicService = createMusicServiceGate(localStorage);
 
@@ -334,7 +341,7 @@ function loadState() {
     const base = validateDocument({ format: "accord-album-collection", version: 1,
       albums: Array.isArray(saved.base) ? saved.base : [] });
     const manualOrder = Array.isArray(saved.manualOrder)
-      ? [...new Set(saved.manualOrder.filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id)))]
+      ? [...new Set(saved.manualOrder.filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id)))]
       : [];
     const sortOrders = ["artist", "name", "year", "rating", "genre", "collection", "manual"];
     const sortOrder = sortOrders.includes(saved.sortOrder) ? saved.sortOrder : "artist";
@@ -613,8 +620,8 @@ function appendErrorActions(container, message, close = () => {}, stage = "messa
     || message.match(/ID playlist: ([A-Za-z0-9]{22})\b/);
   if (playlist || /playlist/i.test(message) && /esito|incomplet|non completat/i.test(message)) {
     const review = document.createElement("a");
-    review.href = playlist ? `https://open.spotify.com/playlist/${playlist[1]}` : "https://open.spotify.com/collection/playlists";
-    review.target = "_blank";
+    review.href = playlist ? `spotify:playlist:${playlist[1]}` : "spotify:collection:playlists";
+    review.target = "_self";
     review.rel = "noopener noreferrer";
     review.textContent = "Rivedi playlist in Spotify ↗";
     container.append(review);
@@ -1031,6 +1038,7 @@ $("#resetFiltersButton").addEventListener("click", resetCollectionFilters);
 $("#emptyActionButton").addEventListener("click", () => {
   if (state.albums.length) resetCollectionFilters();
   else if (musicService.service === "tidal") $("#tidalAlbumQuery").focus();
+  else if (musicService.service === "qobuz") qobuzUI.openCatalog();
   else $("#manualAlbumButton").click();
 });
 $("#clearSelectionButton").addEventListener("click", () => {
@@ -1054,7 +1062,9 @@ $("#loadCoversButton").addEventListener("click", async () => {
   $("#viewMenu").open = false;
   try { localStorage.removeItem(COVER_REMOVALS_KEY); }
   catch (error) { showFeedback(`Copertine non riattivate: ${error.message}`, true); return; }
-  if (musicService.service === "tidal") {
+  if (musicService.service === "qobuz") {
+    showFeedback("Le copertine Qobuz sono visibili online durante l'importazione; quelle sincronizzate dal desktop sono disponibili offline.");
+  } else if (musicService.service === "tidal") {
     const button = $("#loadCoversButton"), serviceEpoch = musicService.epoch;
     button.disabled = true;
     try {
@@ -1294,7 +1304,7 @@ function render(options = {}) {
   $("#emptyHeading").textContent = state.albums.length ? "Nessun album trovato" : "La tua raccolta inizia qui";
   $("#emptyDescription").textContent = state.albums.length
     ? "Nessun album corrisponde ai filtri."
-    : `Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist ${musicService.service === "tidal" ? "TIDAL" : "Spotify"}.`;
+    : `Questa raccolta è vuota sul dispositivo. Per trasferire gli album dal PC, sincronizza Accord desktop con il repository accord-music-data, poi premi “Sincronizza” qui: il PC non deve restare acceso. Puoi anche importare una playlist ${musicService.service === "tidal" ? "TIDAL" : musicService.service === "qobuz" ? "Qobuz" : "Spotify"}.`;
   $("#emptyActionButton").textContent = state.albums.length ? "Azzera filtri" : "Aggiungi il primo album";
   updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
@@ -1356,14 +1366,39 @@ function render(options = {}) {
     card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
     const link = card.querySelector(".album-player-link");
-    const tidalAlbum = musicService.service === "tidal";
+    const tidalAlbum = musicService.service === "tidal", qobuzAlbum = musicService.service === "qobuz";
     const albumLink = musicAlbumLink(album, musicService.service);
-    link.hidden = !albumLink;
-    if (albumLink) link.href = albumLink;
+    link.hidden = false;
+    link.removeAttribute("href");
     link.target = "_self";
     link.rel = "noopener noreferrer";
-    link.textContent = tidalAlbum ? "Apri in TIDAL ↗" : "Apri in Spotify ↗";
-    link.setAttribute("aria-label", `${link.textContent.replace(" ↗", "")}: ${album.artist} · ${album.name}`);
+    const serviceLabel = tidalAlbum ? "TIDAL" : qobuzAlbum ? "Qobuz" : "Spotify";
+    const query = `${album.artist} ${album.name}`;
+    const sameQobuz = qobuzAlbum && /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
+      && album.url === `https://play.qobuz.com/album/${album.id.slice(6)}`;
+    let label = `Apri nell'app ${serviceLabel}`;
+    if (albumLink || sameQobuz) {
+      configureMusicAppLink(link, albumLink || album.url, { query, report: showFeedback });
+      if (!albumLink) label = "Copia artista e titolo per cercare nell'app Qobuz";
+    } else {
+      label = `Scegli l'edizione nel catalogo ${serviceLabel}`;
+      link.setAttribute("role", "button"); link.tabIndex = 0;
+      const search = (event) => {
+        event.preventDefault();
+        if (tidalAlbum) tidalUI.openCatalog(query);
+        else qobuzUI.openCatalog(query);
+      };
+      link.addEventListener("click", search);
+      link.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") search(event);
+      });
+    }
+    const iconPath = albumLink ? "M14 3h7v7m0-7L10 14M10 3H3v18h18v-7"
+      : sameQobuz ? "M8 8h13v13H8zM16 8V3H3v13h5"
+        : "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6";
+    link.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="${iconPath}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    link.title = `${label}: ${album.artist} · ${album.name}`;
+    link.setAttribute("aria-label", link.title);
     const orderControls = card.querySelector(".manual-order-controls");
     orderControls.hidden = !manualSorting;
     if (manualSorting) {
@@ -1434,7 +1469,8 @@ async function renderCovers(albums, generation, remoteCovers = false) {
       };
       if (!album.cover_sha256) {
         unavailable += 1;
-        const tidalArtwork = album.id.startsWith("tidal:") && musicService.service === "tidal"
+        const tidalArtwork = (album.id.startsWith("tidal:") && musicService.service === "tidal")
+          || album.id.startsWith("qobuz:")
           ? collectionCoverImageUrls.get(album.id) : null;
         if (tidalArtwork) {
           const image = card.querySelector(".album-cover"), serviceEpoch = musicService.epoch;
@@ -1447,7 +1483,7 @@ async function renderCovers(albums, generation, remoteCovers = false) {
           }, { once: true });
           image.addEventListener("error", () => {
             if (generation !== coverRenderGeneration || musicService.epoch !== serviceEpoch) return;
-            collectionCoverFailures.set(album.id, "TIDAL: copertina online non caricabile.");
+            collectionCoverFailures.set(album.id, "Copertina online non caricabile.");
             updateCollectionCoverNotice();
           }, { once: true });
           image.src = tidalArtwork;
@@ -1510,7 +1546,7 @@ async function renderCovers(albums, generation, remoteCovers = false) {
 }
 
 function collectionCoverTaskIsCurrent(task) {
-  return musicService.service === "spotify" && !task.album.id.startsWith("tidal:")
+  return musicService.service === "spotify" && !task.album.id.startsWith("tidal:") && !task.album.id.startsWith("qobuz:")
     && task.generation === coverRenderGeneration && task.card.isConnected;
 }
 
@@ -1901,7 +1937,7 @@ async function loadSuggestedSpotifyCover(task) {
 }
 
 function enqueueSuggestionCover(task) {
-  if (musicService.service !== "spotify" || task.album.id?.startsWith("tidal:")) return;
+  if (musicService.service !== "spotify" || task.album.id?.startsWith("tidal:") || task.album.id?.startsWith("qobuz:")) return;
   suggestionCoverQueue.push(task);
   processSuggestionCoverQueue();
 }
@@ -3617,9 +3653,13 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
 }
 
 function renderTopArtistPlaylistPreview(preview) {
+  const native = musicService.service !== "spotify";
   const container = $("#playlistBuilderPreview");
   container.replaceChildren();
-  const stats = playlistPreviewStatistics(preview.tracks,
+  const stats = playlistPreviewStatistics(preview.tracks.map((track) => native ? {
+    ...track, duration_ms: track.duration_ms || (track.duration > 0 ? track.duration * 1000 : undefined),
+    artists: track.artists || (track.artist ? [{ name: track.artist }] : []),
+  } : track),
     (preview.sourceAlbums || []).flatMap((album) => album.spotifyTracks || []));
   const summary = document.createElement("p");
   summary.className = "notice";
@@ -3654,15 +3694,20 @@ function renderTopArtistPlaylistPreview(preview) {
     container.append(group);
   }
   $("#playlistBuilderStatus").textContent =
-    `Anteprima: ${preview.artists.length}/${preview.requestedArtists} artisti nuovi · ${preview.tracks.length} brani. La playlist sarà privata.`
+    `Anteprima: ${preview.artists.length}/${preview.requestedArtists} artisti · ${preview.tracks.length} brani. `
+    + (musicService.service === "tidal" ? "Playlist non in elenco (NON privata)." : "La playlist sarà privata.")
     + (preview.partialReason ? ` Risultati parziali: ${preview.partialReason}` : "")
     + (preview.hasMore ? " Premi Continua anteprima per un altro passaggio manuale." : " Nessun altro candidato nel campione; il numero richiesto non è garantito.")
-    + " Sono applicati i filtri di Suggerimenti Spotify; nessun ripiego sugli artisti ascoltati.";
+    + (native ? " Primi brani verificati in ordine album, non classifiche native. Nessun ripiego sugli artisti ascoltati."
+      : " Sono applicati i filtri di Suggerimenti Spotify; nessun ripiego sugli artisti ascoltati.");
   $("#playlistPreviewButton").textContent = preview.hasMore ? "Continua anteprima" : "Genera anteprima";
   $("#playlistCreateButton").disabled = !preview.tracks.length;
 }
 
 async function createTopArtistPlaylist(name, preview, accessToken) {
+  const serviceEpoch = musicService.epoch;
+  const guard = () => musicService.assert("spotify", serviceEpoch);
+  guard();
   if (!commandGuard.acquire("playlist-write")) throw new Error("Creazione playlist già in corso. Nessuna seconda scrittura avviata.");
   try {
   if (!name || name.length > 100 || !preview || !Array.isArray(preview.tracks)
@@ -3675,6 +3720,7 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
     return track.uri;
   });
   if (new Set(uris).size !== uris.length) throw new Error("L'anteprima contiene brani duplicati; generala di nuovo.");
+  guard();
   const playlist = await spotifyWriteRequest("me/playlists", accessToken, {
     name,
     description: "Creata da Accord · artisti e album nuovi da Suggerimenti Spotify",
@@ -3684,8 +3730,9 @@ async function createTopArtistPlaylist(name, preview, accessToken) {
     throw new Error("Spotify non ha restituito una playlist verificabile.");
   }
   try {
+    guard();
     await writeSpotifyPlaylistItems(playlist.id, uris,
-      (path, body) => spotifyWriteRequest(path, accessToken, body));
+      (path, body) => { guard(); return spotifyWriteRequest(path, accessToken, body); });
   } catch (error) {
     const url = playlist.external_urls?.spotify;
     throw new Error(`Playlist creata ma aggiunta dei brani incompleta: ${error.message}`
@@ -3704,6 +3751,8 @@ function setPlaylistBuilderBusy(busy) {
 }
 
 async function beginPlaylistBuilderPreview() {
+  if (musicService.service !== "spotify") { await catalogPlaylistUI.run(); return; }
+  const serviceEpoch = musicService.epoch;
   if (!commandGuard.acquire("playlist-builder")) { showFeedback("Operazione playlist già in corso"); return; }
   topArtistPlaylistPreview = null;
   $("#playlistBuilderPreview").replaceChildren();
@@ -3715,21 +3764,29 @@ async function beginPlaylistBuilderPreview() {
       tracksPerArtist: Number($("#playlistTracksPerArtist").value),
     };
     const token = await spotifyAccessToken();
+    musicService.assert("spotify", serviceEpoch);
     if (!token || sessionStorage.getItem("accord-spotify-playlist-builder-authorized") !== "1") {
       await startSpotifyAuthorization(JSON.stringify(request), "playlist-builder");
       return;
     }
-    topArtistPlaylistPreview = await loadTopArtistPlaylistPreview(request, token);
+    const preview = await loadTopArtistPlaylistPreview(request, token);
+    musicService.assert("spotify", serviceEpoch);
+    topArtistPlaylistPreview = preview;
     renderTopArtistPlaylistPreview(topArtistPlaylistPreview);
   } catch (error) {
-    $("#playlistBuilderStatus").textContent = `Anteprima non riuscita: ${error.message}`;
+    if (musicService.service === "spotify" && musicService.epoch === serviceEpoch) {
+      $("#playlistBuilderStatus").textContent = `Anteprima non riuscita: ${error.message}`;
+    }
   } finally {
     setPlaylistBuilderBusy(false);
     commandGuard.release("playlist-builder");
+    catalogPlaylistUI?.configure();
   }
 }
 
 async function beginPlaylistBuilderCreation() {
+  if (musicService.service !== "spotify") { await catalogPlaylistUI.create(); return; }
+  const serviceEpoch = musicService.epoch;
   if (!topArtistPlaylistPreview) return;
   const name = $("#playlistBuilderName").value.trim();
   if (!name || name.length > 100) {
@@ -3742,12 +3799,14 @@ async function beginPlaylistBuilderCreation() {
   $("#playlistBuilderStatus").textContent = "Creo la playlist privata e aggiungo i brani...";
   try {
     const token = await spotifyAccessToken();
+    musicService.assert("spotify", serviceEpoch);
     if (!token || sessionStorage.getItem("accord-spotify-playlist-builder-authorized") !== "1") {
       await startSpotifyAuthorization(JSON.stringify({ name, preview }), "playlist-create");
       return;
     }
     topArtistPlaylistPreview = null;
     const result = await createTopArtistPlaylist(name, preview, token);
+    musicService.assert("spotify", serviceEpoch);
     $("#playlistBuilderStatus").textContent =
       `Playlist privata creata: ${result.playlist.name || name} · ${result.tracks} brani.`;
     showMessage("Playlist Spotify creata",
@@ -3755,11 +3814,13 @@ async function beginPlaylistBuilderCreation() {
       + (result.playlist.external_urls?.spotify ? ` ${result.playlist.external_urls.spotify}` : ""));
   } catch (error) {
     topArtistPlaylistPreview = null;
+    if (musicService.service !== "spotify" || musicService.epoch !== serviceEpoch) return;
     $("#playlistBuilderStatus").textContent = `Creazione non completata: ${safeDiagnostics(error.message)}. Prima di un nuovo invio verifica le playlist in Spotify: l'esito potrebbe essere parziale. Nessun tentativo automatico. Prepara una nuova anteprima solo dopo la verifica.`;
     showMessage("Rivedi esito playlist Spotify", $("#playlistBuilderStatus").textContent);
   } finally {
     setPlaylistBuilderBusy(false);
     commandGuard.release("playlist-builder");
+    catalogPlaylistUI?.configure();
   }
 }
 
@@ -5265,6 +5326,7 @@ async function finishSpotifyAuthorization() {
       await loadSpotifyAlbumSuggestions(request, tokens.access_token);
     }
     else if (pendingPlaylistBuilder) {
+      if (musicService.service !== "spotify") throw new Error("Servizio cambiato: nessuna anteprima Spotify ripresa.");
       const grants = String(tokens.scope || "").split(/\s+/);
       if (!grants.includes("user-top-read") || !grants.includes("playlist-modify-private")) {
         throw new Error("Spotify non ha concesso user-top-read e playlist-modify-private; nessuna playlist è stata creata.");
@@ -5280,6 +5342,7 @@ async function finishSpotifyAuthorization() {
       renderTopArtistPlaylistPreview(topArtistPlaylistPreview);
     }
     else if (pendingPlaylistCreate) {
+      if (musicService.service !== "spotify") throw new Error("Servizio cambiato: nessuna creazione Spotify ripresa.");
       const grants = String(tokens.scope || "").split(/\s+/);
       if (!grants.includes("user-top-read") || !grants.includes("playlist-modify-private")) {
         throw new Error("Spotify non ha concesso user-top-read e playlist-modify-private; nessuna playlist è stata creata.");
@@ -5332,12 +5395,14 @@ async function finishSpotifyAuthorization() {
 
 $("#playlistImportButton").addEventListener("click", () => {
   if (musicService.service === "tidal") { tidalUI.openImport(); return; }
+  if (musicService.service === "qobuz") { qobuzUI.openPlaylists(); return; }
   $("#playlistInput").value = "";
   $("#playlistDialog").showModal();
 });
 
 $("#manualAlbumButton").addEventListener("click", () => {
   if (musicService.service === "tidal") { tidalUI.openCatalog(); return; }
+  if (musicService.service === "qobuz") { qobuzUI.openCatalog(); return; }
   $("#manualAlbumSource").value = "lastfm";
   $("#manualAlbumQuery").value = "";
   $("#manualAlbumArtist").value = "";
@@ -5541,12 +5606,7 @@ function encodeBase64(bytes) {
 }
 
 async function writeRemote(owner, records, sha, branch) {
-  const document = {
-    format: "accord-album-collection",
-    version: 3,
-    updated_at: new Date().toISOString(),
-    albums: validateDocument({ format: "accord-album-collection", version: 3, albums: records }),
-  };
+  const document = createSyncDocument(records);
   const bytes = new TextEncoder().encode(JSON.stringify(document, null, 2));
   const payload = { message: "Sync Accord album collection", content: encodeBase64(bytes), branch };
   if (sha) payload.sha = sha;
@@ -5850,26 +5910,31 @@ suggestionPeriodControl.addEventListener("change", () => {
 suggestionExclusionControl.addEventListener("change", () => {
   localStorage.setItem("accord-lastfm-suggestion-exclusion", suggestionExclusionControl.value);
 });
+let catalogSuggestionsUI = null;
+let catalogPlaylistUI = null;
 const suggestionToolControl = $("#suggestionTool");
 const savedSuggestionTool = localStorage.getItem("accord-music-suggestion-tool") || "spotify";
 suggestionToolControl.value = ["spotify", "lastfm"].includes(savedSuggestionTool) ? savedSuggestionTool : "spotify";
 
 function updateSuggestionToolUi() {
+  if (musicService.service !== "spotify") { catalogSuggestionsUI?.configure(); return; }
   const spotify = suggestionToolControl.value === "spotify";
   $(".spotify-suggestions").hidden = !spotify;
   $(".lastfm-suggestions").hidden = spotify;
   $("#suggestionToolHelp").textContent = spotify
-    ? "Spotify parte dai tuoi artisti piu' ascoltati nel periodo selezionato, cerca affinità tramite i generi disponibili e propone i loro album. I periodi sono indicativi (circa 1, 6 o 12 mesi)."
+    ? "Scopri album ispirati ai tuoi ascolti Spotify."
     : credentials().useSyncedLastFmHistory
-      ? "Last.fm usa l’archivio completo esportato da Accord Desktop nel repository privato e scaricato con Sincronizza; gli ascolti più recenti vengono aggiunti da Last.fm."
-      : "Last.fm parte dagli ascolti registrati nel periodo selezionato, cerca artisti affini e propone album del catalogo. Puoi scegliere anche un intervallo personalizzato; senza archivio sincronizzato, la PWA legge fino a 1.000 ascolti per campione.";
+      ? "Scopri album dai tuoi ascolti Last.fm, usando anche l’archivio sincronizzato."
+      : "Scopri album dai tuoi ascolti Last.fm nel periodo scelto.";
 }
 
 suggestionToolControl.addEventListener("change", () => {
+  if (musicService.service !== "spotify") return;
   localStorage.setItem("accord-music-suggestion-tool", suggestionToolControl.value);
   updateSuggestionToolUi();
 });
 $("#suggestionSearchButton").addEventListener("click", async (event) => {
+  if (musicService.service !== "spotify") { await catalogSuggestionsUI.run(); return; }
   const button = event.currentTarget;
   button.disabled = true;
   suggestionToolControl.disabled = true;
@@ -5925,10 +5990,19 @@ function openTidalAlbumIntent(input) {
     showFeedback("Album non presente localmente. Premi Leggi album dal link / ID: nessuna richiesta avviata.");
   }
 }
+function openQobuzAlbumIntent(input) {
+  const id = qobuzAlbumId(input), album = state.albums.find((record) => record.id === `qobuz:${id}`);
+  if (album) { activateViewTab($("#collectionTab")); openAlbumDetails(album.id); }
+  else {
+    qobuzUI.openCatalog(`https://play.qobuz.com/album/${id}`);
+    showFeedback("Album non presente localmente. Premi Leggi ID / link album: nessuna richiesta avviata.");
+  }
+}
 $("#openSpotifyForm").addEventListener("submit", (event) => {
   event.preventDefault();
   try {
-    if (musicService.service === "tidal") openTidalAlbumIntent($("#openSpotifyInput").value);
+    if (musicService.service === "qobuz") openQobuzAlbumIntent($("#openSpotifyInput").value);
+    else if (musicService.service === "tidal") openTidalAlbumIntent($("#openSpotifyInput").value);
     else openSpotifyAlbumIntent($("#openSpotifyInput").value);
   }
   catch (error) { showFeedback(error.message, true); }
@@ -5942,6 +6016,11 @@ function receiveSharedAlbum() {
   for (const key of keys) url.searchParams.delete(key);
   history.replaceState(history.state, "", url);
   try {
+    if (musicService.service === "qobuz") {
+      const link = input.match(/https:\/\/play\.qobuz\.com\/album\/[A-Za-z0-9]+/)?.[0] || input;
+      openQobuzAlbumIntent(link);
+      return;
+    }
     if (musicService.service === "tidal") {
       const link = input.match(/https:\/\/(?:www\.)?tidal\.com\/(?:browse\/)?album\/[1-9][0-9]*(?:[/?#][^\s]*)?/)?.[0] || input;
       openTidalAlbumIntent(link);
@@ -6207,9 +6286,27 @@ if (updateView) {
   } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
 }
 const incomingShare = ["share_url", "share_text", "share_title"].some((key) => new URL(location.href).searchParams.has(key));
+const selectMusicView = (view) => {
+  activateViewTab(view === "collection" ? $("#collectionTab") : view === "suggestions" ? $("#suggestionsTab") : $("#playlistBuilderTab"));
+  catalogSuggestionsUI?.configure();
+  catalogPlaylistUI?.configure();
+};
+const qobuzUI = initializeQobuzUI({
+  gate: musicService,
+  selectView: selectMusicView,
+  openSettings,
+  addAlbum: (album, artwork) => {
+    const record = validateAlbum(album);
+    if (artwork) collectionCoverImageUrls.set(record.id, artwork);
+    const added = addAlbumToCollection(record);
+    if (!added) render();
+    return added;
+  },
+});
 const tidalUI = initializeTidalUI({
   gate: musicService,
-  selectView: (view) => activateViewTab(view === "collection" ? $("#collectionTab") : $("#playlistBuilderTab")),
+  selectView: selectMusicView,
+  playlistPrepared: (records) => catalogPlaylistUI.prepareRecords(records),
   addAlbum: (album, artwork) => {
     const record = validateAlbum(album);
     if (artwork) collectionCoverImageUrls.set(record.id, artwork);
@@ -6218,7 +6315,10 @@ const tidalUI = initializeTidalUI({
     return added;
   },
   changed: () => {
-    const name = musicService.service === "tidal" ? "TIDAL" : "Spotify";
+    const name = musicService.service === "tidal" ? "TIDAL" : musicService.service === "qobuz" ? "Qobuz" : "Spotify";
+    qobuzUI.setActive();
+    catalogSuggestionsUI?.configure();
+    catalogPlaylistUI?.configure();
     $("#openMusicAlbumLabel").textContent = `Apri link album ${name} · prima cerca sul dispositivo`;
     $("#openSpotifyInput").placeholder = `Incolla un link album ${name}`;
     collectionCoverQueue.length = 0;
@@ -6228,6 +6328,68 @@ const tidalUI = initializeTidalUI({
     render();
   },
 });
+catalogSuggestionsUI = initializeCatalogSuggestionsUI({
+  gate: musicService, providers: { tidal: tidalUI, qobuz: qobuzUI },
+  collection: () => state.albums,
+  addAlbum: (album, artwork) => {
+    const record = validateAlbum(album);
+    if (artwork) collectionCoverImageUrls.set(record.id, artwork);
+    return addAlbumToCollection(record);
+  },
+  appendActions: appendSuggestionActions, notSnoozed: suggestionNotSnoozed,
+  spotifyToolChanged: updateSuggestionToolUi,
+  similar: similarLastFmArtists,
+  topAlbums: async (name) => {
+    const data = await lastFmRequest({ method: "artist.gettopalbums", artist: name, autocorrect: "0", limit: "3" });
+    const albums = data.topalbums?.album;
+    if (!Array.isArray(albums)) throw new Error("Classifica album Last.fm non verificabile.");
+    return albums.filter((album) => typeof album.name === "string" && album.name.trim());
+  },
+  genres: async (artist, album) => {
+    const data = await lastFmRequest({ method: "album.gettoptags", artist, album, autocorrect: "0" });
+    const tags = data.toptags?.tag;
+    if (!Array.isArray(tags)) throw new Error("Tag album Last.fm non verificabili.");
+    return musicalAlbumTags(tags);
+  },
+  history: async (options, guard) => {
+    const username = options.user;
+    if (!/^[A-Za-z0-9_.\- ]{1,64}$/.test(username)) throw new Error("Inserisci un nome utente Last.fm valido nelle impostazioni dei suggerimenti.");
+    const range = lastFmSuggestionRange(options.period, options.start, options.end);
+    const useArchive = credentials().useSyncedLastFmHistory;
+    const archive = useArchive ? await getCachedLastFmHistory(username) : null; guard();
+    if (useArchive && !archive) throw new Error("Cronologia sincronizzata non presente su questo dispositivo: sincronizza Last.fm o disattiva l'opzione nelle impostazioni.");
+    const tracks = archive ? await completeLastFmArchiveTracks(username, archive, Math.floor(Date.now() / 1000)) : null; guard();
+    const read = async (window) => archive ? summarizeLastFmRange(tracks, window) : recentLastFmScrobbles(username, window);
+    const summary = await read(range); guard();
+    let heard = [], exclusionNote = "";
+    if (options.exclusion !== "none") {
+      const excluded = await read(options.exclusion === "all" ? { from: null, to: Math.floor(Date.now() / 1000) }
+        : lastFmSuggestionRange(options.exclusion)); guard();
+      heard = excluded.artists.map((artist) => artist.name);
+      exclusionNote = ` Esclusione basata su ${excluded.trackCount} ascolti${excluded.partial ? " (parziale)" : ""}.`;
+    }
+    return { seeds: summary.artists, heard,
+      source: `Last.fm · ${username} · ${summary.trackCount} ascolti · `
+        + `${archive ? "archivio presente sul dispositivo" : "campione online, massimo 1000 ascolti"}`
+        + `${summary.partial ? " (parziale)" : ""}. Può includere più servizi; non è lo storico nativo ${musicService.service.toUpperCase()}.`
+        + exclusionNote };
+  },
+  rateAlbum: async (album) => {
+    const result = await rateDiscogsSuggestionCandidates([{ ...album, sourceId: album.id }]);
+    if (result.unavailable || result.failureReason || result.cacheWarning) throw new Error(
+      result.unavailable || result.failureReason || result.cacheWarning);
+    const rated = result.albums[0];
+    return result.rated ? `Discogs: ${rated.discogs ?? "voto non disponibile"} · ${rated.discogs_votes ?? 0} voti`
+      : "Nessun abbinamento Discogs univoco con voti disponibili nel campione.";
+  },
+});
+catalogPlaylistUI = initializeCatalogPlaylistUI({
+  gate: musicService, providers: { tidal: tidalUI, qobuz: qobuzUI }, discoveryUI: catalogSuggestionsUI,
+  render: renderTopArtistPlaylistPreview,
+  clearSpotifyPreview: () => { topArtistPlaylistPreview = null; setPlaylistBuilderBusy(false); },
+  selectView: selectMusicView,
+});
+for (const provider of [tidalUI, qobuzUI]) provider.suggestionAPI.prepare = catalogPlaylistUI.prepareRecords;
 render({ remoteCovers: !incomingShare && !updateView });
 receiveSharedAlbum();
 restoreListeningSuggestionsForSpotifyReturn();

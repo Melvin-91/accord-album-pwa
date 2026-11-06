@@ -1,5 +1,157 @@
 # Accord · Raccolta album PWA
 
+## PWA 1.15.0 · Crea playlist condiviso
+
+- Stesso builder e anteprima raggruppata per Spotify, TIDAL e Qobuz.
+  Su TIDAL/Qobuz: cronologia Last.fm disponibile, artisti affini, album
+  verificati nel catalogo scelto; nessuna richiesta Spotify.
+- Obiettivo 1-50 artisti e 1-10 brani per artista; continuazione manuale
+  con stato separato da Suggerimenti. Brani in ordine album, non classifiche
+  native simulate. Duplicati e brani Qobuz non disponibili sono scartati.
+  Filtro automatico Spotify/Discogs non equivalente disabilitato con tooltip.
+- Qobuz e Spotify private; TIDAL UNLISTED (chi ha il link puo' accedere),
+  con controllo Privata disabilitato e conferma esplicita.
+- Creazione+aggiunta protette da Web Locks e indicatore persistente di
+  esito incerto. Nessun reinvio: verifica nell'app e sblocca esplicitamente.
+  La verifica non puo' cancellare la protezione di un'altra scheda in scrittura.
+- Gestione TIDAL/Qobuz in pannelli secondari richiudibili. La gestione
+  remota delle playlist esistenti non e' disponibile nella PWA Spotify:
+  il controllo e' disabilitato con tooltip, senza aprire un'altra funzione.
+- Cambiamenti locali, non pubblicati. Nuovo flusso verificato con dati
+  sintetici, senza scritture negli account personali.
+
+## PWA 1.12.10 · Crediti artisti TIDAL
+
+- Nei suggerimenti TIDAL, le esclusioni per artista considerano anche i
+  singoli crediti disponibili sugli album con piu' artisti, senza dividere
+  i nomi che contengono virgole. Il catalogo resta non filtrato.
+
+## PWA 1.12.9 · Riordino playlist Qobuz
+
+- Leggi una playlist, seleziona fino a 100 occorrenze nella pagina e usa
+  **Gestione playlist esistenti > Sposta all'inizio** o **Sposta in fondo**.
+  Accord rilegge la pagina dopo la conferma e rifiuta modifiche se e'
+  cambiata; un'altra app potrebbe comunque modificarla dopo il controllo.
+- Il riordino e' stato provato tramite il client desktop con tre brani in
+  playlist private temporanee, poi eliminate. La GUI PWA e' verificata con
+  risposte sintetiche; non e' stata effettuata una scrittura dal browser.
+
+## PWA 1.12.8 · Filtri per i suggerimenti
+
+- In TIDAL e Qobuz, apri **Filtri suggerimenti** e inserisci i nomi esatti
+  degli artisti separati da `;`. Salva e rileggi i suggerimenti. Il filtro
+  e' locale e distinto per servizio; in TIDAL riguarda album e artisti
+  mostrati, non i singoli brani dei mix. Non filtra generi o ascolti.
+
+## PWA 1.12.7 · Playlist dai suggerimenti Qobuz
+
+- In **Suggerimenti Qobuz** seleziona fino a dieci album e prepara una
+  lista di brani. Si legge la prima pagina di ogni album, si mostrano
+  fino a 250 brani distinti e si segnalano eventuali risultati parziali.
+- Puoi elencare e scegliere la playlist di destinazione senza perdere
+  la selezione. L'aggiunta richiede conferma ed e' limitata a 100 brani
+  per operazione; non viene effettuata alcuna scrittura automatica.
+
+## PWA 1.12.6 · Anteprima playlist TIDAL
+
+- Seleziona fino a dieci album nei risultati TIDAL e premi **Prepara brani
+  dagli album selezionati**. La PWA mostra fino a 250 brani distinti,
+  segnalando pagine o metadati mancanti. La lettura non modifica TIDAL.
+- In **Crea playlist**, carica e scegli la playlist di destinazione senza
+  perdere i brani selezionati; prepara l'aggiunta e conferma separatamente
+  l'invio. I duplicati gia' presenti vengono saltati. Disponibilita' e
+  permessi dipendono dall'app e dall'account TIDAL.
+
+## PWA 1.12.5 · Suggerimenti e coda locale Qobuz
+
+- **Suggerimenti dai miei preferiti** legge la prima pagina dei preferiti e
+  cerca album simili a un massimo di cinque album distinti. I preferiti
+  letti sono esclusi dai risultati, che non rappresentano la cronologia.
+- Seleziona uno o piu' brani nella pagina visualizzata e premi
+  **Riproduci selezionati**. La coda locale mantiene l'ordine e le
+  ripetizioni, passa al brano successivo e offre **Precedente**,
+  **Successivo**, riproduzione casuale e ripetizione del brano o della
+  selezione. Non modifica ne' legge la coda dell'app Qobuz.
+- Se un'altra operazione blocca il passaggio automatico, attendi e riprendi
+  o premi **Successivo**. Il cambio di servizio o la disconnessione fermano il
+  player e svuotano la coda. La nuova coda non e' stata verificata con
+  un account reale.
+
+## PWA 1.12.4 · Interfaccia musicale semplificata
+
+- I collegamenti Qobuz si trovano in **Preferenze e collegamenti**;
+  ricerca, suggerimenti, playlist e player mostrano prima le azioni musicali.
+  Link, ID, configurazione del player e dettagli tecnici restano disponibili
+  nei rispettivi menu secondari.
+- Scegli un album dal catalogo e usa **Usa per suggerimenti** o **Usa per
+  playlist**. Per TIDAL la ricerca consente anche di scegliere un artista.
+  Prima di modificare nome o descrizione di una playlist Qobuz, rileggila:
+  se la descrizione non e' disponibile, inseriscila esplicitamente.
+- La modifica reale di nome e descrizione e' stata verificata tramite il
+  client desktop su una playlist temporanea, poi eliminata; non e' una
+  verifica di scrittura end-to-end dalla GUI PWA.
+
+## PWA 1.12.3 · Suggerimenti, playlist e player Qobuz
+
+- Con Qobuz selezionato, **Suggerimenti** legge gli album simili a un
+  album Qobuz. **Crea playlist** elenca playlist e brani a pagine,
+  importa gli album selezionati nella raccolta locale e permette di
+  creare playlist private o aggiungere e rimuovere occorrenze. Nome e
+  descrizione sono modificabili; in quella versione il riordino non era disponibile.
+- Le scritture richiedono conferma e Web Locks, senza reinvii automatici.
+  Creazione, aggiunta, rimozione ed eliminazione sono state provate su una
+  playlist temporanea; la successiva prova reale di nome/descrizione
+  e' descritta sopra. Dopo esito incerto controlla Qobuz prima di
+  sbloccare altre modifiche.
+- Per il player, nel web player Qobuz apri F12 > Rete, ricarica e filtra
+  `bundle.js`. Apri il solo script pubblico
+  `play.qobuz.com/resources/.../bundle.js` e salvalo come `bundle.js`.
+  In **Crea playlist > Configurazione player Qobuz**, caricalo, leggi una playlist o un
+  album, seleziona i brani e premi **Riproduci selezionati**.
+  Non caricare HAR, cookie o dati di accesso: il file e' letto sul
+  dispositivo e non e' inviato a un backend. Le chiavi restano in memoria;
+  se necessario selezionane un'altra.
+- Il player richiede sessione e abbonamento Qobuz compatibili e supporto
+  MP3; in questa versione riproduceva un brano alla volta a 320 kbps,
+  senza coda o lossless.
+  L'audio si interrompe cambiando servizio. L'API e il bundle sono non
+  ufficiali e possono cambiare. La riproduzione integrata e' stata
+  verificata con un account reale nella PWA locale. Questa versione
+  rimane locale e non e' pubblicata.
+
+## PWA 1.12.2 · Servizio musicale unificato
+
+- Il selettore **Servizio musicale** include Spotify, TIDAL e Qobuz.
+  **Aggiungi album** apre il catalogo del servizio selezionato; la raccolta
+  locale rimane unica e i dati e gli accessi degli altri servizi restano invariati.
+- In questa versione Qobuz non disponeva ancora di suggerimenti, playlist o
+  player in Accord; le funzioni aggiunte successivamente sono descritte sopra.
+  Per un album di un altro catalogo **Cerca in Qobuz** prepara la ricerca senza
+  inventare un collegamento o avviare richieste automaticamente.
+
+## PWA 1.12.1 · Raccolta Qobuz
+
+- Il riquadro **Qobuz** nella raccolta consente ricerca, lettura paginata
+  dei preferiti e importazione selettiva in Accord. Per cercare un album
+  tramite ID o link usa **Leggi ID / link album**. Le modifiche dei
+  preferiti remoti sono separate, richiedono conferma e non sono ritentate.
+  Per serializzare le scritture fra schede serve Web Locks; se non disponibile
+  usa il web player Qobuz. In caso di esito incerto verifica prima su Qobuz.
+- L'accesso e' non ufficiale e puo' smettere di funzionare. Nel web player
+  apri F12 > Rete, entra nella libreria e seleziona `favorite/getUserFavorites`;
+  copia le intestazioni `X-App-Id` e `X-User-Auth-Token` in
+  **Preferenze e collegamenti > Collegamento Qobuz**.
+  Non inserire password ne' condividere token. L'accesso resta in
+  `sessionStorage`, visibile agli script della stessa origine, e non entra in
+  GitHub o backup; puo' scadere. Non e' previsto un backend.
+- Le copertine Qobuz sono visibili online durante la sessione, ma non possono
+  essere scaricate dalla PWA per l'offline perche' Qobuz non abilita CORS sulle
+  immagini. Quelle sincronizzate dal desktop sono disponibili offline.
+- Gli ID Qobuz restano distinti. Quando la raccolta sincronizzata li contiene,
+  il formato passa alla versione 4: aggiorna prima tutti i client, poiche'
+  quelli precedenti interrompono la sincronizzazione. Nessuna pubblicazione
+  automatica della PWA, nessun widget o ora in ascolto Qobuz.
+
 ## Novita' PWA 1.12.0 · Musica segue il servizio scelto
 
 - **Importa playlist TIDAL** nella raccolta: elenca le playlist salvate

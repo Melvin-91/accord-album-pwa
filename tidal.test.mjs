@@ -19,10 +19,13 @@ const storage = () => {
 test("collection album links always follow the selected provider without mixing catalog identifiers", () => {
   const spotify = { id: "abc123", name: "An Album", artist: "An Artist" };
   const tidal = { ...spotify, id: "tidal:123" };
-  assert.equal(musicAlbumLink(tidal, "tidal"), "https://tidal.com/browse/album/123");
+  assert.equal(musicAlbumLink(tidal, "tidal"), "tidal://album/123");
   assert.equal(musicAlbumLink(spotify, "spotify"), "spotify:album:abc123");
-  assert.match(musicAlbumLink(spotify, "tidal"), /^https:\/\/tidal\.com\/search\?q=An%20Artist%20An%20Album$/);
+  assert.equal(musicAlbumLink(spotify, "tidal"), null);
   assert.match(musicAlbumLink(tidal, "spotify"), /^spotify:search:/);
+  const qobuz = { ...spotify, id: "qobuz:00123", url: "https://play.qobuz.com/album/00123" };
+  assert.equal(musicAlbumLink(qobuz, "qobuz", { desktop: true }), "qobuzapp://album/00123");
+  assert.equal(musicAlbumLink(spotify, "qobuz"), null);
   assert.throws(() => musicAlbumLink(tidal, "invalid"), /non valido/);
   assert.equal(tidalApiUrl("userCollectionPlaylists/me/relationships/items").hostname, "openapi.tidal.com");
   assert.throws(() => tidalApiUrl("userCollectionPlaylists/me/relationships/items", "POST"), /non supportata/);
@@ -317,6 +320,9 @@ test("provider epoch blocks already queued work and stale final responses even i
   assert.equal(local.getItem("accord-spotify-client-id"), "preserved");
   gate.select("spotify"); assert.throws(() => gate.assert("spotify", before), /cambiato/);
   assert.equal(createMusicServiceGate(local).service, "spotify");
+  gate.select("qobuz");
+  assert.equal(createMusicServiceGate(local).service, "qobuz");
+  assert.throws(() => gate.assert("spotify"), /cambiato/);
   gate.select("tidal");
   let enabled = false, release;
   const f = fixture(() => new Promise((resolve) => { release = resolve; }), { active: () => enabled });
@@ -328,17 +334,20 @@ test("provider epoch blocks already queued work and stale final responses even i
   await assert.rejects(read, /scartata/);
 });
 
-test("actual Spotify request and cached result paths reject TIDAL selection before any Spotify request", async () => {
+test("actual Spotify request and cached result paths reject other services before any Spotify request", async () => {
   const source = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
   const start = source.indexOf("async function spotifyApiFetch("), end = source.indexOf("\nasync function spotifyWriteRequest(", start);
-  const gate = createMusicServiceGate(storage()); gate.select("tidal");
+  const gate = createMusicServiceGate(storage());
   let calls = 0;
   const request = runInNewContext(`${source.slice(start, end)}\nspotifyRequest;`, {
     URL, SPOTIFY_API: "https://api.spotify.com/v1", musicService: gate,
     spotifyTransport: { fetch() { calls += 1; assert.fail("Spotify network reached"); } },
     spotifyJsonReader: { read() { calls += 1; return {}; } },
   });
-  await assert.rejects(request("albums/123", "spotify-token"), /cambiato/);
+  for (const service of ["tidal", "qobuz"]) {
+    gate.select(service);
+    await assert.rejects(request("albums/123", "spotify-token"), /cambiato/);
+  }
   assert.equal(calls, 0);
 });
 
@@ -369,22 +378,28 @@ test("active root/copy modules and tests match; precache covers modules, version
     .map((path) => new URL(path, import.meta.url).href))]
     .filter((url) => url !== new URL("./", import.meta.url).href && existsSync(new URL("tidal.mjs", url)));
   assert.ok(mirrors.length > 0, "At least one published/development mirror is present");
-  for (const mirror of mirrors) for (const file of ["app.mjs", "core.mjs", "ui.mjs", "tidal.mjs", "tidal-ui.mjs", "style.css", "core.test.mjs", "tidal.test.mjs", "tidal-ui.test.mjs"]) {
+  for (const mirror of mirrors) for (const file of ["app.mjs", "core.mjs", "ui.mjs", "tidal.mjs", "tidal-ui.mjs",
+    "qobuz.mjs", "qobuz-ui.mjs", "qobuz-playback.mjs", "music-suggestion-filters.mjs", "catalog-suggestions.mjs",
+    "suggestions-ui.mjs", "music-app-links.mjs", "music-app-links.test.mjs", "catalog-suggestions.test.mjs", "style.css", "core.test.mjs",
+    "tidal.test.mjs", "tidal-ui.test.mjs", "qobuz.test.mjs", "qobuz-ui.test.mjs", "qobuz-playback.test.mjs"]) {
     assert.equal(readFileSync(new URL(file, import.meta.url), "utf8"), readFileSync(new URL(file, mirror), "utf8"), `${file} in ${mirror}`);
   }
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.12\.0/); assert.match(sw, /v1\.12\.0/);
+  assert.match(html, /v1\.15\.0/); assert.match(sw, /v1\.15\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=82/); assert.match(sw, /style\.css\?v=33/);
-  assert.match(sw, /tidal\.mjs\?v=2/); assert.match(sw, /tidal-ui\.mjs\?v=5/);
+  assert.match(sw, /app\.mjs\?v=95/); assert.match(sw, /style\.css\?v=35/);
+  assert.match(sw, /tidal\.mjs\?v=4/); assert.match(sw, /tidal-ui\.mjs\?v=15/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
-    assert.match(mirrorHtml, /v1\.12\.0/); assert.match(mirrorWorker, /v1\.12\.0/);
-    for (const file of ["app.mjs?v=82", "style.css?v=33", "tidal-ui.mjs?v=5"]) {
+    assert.match(mirrorHtml, /v1\.15\.0/); assert.match(mirrorWorker, /v1\.15\.0/);
+    assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
+    for (const file of ["app.mjs?v=95", "style.css?v=35", "tidal-ui.mjs?v=15", "qobuz.mjs?v=4", "qobuz-ui.mjs?v=12",
+      "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "catalog-playlist.mjs?v=1", "playlist-ui.mjs?v=1",
+      "music-app-links.mjs?v=1", "qobuz-playback.mjs?v=3", "music-suggestion-filters.mjs?v=1"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

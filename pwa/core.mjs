@@ -97,12 +97,16 @@ export function validateAlbum(value) {
   const url = new URL(value.url);
   const match = url.pathname.match(/^\/album\/([A-Za-z0-9]+)$/);
   const tidal = /^tidal:[1-9][0-9]*$/.test(value.id);
+  const qobuz = /^qobuz:[A-Za-z0-9]{1,120}$/.test(value.id);
   const validLink = tidal
     ? url.host === "tidal.com" && url.pathname === `/browse/album/${value.id.slice(6)}` && !url.search && !url.hash
+    : qobuz
+      ? url.host === "play.qobuz.com" && url.pathname === `/album/${value.id.slice(6)}` && !url.search && !url.hash
     : /^[A-Za-z0-9]+$/.test(value.id) && url.host === "open.spotify.com" && match?.[1] === value.id;
   if (url.protocol !== "https:" || url.username || url.password || !validLink
       || !value.name || !value.artist || !ALBUM_STATES.has(value.status)) {
-    throw new Error(tidal ? "Album o link TIDAL non valido." : "Album o link Spotify non valido.");
+    throw new Error(qobuz ? "Album o link Qobuz non valido."
+      : tidal ? "Album o link TIDAL non valido." : "Album o link Spotify non valido.");
   }
   if (tidal) value = { ...value, url: `https://tidal.com/browse/album/${value.id.slice(6)}` };
   if (value.rating !== null && (!Number.isFinite(value.rating) || value.rating < 0.5 || value.rating > 5
@@ -156,12 +160,19 @@ export function validateAlbum(value) {
 
 export function validateDocument(document) {
   if (!document || document.format !== "accord-album-collection"
-      || ![1, 2, 3].includes(document.version) || !Array.isArray(document.albums)) {
+      || ![1, 2, 3, 4].includes(document.version) || !Array.isArray(document.albums)) {
     throw new Error("File del repository non supportato.");
   }
   const albums = document.albums.map(validateAlbum);
   if (new Set(albums.map((album) => album.id)).size !== albums.length) throw new Error("Album duplicati nel repository.");
   return albums.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function createSyncDocument(records, updatedAt = new Date().toISOString()) {
+  const format = "accord-album-collection";
+  const albums = validateDocument({ format, version: 4, albums: records });
+  return { format, version: albums.some((album) => album.id.startsWith("qobuz:")) ? 4 : 3,
+    updated_at: updatedAt, albums };
 }
 
 export function spotifyPlaylistId(input) {
@@ -1655,7 +1666,7 @@ export async function encodeCoverArchive(covers) {
   let total = COVER_MAGIC.length;
   for (const [id, value] of entries) {
     const data = value instanceof Uint8Array ? value : value.data;
-    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id) || !(data instanceof Uint8Array)
+    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id) || !(data instanceof Uint8Array)
         || data.length === 0 || data.length > MAX_COVER_BYTES) throw new Error("Miniatura album non valida.");
     const idBytes = new TextEncoder().encode(id);
     if (idBytes.length > 255) throw new Error("Identificativo miniatura troppo lungo.");
@@ -1687,7 +1698,7 @@ export async function decodeCoverArchive(archive) {
     if (!idLength || offset + idLength + 36 > archive.length) throw new Error("Indice copertina non valido.");
     const id = new TextDecoder("ascii", { fatal: true }).decode(archive.subarray(offset, offset + idLength));
     offset += idLength;
-    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*)$/.test(id) || covers.has(id)) throw new Error("Identificativo copertina duplicato o non valido.");
+    if (!/^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id) || covers.has(id)) throw new Error("Identificativo copertina duplicato o non valido.");
     const digest = archive.slice(offset, offset + 32);
     offset += 32;
     const dataLength = new DataView(archive.buffer, archive.byteOffset + offset, 4).getUint32(0);

@@ -42,7 +42,7 @@ jobs:
           node --check pwa/tidal-ui.mjs
           node --check pwa/sw.js
       - name: Run root and nested PWA test suites
-        run: node --test core.test.mjs tidal.test.mjs tidal-ui.test.mjs pwa/core.test.mjs pwa/tidal.test.mjs pwa/tidal-ui.test.mjs
+        run: node --test
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site

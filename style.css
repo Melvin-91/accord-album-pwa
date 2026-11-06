@@ -139,6 +139,9 @@ button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .suggestion-source-picker h3, .suggestion-source-picker p { margin: 0; }
 .suggestion-source-picker h3 { grid-column: 1 / -1; }
 .suggestion-source-picker p { align-self: center; }
+.catalog-suggestion-settings { grid-column: 1 / -1; min-width: 0; }
+.catalog-suggestion-artists { min-width: 0; }
+.catalog-suggestion-artists button { max-width: 100%; overflow-wrap: anywhere; }
 .suggestion-source-picker[hidden], .spotify-suggestions[hidden], .lastfm-suggestions[hidden] { display: none; }
 .spotify-suggestions { display: grid; gap: 10px; margin-top: 16px; padding: 14px; border: 1px solid #353535; border-radius: 12px; }
 .spotify-suggestions h3, .spotify-suggestions p { margin: 0; }
@@ -221,7 +224,7 @@ body.manual-sort-dragging { user-select: none; }
 .album-quick-edit .rating-field select { max-width: none; }
 .album-title { overflow-wrap: anywhere; margin: 0 0 5px; font-size: 1rem; }
 .album-meta { margin: 0; color: var(--muted); font-size: .8125rem; overflow-wrap: anywhere; }
-.album-player-link { flex: none; color: #dedede; font-size: .75rem; text-decoration: none; }
+.album-player-link { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 44px; min-height: 44px; border: 1px solid var(--border); border-radius: 6px; color: #dedede; font-size: .75rem; text-decoration: none; cursor: pointer; }
 .album-player-link:hover { text-decoration: underline; }
 .genres-field input { font-size: .8125rem; }
 .rating-field select { max-width: 100px; }
@@ -334,7 +337,7 @@ dialog hr { width: 100%; border: 0; border-top: 1px solid var(--border); }
   .album-main { align-items: stretch; flex-direction: column; gap: 10px; }
   .album-actions { justify-content: flex-start; }
   .album-actions button { min-height: 44px; }
-  .album-actions .album-player-link { flex-basis: 100%; padding: 10px 0; }
+  .album-actions .album-player-link { flex-basis: auto; padding: 0; }
   .album-list[data-layout="compact"] .album-card { grid-template-columns: 20px 44px minmax(0, 1fr); gap: 8px; padding: 10px; }
   .album-list[data-layout="compact"] .cover-frame { width: 44px; }
   .collection-search { align-items: stretch; flex-direction: column; }

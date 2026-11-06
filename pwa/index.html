@@ -6,19 +6,19 @@
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://open.spotify.com https://openapi.tidal.com https://auth.tidal.com https://musicbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; media-src 'self' https://streaming-qobuz-sec.akamaized.net https://streaming-qobuz-std.akamaized.net; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://open.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com https://musicbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
     <link rel="icon" href="../assets/malt_metal.ico" sizes="any">
     <link rel="icon" type="image/png" sizes="192x192" href="../assets/accord-192.png">
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=33">
-    <title>Accord v1.12.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=35">
+    <title>Accord v1.15.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.12.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">v1.15.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -162,7 +162,7 @@
         <section class="suggestions" aria-labelledby="suggestionHeading">
           <div class="suggestion-intro tab-intro">
             <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
-            <p>Ricevi suggerimenti di album basati sui tuoi ascolti Spotify o Last.fm. La raccolta resta locale e non viene inviata a GitHub finché non sincronizzi.</p>
+            <p>Scopri album nel servizio musicale scelto, dai tuoi ascolti disponibili o da un album di partenza. La raccolta resta locale fino alla sincronizzazione.</p>
           </div>
           <section class="suggestion-source-picker" aria-labelledby="suggestionSourceHeading">
             <label>Risultati precedenti <select id="suggestionHistory"><option value="">Scegli risultato locale</option></select></label>
@@ -180,7 +180,12 @@
           </section>
           <section class="spotify-suggestions" aria-labelledby="spotifySuggestionHeading">
             <h3 id="spotifySuggestionHeading">Album in base agli ascolti Spotify</h3>
-            <p>Spotify parte dagli artisti e dai brani più ascoltati nel periodo selezionato, cerca artisti affini tramite i generi disponibili e propone i loro album. I filtri per artisti e generi si applicano prima della ricerca; la popolarità dei brani non è un conteggio di ascolti né un voto dell’album.</p>
+            <p>Scopri album ispirati ai tuoi ascolti Spotify.</p>
+            <details class="suggestion-filter-details">
+              <summary>Come funzionano i suggerimenti</summary>
+              <p>Spotify parte dagli artisti e dai brani più ascoltati nel periodo selezionato, cerca artisti affini tramite i generi disponibili e propone i loro album. I filtri per artisti e generi si applicano prima della ricerca; la popolarità dei brani non è un conteggio di ascolti né un voto dell’album.</p>
+              <p>Accord legge solo le classifiche Spotify richieste (fino a 50 artisti e 50 brani), non la cronologia completa. Per usare questa funzione autorizza user-top-read; la cronologia e i filtri restano nel browser. MusicBrainz e Discogs aggiungono catalogo e voti quando disponibili.</p>
+            </details>
             <div class="spotify-suggestion-controls">
               <label>Periodo di ascolto
                 <select id="spotifySuggestionPeriod">
@@ -224,13 +229,17 @@
               </label>
               </div>
             </details>
-            <p class="notice">Accord legge solo le classifiche Spotify richieste (fino a 50 artisti e 50 brani), non la cronologia completa. Per usare questa funzione autorizza user-top-read; la cronologia e i filtri restano nel browser. MusicBrainz e Discogs aggiungono catalogo e voti quando disponibili.</p>
             <p id="spotifySuggestionStatus" class="summary" role="status" aria-live="polite"></p>
             <section id="spotifySuggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti da Spotify"></section>
           </section>
           <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading" hidden>
             <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Last.fm parte dagli ascolti registrati nel periodo selezionato, cerca artisti affini e propone album del catalogo. Applica le esclusioni e i filtri di genere prima della ricerca; MusicBrainz fornisce catalogo e generi, mentre Discogs ordina le proposte con voti affidabili e Last.fm resta il ripiego. Puoi usare il campione online oppure la cronologia completa esportata esplicitamente da Accord Desktop nel repository privato.</p>
+            <p>Scopri album ispirati ai tuoi ascolti Last.fm.</p>
+            <details class="suggestion-filter-details">
+              <summary>Come funzionano i suggerimenti</summary>
+              <p>Last.fm parte dagli ascolti registrati nel periodo selezionato, cerca artisti affini e propone album del catalogo. Applica le esclusioni e i filtri di genere prima della ricerca; MusicBrainz fornisce catalogo e generi, mentre Discogs ordina le proposte con voti affidabili e Last.fm resta il ripiego. Puoi usare il campione online oppure la cronologia completa esportata esplicitamente da Accord Desktop nel repository privato.</p>
+              <p>Il nome utente e i filtri restano nel profilo del browser. La chiave API viene inviata solo a Last.fm. La cronologia non viene inviata dalla PWA: per usare quella completa, attiva l’opzione in Impostazioni e scarica l’esportazione privata creata esplicitamente da Accord Desktop. Senza archivio sincronizzato la PWA legge fino a 1.000 ascolti per campione. Gli album MusicBrainz sono abbinati a Spotify solo quando li aggiungi; i voti Discogs non sostituiscono il tuo voto personale.</p>
+            </details>
             <div class="lastfm-suggestion-controls">
               <label>Nome utente Last.fm
                 <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
@@ -289,7 +298,6 @@
               </label>
               </div>
             </details>
-            <p class="notice">Il nome utente e i filtri restano nel profilo del browser. La chiave API viene inviata solo a Last.fm. La cronologia non viene inviata dalla PWA: per usare quella completa, attiva l’opzione in Impostazioni e scarica l’esportazione privata creata esplicitamente da Accord Desktop. Gli album MusicBrainz sono abbinati a Spotify solo quando li aggiungi; i voti Discogs non sostituiscono il tuo voto personale.</p>
             <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
             <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
           </section>
@@ -304,7 +312,8 @@
           </div>
           <details class="suggestion-filter-details">
             <summary>Come funziona</summary>
-            <p>Accord usa gli stessi input di Suggerimenti Spotify: periodo di ascolto, artisti esclusi, filtri e album già in raccolta. Poi sceglie brani verificati dagli album selezionati anche con Discogs. Per cambiare i risultati modifica le impostazioni nella scheda Suggerimenti Spotify, non Last.fm. Fino a 50 artisti, senza garanzia di raggiungerli: ogni passaggio manuale ha un budget di 40 letture Spotify, inclusi i retry. Se necessario premi Continua anteprima. Nessun ripiego sugli artisti ascoltati; la playlist privata viene creata solo dopo la tua conferma.</p>
+            <p id="playlistBuilderExplanation">Accord usa gli stessi input di Suggerimenti Spotify: periodo di ascolto, artisti esclusi, filtri e album già in raccolta. Poi sceglie brani verificati dagli album selezionati anche con Discogs. Per cambiare i risultati modifica le impostazioni nella scheda Suggerimenti Spotify, non Last.fm. Fino a 50 artisti, senza garanzia di raggiungerli: ogni passaggio manuale ha un budget di 40 letture Spotify, inclusi i retry. Se necessario premi Continua anteprima. Nessun ripiego sugli artisti ascoltati; la playlist privata viene creata solo dopo la tua conferma.</p>
+            <label id="playlistUnsupportedRating" title="Non disponibile per la ricerca automatica TIDAL/Qobuz: non viene simulato il filtro Spotify/Discogs. Puoi verificare Discogs manualmente dalla scheda Suggerimenti." hidden><input type="checkbox" disabled>Filtro automatico Spotify / Discogs</label>
           </details>
           <div class="playlist-builder-controls">
             <label>Numero di artisti
@@ -318,9 +327,14 @@
             </label>
             <button id="playlistPreviewButton" class="secondary" type="button">Genera anteprima</button>
           </div>
+          <details id="playlistReferences" class="suggestion-filter-details" hidden><summary>Artisti di riferimento</summary><p>Escludere un riferimento cambia i punti di partenza, non ammette artisti già ascoltati tra i risultati. Genera prima un'anteprima per caricare i riferimenti.</p><div id="playlistReferenceList" class="playlist-builder-controls"></div></details>
           <p id="playlistBuilderStatus" class="summary" role="status" aria-live="polite">Collega Spotify per caricare l'anteprima.</p>
+          <details class="suggestion-filter-details" hidden><summary>Dettagli ricerca</summary><p id="playlistBuilderDetails"></p></details>
           <section id="playlistBuilderPreview" class="suggestion-list" aria-label="Anteprima brani playlist"></section>
           <button id="playlistCreateButton" class="primary" type="button" disabled>Crea playlist privata</button>
+          <label title="Accord crea sempre playlist private."><input id="playlistPrivate" type="checkbox" checked disabled>Privata</label>
+          <button id="playlistManageButton" class="secondary" type="button">Gestisci playlist…</button>
+          <button id="playlistVerifyButton" class="secondary" type="button" hidden>Verifica esito precedente</button>
         </section>
       </section>
     </main>
@@ -507,6 +521,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=82"></script>
+    <script type="module" src="app.mjs?v=95"></script>
   </body>
 </html>

@@ -1104,6 +1104,7 @@ test("playlist creation submits once and consumes the preview on success or unce
     let resolveToken, writes = 0;
     const elements = new Map([["#playlistBuilderName", { value: "Discovery" }], ["#playlistBuilderStatus", { textContent: "" }]]);
     const context = { commandGuard: createCommandGuard(), topArtistPlaylistPreview: { tracks: [{ uri: "spotify:track:a" }] },
+      musicService: { service: "spotify", epoch: 0, assert() {} }, catalogPlaylistUI: null,
       $: (selector) => elements.get(selector), setPlaylistBuilderBusy() {}, showFeedback() {}, showMessage() {},
       safeDiagnostics: (value) => value, sessionStorage: { getItem: () => "1" },
       spotifyAccessToken: () => new Promise((resolve) => { resolveToken = resolve; }),
@@ -1298,7 +1299,8 @@ test("actionable errors offer redacted copy, settings and canonical playlist rev
   assert.equal(copied[0].includes("saved-secret"), false);
   actions.children[1].events.click();
   assert.deepEqual(opened, ["settings"]);
-  assert.equal(actions.children[2].href, `https://open.spotify.com/playlist/${id}`);
+  assert.equal(actions.children[2].href, `spotify:playlist:${id}`);
+  assert.equal(actions.children[2].target, "_self");
   assert.equal(actions.children[2].rel, "noopener noreferrer");
 });
 
@@ -1461,14 +1463,22 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=82", "style.css?v=33"]) {
+  for (const file of ["app.mjs?v=95", "style.css?v=35"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=45", "ui.mjs?v=9", "tidal.mjs?v=2", "tidal-ui.mjs?v=5"]) {
+  for (const file of ["core.mjs?v=46", "ui.mjs?v=10", "tidal.mjs?v=4", "tidal-ui.mjs?v=15", "qobuz-ui.mjs?v=12",
+    "catalog-suggestions.mjs?v=2", "suggestions-ui.mjs?v=3", "playlist-ui.mjs?v=1",
+    "music-app-links.mjs?v=1"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
+  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=1"));
+  assert.ok(sw.includes("catalog-playlist.mjs?v=1"));
+  for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
+    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
+  }
+  assert.ok(sw.includes("music-suggestion-filters.mjs?v=1"));
   assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
   assert.match(html, /id="selectionToolbar"[^>]+hidden/);
   assert.match(css, /#albumDetailsDialog[^}]+92dvh/);
