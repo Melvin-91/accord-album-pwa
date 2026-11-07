@@ -369,23 +369,47 @@ export function createLocalBackup(albums, preferences, validate, music = {}) {
   const queueDurations = portableDurations(rawQueue.durations || {}, knownIds, "Durate della coda");
   const resume = rawQueue.resume || "";
   if (resume && !queueIds.includes(resume)) throw new Error("Ripresa della coda non valida.");
-  return { format: "accord-local-backup", version: 2, albums: records,
+  const suggestionRecipes = validateSuggestionRecipes(music.suggestionRecipes || []);
+  const completionProvenance = validateCompletionProvenance(music.completionProvenance || {}, knownIds);
+  const completionEvidence = validateCompletionEvidence(music.completionEvidence || {}, knownIds);
+  return { format: "accord-local-backup", version: 3, albums: records,
     preferences: portablePreferences(preferences), manualOrder,
     listeningQueue: { ids: queueIds, resume, durations: queueDurations },
-    durations: portableDurations(music.durations || {}, knownIds, "Durate locali") };
+    durations: portableDurations(music.durations || {}, knownIds, "Durate locali"),
+    suggestionRecipes, completionProvenance, completionEvidence };
+}
+
+export function backupReminderItems(backup) {
+  const items = {};
+  const add = (key, value) => { items[key] = JSON.stringify(value); };
+  for (const album of backup.albums) add(`album:${album.id}`, album);
+  for (const recipe of backup.suggestionRecipes || []) add(`recipe:${recipe.name}`, recipe);
+  for (const [id, value] of Object.entries(backup.completionProvenance || {})) {
+    add(`completion-provenance:${id}`, value);
+  }
+  for (const [id, value] of Object.entries(backup.completionEvidence || {})) {
+    add(`completion-evidence:${id}`, value);
+  }
+  add("preferences", backup.preferences);
+  add("manual-order", backup.manualOrder);
+  add("listening-queue", backup.listeningQueue);
+  add("durations", backup.durations);
+  return items;
 }
 
 export function validateLocalBackup(value, validateDocument) {
-  if (!value || value.format !== "accord-local-backup" || value.version !== 1
+  if (!value || value.format !== "accord-local-backup" || ![1, 2, 3].includes(value.version)
       || !value.preferences || typeof value.preferences !== "object" || Array.isArray(value.preferences)
       || Object.keys(value).some((key) => !["format", "version", "albums", "preferences",
-        ...(value.version === 2 ? ["manualOrder", "listeningQueue", "durations"] : [])].includes(key))
+        ...(value.version >= 2 ? ["manualOrder", "listeningQueue", "durations"] : []),
+        ...(value.version === 3 ? ["suggestionRecipes", "completionProvenance", "completionEvidence"] : [])].includes(key))
       || Object.keys(value.preferences).some((key) =>
         !["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
-    if (value?.format === "accord-local-backup" && value.version === 2
+    if (value?.format === "accord-local-backup" && [2, 3].includes(value.version)
         && value.preferences && typeof value.preferences === "object" && !Array.isArray(value.preferences)
         && Object.keys(value).every((key) => ["format", "version", "albums", "preferences",
-          "manualOrder", "listeningQueue", "durations"].includes(key))
+          "manualOrder", "listeningQueue", "durations",
+          ...(value.version === 3 ? ["suggestionRecipes", "completionProvenance", "completionEvidence"] : [])].includes(key))
         && Object.keys(value.preferences).every((key) =>
           ["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
       return validateVersionTwoBackup(value, validateDocument);
@@ -395,10 +419,12 @@ export function validateLocalBackup(value, validateDocument) {
   const preferences = portablePreferences(value.preferences);
   if (Object.entries(value.preferences).some(([key, field]) =>
     JSON.stringify(field) !== JSON.stringify(preferences[key]))) throw new Error("Preferenze backup non valide.");
+  if (value.version >= 2) return validateVersionTwoBackup(value, validateDocument);
   const albums = validateDocument({ format: "accord-album-collection", version: 3, albums: value.albums });
   const knownIds = new Set(albums.map((album) => album.id));
   return { albums, preferences, manualOrder: albums.map((album) => album.id),
-    listeningQueue: { ids: [], resume: "", durations: {} }, durations: {} };
+    listeningQueue: { ids: [], resume: "", durations: {} }, durations: {},
+    suggestionRecipes: [], completionProvenance: {}, completionEvidence: {} };
 }
 
 function validateVersionTwoBackup(value, validateDocument) {
@@ -421,8 +447,71 @@ function validateVersionTwoBackup(value, validateDocument) {
   const queueDurations = portableDurations(queue.durations, knownIds, "Durate della coda");
   const resume = queue.resume || "";
   if (resume && !queueIds.includes(resume)) throw new Error("Ripresa della coda non valida.");
+  const versionThree = value.version === 3;
+  const suggestionRecipes = versionThree ? validateSuggestionRecipes(value.suggestionRecipes) : [];
+  const completionProvenance = versionThree
+    ? validateCompletionProvenance(value.completionProvenance, knownIds) : {};
+  const completionEvidence = versionThree ? validateCompletionEvidence(value.completionEvidence, knownIds) : {};
   return { albums, preferences, manualOrder, listeningQueue: { ids: queueIds, resume, durations: queueDurations },
-    durations: portableDurations(value.durations, knownIds, "Durate locali") };
+    durations: portableDurations(value.durations, knownIds, "Durate locali"),
+    suggestionRecipes, completionProvenance, completionEvidence };
+}
+
+function validateCompletionProvenance(value, knownIds) {
+  const categories = new Set(["duration", "genres", "evidence"]);
+  const sources = new Set(["manual", "spotify", "tidal", "qobuz", "Last.fm", "Discogs"]);
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).some((id) => !knownIds.has(id))) {
+    throw new Error("Provenienza del completamento musicale non valida.");
+  }
+  const result = {};
+  for (const [id, records] of Object.entries(value)) {
+    if (!records || typeof records !== "object" || Array.isArray(records)
+        || Object.keys(records).some((category) => !categories.has(category))) {
+      throw new Error("Provenienza del completamento musicale non valida.");
+    }
+    result[id] = {};
+    for (const [category, record] of Object.entries(records)) {
+      if (!record || typeof record !== "object" || Array.isArray(record)
+          || Object.keys(record).some((key) =>
+            !["source", "target", "identity", "updated", "complete_tracks"].includes(key))
+          || !sources.has(record.source)
+          || Object.hasOwn(record, "target") && record.target !== null && typeof record.target !== "string"
+          || Object.hasOwn(record, "identity") && (!Array.isArray(record.identity)
+            || record.identity.length !== 3 || record.identity.some((item) => typeof item !== "string"))
+          || Object.hasOwn(record, "updated") && typeof record.updated !== "string"
+          || Object.hasOwn(record, "complete_tracks") && record.complete_tracks !== null
+            && (!Number.isSafeInteger(record.complete_tracks) || record.complete_tracks < 0)) {
+        throw new Error("Record di provenienza del completamento musicale non valido.");
+      }
+      result[id][category] = { ...record };
+    }
+  }
+  return result;
+}
+
+function validateCompletionEvidence(value, knownIds) {
+  const dataFields = new Set(["discogs", "discogs_votes", "discogs_editions", "discogs_versions",
+    "discogs_sampled_versions", "discogs_sampled", "discogs_master", "discogs_url",
+    "discogs_complete", "discogs_updated"]);
+  if (!value || typeof value !== "object" || Array.isArray(value)
+      || Object.keys(value).some((id) => !knownIds.has(id))) {
+    throw new Error("Evidenze del completamento musicale non valide.");
+  }
+  const result = {};
+  for (const [id, record] of Object.entries(value)) {
+    if (!record || typeof record !== "object" || Array.isArray(record)
+        || Object.keys(record).sort().join("|") !== "data|detail|source|updated"
+        || record.source !== "Discogs" || typeof record.updated !== "string"
+        || typeof record.detail !== "string" || record.detail.length > 2000
+        || !record.data || typeof record.data !== "object" || Array.isArray(record.data)
+        || Object.keys(record.data).some((key) => !dataFields.has(key))) {
+      throw new Error("Record di evidenza del completamento musicale non valido.");
+    }
+    result[id] = { source: "Discogs", updated: record.updated,
+      detail: record.detail, data: { ...record.data } };
+  }
+  return result;
 }
 
 export function prepareSelectiveRestore(current, backup, ids, validate) {
@@ -462,3 +551,4 @@ export function commitLocalRestore(storage, key, current, next, related = {}) {
   }
   Object.assign(current, next);
 }
+import { validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=1";

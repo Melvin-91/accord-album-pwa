@@ -25,17 +25,22 @@ export function genreAllowed(genres, filters) {
 }
 
 export class CatalogSuggestions {
-  constructor({ seeds = [], albums = [], filters = {}, heard = [], known = [], excludedIds = [], source = "", allowed = () => true, uniqueArtists = true, target = 10 }) {
+  constructor({ seeds = [], albums = [], filters = {}, heard = [], known = [], excludedIds = [], source = "",
+    allowed = () => true, decisionReason = null, uniqueArtists = true, target = 10 }) {
     if (!Number.isInteger(target) || target < 1 || target > 50) throw new Error("Scegli da 1 a 50 artisti.");
     this.target = target; this.maxArtists = Math.max(30, target * 3);
     this.filters = structuredClone(filters);
     this.heard = new Set(heard.map(normalized));
     this.excluded = new Set((filters.excludedArtists || []).map(normalized));
-    this.knownIds = new Set([...known.map((album) => album.id), ...excludedIds]);
-    this.knownNames = new Set(known.map((album) => JSON.stringify([normalized(album.artist), normalized(album.name)])));
-    this.source = source; this.allowed = allowed; this.uniqueArtists = uniqueArtists;
+    this.collectionIds = new Set(known.map((album) => album.id));
+    this.collectionNames = new Set(known.map((album) => JSON.stringify([normalized(album.artist), normalized(album.name)])));
+    this.excludedIds = new Set(excludedIds);
+    this.knownIds = new Set([...this.collectionIds, ...this.excludedIds]);
+    this.source = source; this.allowed = allowed; this.decisionReason = decisionReason || allowed.reason || (() => "");
+    this.uniqueArtists = uniqueArtists;
     this.results = []; this.artists = []; this.tasks = [];
     this.reads = 0; this.stats = { known: 0, filtered: 0, ambiguous: 0, unmatched: 0, partial: 0 };
+    this.decisions = [];
     this.seenArtists = new Set(); this.seenAlbums = new Set();
     this.seedNames = new Set(seeds.map((seed) => normalized(seed.name)));
     this.limited = seeds.length > 10;
@@ -46,7 +51,7 @@ export class CatalogSuggestions {
   }
   get canContinue() { return this.tasks.length > 0 && this.results.length < this.target; }
   checkpoint() {
-    return Object.fromEntries(Object.entries(this).filter(([key]) => key !== "allowed"));
+    return Object.fromEntries(Object.entries(this).filter(([key]) => !["allowed", "decisionReason"].includes(key)));
   }
   static restore(saved, allowed = () => true) {
     const state = new CatalogSuggestions({ target: saved.target, allowed });
@@ -81,21 +86,40 @@ export class CatalogSuggestions {
         used += 1; this.reads += 1;
         let matches = await search(`${entry.artist} ${entry.name}`); guard(); this.tasks.shift();
         if (!Array.isArray(matches)) {
-          if (!matches.complete) { this.stats.partial += 1; continue; }
+          if (!matches.complete) {
+            this.stats.partial += 1;
+            this.decide(entry, "Catalogo non verificato: ricerca incompleta", "partial");
+            continue;
+          }
           matches = matches.rows;
         }
         const exact = new Map(matches.filter((row) =>
           normalized(row.album.artist) === normalized(entry.artist)
           && normalized(row.album.name) === normalized(entry.name)).map((row) => [row.album.id, row]));
-        if (exact.size !== 1) { this.stats[exact.size ? "ambiguous" : "unmatched"] += 1; continue; }
+        if (exact.size !== 1) {
+          const kind = exact.size ? "ambiguous" : "unmatched";
+          this.stats[kind] += 1;
+          this.decide(entry, `Catalogo non verificato: ${exact.size ? "più edizioni corrispondenti" : "nessuna corrispondenza esatta"}`, kind);
+          continue;
+        }
         this.tasks.unshift(["verify", { ...exact.values().next().value, reason: entry.reason }]);
       } else {
         const album = entry.album, artistNames = entry.artistNames || [album.artist];
-        if (!this.allowed(album) || this.seenAlbums.has(album.id) || this.knownIds.has(album.id)
-            || this.knownNames.has(JSON.stringify([normalized(album.artist), normalized(album.name)]))
-            || artistNames.some((name) => this.heard.has(normalized(name)) || this.excluded.has(normalized(name)))
-            || this.uniqueArtists && this.results.some((row) => normalized(row.album.artist) === normalized(album.artist))) {
-          this.tasks.shift(); this.stats.known += 1; continue;
+        const blockedArtist = artistNames.find((name) => this.excluded.has(normalized(name)));
+        const heardArtist = artistNames.find((name) => this.heard.has(normalized(name)));
+        let reason = "";
+        if (!this.allowed(album)) reason = this.decisionReason(album) || "Escluso da una regola locale";
+        else if (this.seenAlbums.has(album.id)) reason = "Duplicato nel risultato";
+        else if (this.collectionIds.has(album.id)
+            || this.collectionNames.has(JSON.stringify([normalized(album.artist), normalized(album.name)]))) reason = "Già in raccolta";
+        else if (this.excludedIds.has(album.id)) reason = "Escluso localmente";
+        else if (blockedArtist) reason = `Artista escluso: ${blockedArtist}`;
+        else if (heardArtist) reason = `Artista già ascoltato: ${heardArtist}`;
+        else if (this.uniqueArtists && this.results.some((row) => normalized(row.album.artist) === normalized(album.artist))) {
+          reason = "Un altro album dello stesso artista è già nel risultato";
+        }
+        if (reason) {
+          this.tasks.shift(); this.stats.known += 1; this.decide(entry, reason); continue;
         }
         let tags = entry.genres || [];
         if (((this.filters.includedGenres || []).length || (this.filters.excludedGenres || []).length) && !tags.length) {
@@ -103,11 +127,27 @@ export class CatalogSuggestions {
           tags = await genres(album.artist, album.name); guard();
         }
         this.tasks.shift(); this.seenAlbums.add(album.id);
-        if (!genreAllowed(tags, this.filters)) { this.stats.filtered += 1; continue; }
+        if (!genreAllowed(tags, this.filters)) {
+          this.stats.filtered += 1;
+          this.decide(entry, tags.length ? "Escluso dai filtri genere" : "Genere mancante");
+          continue;
+        }
         this.results.push({ ...entry, genres: tags, source: this.source, reason: entry.reason || this.source });
       }
     }
+    const budgetLimited = used >= 20 && this.canContinue;
+    const unexamined = budgetLimited ? this.tasks.flatMap(([kind, value]) => {
+      const candidate = kind === "verify" ? value.album : kind === "search" ? value : null;
+      return candidate ? [{ ...(candidate.id ? { id: candidate.id } : {}), name: candidate.name || "",
+        artist: candidate.artist || "" }] : [];
+    }).slice(0, 100) : [];
     return { albums: [...this.results], artists: [...this.artists], reads: this.reads, stepReads: used,
-      canContinue: this.canContinue, stats: { ...this.stats }, limited: this.limited, source: this.source, uniqueArtists: this.uniqueArtists };
+      canContinue: this.canContinue, stats: { ...this.stats }, limited: this.limited, source: this.source,
+      uniqueArtists: this.uniqueArtists, decisions: [...this.decisions], unexamined, budgetLimited };
+  }
+  decide(candidate, reason, status = "excluded") {
+    const album = candidate?.album && typeof candidate.album === "object" ? candidate.album : candidate;
+    this.decisions.push({ id: album?.id || "", name: album?.name || "", artist: album?.artist || "", status, reason });
+    if (this.decisions.length > 200) this.decisions.splice(0, this.decisions.length - 200);
   }
 }

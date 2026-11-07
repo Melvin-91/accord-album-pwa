@@ -122,7 +122,10 @@ async function uiFixture(run, albumResponse = albumDocument) {
       assert.match(String(url), /^https:\/\/openapi\.tidal\.com\/v2\//);
       const path = new URL(url).pathname;
       let document = albumResponse;
-      if (path === "/v2/userCollectionPlaylists/me/relationships/items") document = {
+      if (path === "/v2/searchResults") document = {
+        data: [{ type: "searchResults", id: `opaque/${new URL(url).searchParams.get("filter[query]")}` }],
+      };
+      else if (path === "/v2/userCollectionPlaylists/me/relationships/items") document = {
         data: [{ type: "playlists", id: "playlist-one" }],
         included: [{ type: "playlists", id: "playlist-one", attributes: { name: "Saved TIDAL playlist" } }],
       };
@@ -155,6 +158,22 @@ async function uiFixture(run, albumResponse = albumDocument) {
     }
   }
 }
+
+test("targeted completion page adapter performs one explicit catalog read with country and no writes", async () => {
+  await uiFixture(async (f) => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    const before = f.calls.length;
+    await f.ui.playlistAPI.completionPage("albums/123");
+    assert.equal(f.calls.length, before + 1);
+    const request = f.calls.at(-1), url = new URL(request.url);
+    assert.equal(request.method, "GET");
+    assert.equal(url.pathname, "/v2/albums/123");
+    assert.ok(url.searchParams.get("countryCode"));
+    await assert.rejects(f.ui.playlistAPI.completionPage("https://elsewhere.test/albums/123"), /non valida/);
+    assert.equal(f.calls.length, before + 1);
+  });
+});
 
 test("the shared playlist adapter reads real tracks and writes only UNLISTED through public API paths", async () => {
   await uiFixture(async (f) => {
@@ -204,8 +223,9 @@ test("the collection stays available on TIDAL, configuration shares account sett
     assert.equal(f.find("Importa album selezionati nella raccolta locale").disabled, true);
     await f.find("Cerca · anteprima").dispatch("click");
     assert.equal(collectionDetails.open, true);
-    assert.equal(f.calls.length, 1);
-    assert.match(f.calls[0].url, /searchResults\/Test\/relationships\/albums/);
+    assert.equal(f.calls.length, 2);
+    assert.equal(new URL(f.calls[0].url).searchParams.get("filter[query]"), "Test");
+    assert.match(f.calls[1].url, /searchResults\/opaque%2FTest\/relationships\/albums/);
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     assert.ok(card);
     assert.match(card.textContent, /Test Album/);
@@ -221,7 +241,7 @@ test("the collection stays available on TIDAL, configuration shares account sett
     await card.children[0].children[0].dispatch("change");
     await f.find("Importa album selezionati nella raccolta locale").dispatch("click");
     assert.equal(f.imported.length, 1); assert.equal(f.imported[0].id, "tidal:123");
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
   });
 });
 
@@ -492,7 +512,7 @@ test("TIDAL search is manual and empty results have an accessible status", async
     f.field("Titolo, artista o link album TIDAL").value = "NoMatch";
     assert.equal(f.calls.length, 0);
     await f.find("Cerca · anteprima").dispatch("click");
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
     assert.ok(f.walk().some((node) => node.textContent === "Nessun risultato TIDAL disponibile per questa ricerca."));
     assert.ok(f.walk().some((node) => node.attributes.id === "tidalStatus" && node.textContent.includes("0 risultati mostrati")));
   });
@@ -512,17 +532,17 @@ test("actual favourites and playlist UI requires preview/confirmation and sends 
     assert.equal(technical.hidden, false);
     assert.notEqual(technical.open, true);
     assert.ok(technical.textContent.includes("POST"));
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
     const commit = f.find("Conferma e invia UNA volta a TIDAL");
     await Promise.all([commit.dispatch("click"), commit.dispatch("click")]);
-    assert.equal(f.calls.length, 2);
-    assert.equal(f.calls[1].method, "POST");
-    assert.deepEqual(JSON.parse(f.calls[1].body), { data: [{ type: "albums", id: "123" }] });
-    await f.find("Prepara creazione UNLISTED").dispatch("click");
-    assert.equal(f.calls.length, 2);
-    await commit.dispatch("click");
     assert.equal(f.calls.length, 3);
-    assert.equal(JSON.parse(f.calls[2].body).data.attributes.accessType, "UNLISTED");
+    assert.equal(f.calls[2].method, "POST");
+    assert.deepEqual(JSON.parse(f.calls[2].body), { data: [{ type: "albums", id: "123" }] });
+    await f.find("Prepara creazione UNLISTED").dispatch("click");
+    assert.equal(f.calls.length, 3);
+    await commit.dispatch("click");
+    assert.equal(f.calls.length, 4);
+    assert.equal(JSON.parse(f.calls[3].body).data.attributes.accessType, "UNLISTED");
     assert.equal(f.field("ID / link playlist TIDAL").value, "created-id");
     await f.find("Leggi playlist · anteprima importazione album / brani").dispatch("click");
     const occurrences = f.walk().filter((node) => node.tag === "label" && node.textContent.startsWith("Brano · Test Track · posizione"));
@@ -530,11 +550,11 @@ test("actual favourites and playlist UI requires preview/confirmation and sends 
     assert.ok(occurrences.every((node) => !node.textContent.includes("itemId")));
     occurrences[1].children[0].checked = true;
     await f.find("Prepara rimozione occorrenze dalla playlist letta").dispatch("click");
-    assert.equal(f.calls.length, 4);
-    await commit.dispatch("click");
     assert.equal(f.calls.length, 5);
-    assert.equal(f.calls[4].method, "DELETE");
-    assert.deepEqual(JSON.parse(f.calls[4].body), { data: [{ type: "tracks", id: "456", meta: { itemId: "occurrence-two" } }] });
+    await commit.dispatch("click");
+    assert.equal(f.calls.length, 6);
+    assert.equal(f.calls[5].method, "DELETE");
+    assert.deepEqual(JSON.parse(f.calls[5].body), { data: [{ type: "tracks", id: "456", meta: { itemId: "occurrence-two" } }] });
   });
 });
 
@@ -550,9 +570,9 @@ test("suggestions can use a catalog album without typing an ID", async () => {
     assert.ok(f.walk().some((node) => node.textContent === "Selezionato: Test Artist · Test Album"));
     const advanced = f.find("Usa un link o ID").parent;
     assert.notEqual(advanced.open, true);
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
     await f.find("Leggi suggerimenti ufficiali · anteprima").dispatch("click");
-    assert.match(f.calls[1].url, /albums\/123\/relationships\/similarAlbums/);
+    assert.match(f.calls[2].url, /albums\/123\/relationships\/similarAlbums/);
   });
 });
 
@@ -619,7 +639,7 @@ test("the shared suggestions adapter searches native albums and prepares a playl
     const page = await f.ui.suggestionAPI.search("Test Artist Test Album");
     assert.equal(page.rows[0].album.id, "tidal:123");
     assert.equal(page.complete, true);
-    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls.length, 2);
     await f.ui.suggestionAPI.prepare(page.rows);
     assert.deepEqual(f.views, ["playlists"]);
     assert.equal(f.calls.filter((call) => call.method !== "GET").length, 0);

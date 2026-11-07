@@ -11,14 +11,14 @@
     <link rel="icon" type="image/png" sizes="192x192" href="../assets/accord-192.png">
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=36">
-    <title>Accord v1.16.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=37">
+    <title>Accord v1.17.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.16.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">v1.17.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -59,6 +59,9 @@
               <button id="loadCoversButton" class="secondary" type="button">Carica copertine mancanti online</button>
               <button id="pickAlbumButton" type="button">Cosa ascolto adesso?</button>
               <button id="durationQueueButton" type="button">Coda per tempo disponibile…</button>
+              <button id="completeDurationsButton" type="button">Completa durate degli album selezionati…</button>
+              <button id="completeMusicButton" type="button">Completa solo questi album…</button>
+              <button id="resumeMusicCompletionButton" type="button">Riprendi completamento dati…</button>
               <button id="duplicatesButton" type="button">Confronta possibili duplicati</button>
               <button id="auditCollectionButton" type="button">Controllo qualità locale</button>
               <button id="statisticsButton" type="button">Statistiche locali</button>
@@ -68,7 +71,10 @@
               <button id="draftListButton" type="button">Bozze locali</button>
               <button id="normalizeLabelsButton" type="button">Uniforma etichette locali…</button>
               <button id="backupButton" type="button">Scarica backup locale JSON</button>
+              <button id="verifyBackupButton" type="button">Verifica file backup…</button>
+              <label>File da verificare <input id="verifyBackupInput" type="file" accept=".json,application/json" hidden></label>
               <label>Ripristina backup JSON <input id="restoreBackupInput" type="file" accept=".json,application/json"></label>
+              <p id="backupStatus" class="summary" role="status"></p>
               <label>Viste salvate <select id="savedCollectionView"><option value="">Scegli vista</option></select></label>
               <button id="saveCollectionViewButton" type="button">Salva vista corrente</button>
               <button id="deleteCollectionViewButton" type="button">Elimina vista scelta</button>
@@ -522,6 +528,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=102"></script>
+    <script type="module" src="app.mjs?v=105"></script>
   </body>
 </html>

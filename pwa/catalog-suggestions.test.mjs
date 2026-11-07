@@ -62,6 +62,37 @@ test("incomplete search samples cannot establish a unique edition", async () => 
   const result = await step(state, { ...discovery([]),
     search: async () => ({ rows: [{ album: album() }], complete: false }) });
   assert.equal(result.albums.length, 0); assert.equal(result.stats.partial, 1);
+  assert.equal(result.decisions[0].reason, "Catalogo non verificato: ricerca incompleta");
+  assert.equal(result.decisions[0].status, "partial");
+});
+
+test("decision ledger distinguishes collection, artist, snooze, missing genres, and unexamined budget work", async () => {
+  const known = album("tidal:1", "Known");
+  const state = new CatalogSuggestions({
+    albums: [
+      { album: known, genres: ["metal"] },
+      { album: album("tidal:2", "Blocked"), genres: ["metal"] },
+      { album: album("tidal:3", "Deferred"), genres: ["metal"] },
+      { album: album("tidal:4", "Untagged") },
+    ],
+    known: [known], filters: { excludedArtists: ["Blocked"], includedGenres: ["metal"] },
+    allowed: (candidate) => candidate.artist !== "Deferred",
+    decisionReason: () => "Rinviato",
+  });
+  const result = await step(state, { genres: async () => [] });
+  assert.deepEqual(result.decisions.map((row) => row.reason), [
+    "Già in raccolta", "Artista escluso: Blocked", "Rinviato", "Genere mancante",
+  ]);
+  const pending = new CatalogSuggestions({
+    target: 50, uniqueArtists: false, filters: { includedGenres: ["metal"] },
+    albums: Array.from({ length: 25 }, (_, index) => ({
+      album: album(`tidal:${index + 1}`, `Artist ${index}`),
+    })),
+  });
+  const limited = await step(pending, { genres: async () => ["rock"] });
+  assert.equal(limited.budgetLimited, true);
+  assert.equal(limited.unexamined.length, 5);
+  assert.equal(limited.unexamined[0].id, "tidal:21");
 });
 
 test("failed attempts count against totals and only explicit continuation retries pending work", async () => {

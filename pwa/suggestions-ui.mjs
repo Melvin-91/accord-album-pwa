@@ -1,7 +1,8 @@
-import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=3";
+import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=4";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=1";
+import { bindPauseNotice, clearCheckpoint } from "./music-continuity.mjs?v=1";
 import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=1";
+import { validateSuggestionCriteria, validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=1";
 
 const node = (tag, text = "") => {
   const result = document.createElement(tag); result.textContent = text; return result;
@@ -59,12 +60,35 @@ export function initializeCatalogSuggestionsUI({
   const details = node("details"); details.className = "suggestion-filter-details catalog-suggestion-settings";
   details.append(node("summary", "Dettagli ricerca"));
   const detail = node("p"); details.append(detail); picker.append(details);
+  const decisionDetails = node("details"); decisionDetails.className = "suggestion-filter-details";
+  decisionDetails.append(node("summary", "Perché un album non compare?"));
+  const decisionList = node("div"); decisionList.className = "suggestion-decision-list";
+  decisionDetails.append(decisionList); picker.append(decisionDetails);
   const artists = node("div"); artists.className = "qol-actions catalog-suggestion-artists";
   artists.setAttribute("aria-label", "Artisti consigliati");
   output.before(artists);
   const historySelect = field(picker, "Risultati precedenti del servizio", "select");
+  const recipes = node("details"); recipes.className = "suggestion-filter-details";
+  recipes.append(node("summary", "Ricette per suggerimenti e playlist"));
+  const recipeSelect = field(recipes, "Ricetta", "select");
+  recipeSelect.id = "musicSuggestionRecipe";
+  const recipeName = field(recipes, "Nome ricetta");
+  recipeName.id = "musicSuggestionRecipeName";
+  recipeName.maxLength = 60;
+  const saveRecipe = action(recipes, "Salva criteri", () => saveCurrentRecipe());
+  const applyRecipe = action(recipes, "Applica ricetta", () => applySelectedRecipe());
+  const deleteRecipe = action(recipes, "Elimina ricetta", () => deleteSelectedRecipe());
+  recipes.append(node("p", "Si salvano solo fonte e criteri consentiti; nome utente, account, token e risultati restano esclusi. Applicare aggiorna i campi e invalida l’anteprima senza avviare letture o scritture."));
+  picker.append(recipes);
+  const spotifyCriteria = ["spotifySuggestionPeriod", "spotifySuggestionExclusion", "spotifyExcludeArtists",
+    "spotifyIncludeGenres", "spotifyExcludeGenres", "spotifyIncludeGenresMatch", "spotifyExcludeGenresMatch"]
+    .map((id) => document.getElementById(id));
+  const playlistArtists = document.getElementById("playlistArtistCount");
+  const playlistTracks = document.getElementById("playlistTracksPerArtist");
+  const recipesKey = "accord-music-suggestion-recipes-v1";
   let service = "spotify", search = null, result = null, busy = false, revision = 0;
   let comparison = null;
+  let applyingRecipe = false;
   let selected = new Set(), excludedAlbums = new Set(), savedHistory = [], spotifyChoice = tool.value, searchAccount = null;
   const values = () => ({
     tool: tool.value, user: user.value.trim(), period: period.value, start: start.value, end: end.value, exclusion: exclusion.value,
@@ -79,10 +103,122 @@ export function initializeCatalogSuggestionsUI({
     }));
     localStorage.setItem(`accord-${service}-suggestion-excluded-artists-v1`, artistFilter.value);
   }
-  function reset() { search = null; revision += 1; continuation.hidden = true; }
+  function reset() {
+    search = null; revision += 1; continuation.hidden = true;
+    renderDecisionAudit(null);
+  }
+  function invalidateCriteria() {
+    reset(); result = null; selected.clear(); comparison?.destroy(); comparison = null;
+    output.replaceChildren(); artists.replaceChildren(); detail.textContent = "";
+    clearCheckpoint(localStorage, gate.service);
+    window.dispatchEvent(new CustomEvent("accord:discovery-criteria-changed"));
+  }
+  function recipeCriteria() {
+    const spotify = service === "spotify";
+    const customPeriod = !spotify && period.value === "custom";
+    return validateSuggestionCriteria({
+      tool: tool.value,
+      period: spotify ? spotifyCriteria[0].value : period.value,
+      start: customPeriod ? start.value : "",
+      end: customPeriod ? end.value : "",
+      exclusion: spotify ? spotifyCriteria[1].value : exclusion.value,
+      artistFilter: spotify ? spotifyCriteria[2].value : artistFilter.value,
+      included: spotify ? spotifyCriteria[3].value : included.value,
+      excluded: spotify ? spotifyCriteria[4].value : excluded.value,
+      includedMode: spotify ? spotifyCriteria[5].value : includedMode.value,
+      excludedMode: spotify ? spotifyCriteria[6].value : excludedMode.value,
+      playlistArtists: Number(playlistArtists.value),
+      playlistTracks: Number(playlistTracks.value),
+    });
+  }
+  function savedRecipes() {
+    return validateSuggestionRecipes(JSON.parse(localStorage.getItem(recipesKey) || "[]"));
+  }
+  function refreshRecipes(selected = "") {
+    recipeSelect.replaceChildren(node("option", "Scegli una ricetta…"));
+    recipeSelect.options[0].value = "";
+    const local = service !== "spotify";
+    const presets = [
+      ["preset:metal", "Scoperte metal · 20 artisti · 2 brani", {
+        tool: local ? "history" : "lastfm", period: local ? "30" : "medium_term", start: "", end: "",
+        exclusion: local ? "all" : "medium_term", artistFilter: "", included: "metal", excluded: "",
+        includedMode: "contains", excludedMode: "exact", playlistArtists: 20, playlistTracks: 2 }],
+      ["preset:recent", "Album recenti da provare", {
+        tool: local ? "history" : "lastfm", period: local ? "7" : "short_term", start: "", end: "",
+        exclusion: "none", artistFilter: "", included: "", excluded: "",
+        includedMode: "contains", excludedMode: "exact", playlistArtists: 5, playlistTracks: 3 }],
+    ];
+    for (const [value, label, criteria] of presets) {
+      const option = node("option", label); option.value = value; option.dataset.criteria = JSON.stringify(criteria);
+      recipeSelect.append(option);
+    }
+    for (const [index, recipe] of savedRecipes().entries()) {
+      const option = node("option", recipe.name); option.value = `saved:${index}`;
+      option.dataset.criteria = JSON.stringify(recipe.criteria); recipeSelect.append(option);
+    }
+    recipeSelect.value = selected;
+    deleteRecipe.disabled = !selected.startsWith("saved:");
+  }
+  function saveCurrentRecipe() {
+    try {
+      const value = validateSuggestionRecipes([...savedRecipes(), { name: recipeName.value, criteria: recipeCriteria() }]);
+      localStorage.setItem(recipesKey, JSON.stringify(value));
+      refreshRecipes(`saved:${value.length - 1}`);
+      status.textContent = "Ricetta locale salvata; nessun account o risultato incluso.";
+    } catch (error) { status.textContent = `Ricetta non salvata: ${error.message}`; }
+  }
+  function deleteSelectedRecipe() {
+    try {
+      const index = Number(recipeSelect.value.slice("saved:".length));
+      if (!recipeSelect.value.startsWith("saved:") || !Number.isInteger(index)) throw new Error("Scegli una ricetta salvata.");
+      const value = savedRecipes();
+      if (index < 0 || index >= value.length) throw new Error("Ricetta non più disponibile.");
+      value.splice(index, 1); localStorage.setItem(recipesKey, JSON.stringify(value));
+      refreshRecipes(); status.textContent = "Ricetta locale eliminata.";
+    } catch (error) { status.textContent = `Ricetta non eliminata: ${error.message}`; }
+  }
+  function applySelectedRecipe() {
+    const option = recipeSelect.selectedOptions[0];
+    if (!option?.dataset.criteria) { status.textContent = "Scegli una ricetta da applicare."; return; }
+    try {
+      const criteria = validateSuggestionCriteria(JSON.parse(option.dataset.criteria));
+      if (![...tool.options].some((entry) => entry.value === criteria.tool)) {
+        throw new Error("La fonte della ricetta non è disponibile per il servizio selezionato.");
+      }
+      const spotify = service === "spotify";
+      if (spotify) {
+        for (const [input, value] of spotifyCriteria.map((input, index) => [input, [
+          criteria.period, criteria.exclusion, criteria.artistFilter, criteria.included, criteria.excluded,
+          criteria.includedMode, criteria.excludedMode,
+        ][index]])) input.value = value;
+      } else {
+        for (const [input, value] of [[period, criteria.period], [start, criteria.start], [end, criteria.end],
+          [exclusion, criteria.exclusion], [artistFilter, criteria.artistFilter], [included, criteria.included],
+          [excluded, criteria.excluded], [includedMode, criteria.includedMode], [excludedMode, criteria.excludedMode]]) {
+          input.value = value;
+        }
+      }
+      tool.value = criteria.tool;
+      playlistArtists.value = String(criteria.playlistArtists);
+      playlistTracks.value = String(criteria.playlistTracks);
+      applyingRecipe = true;
+      for (const input of [...spotifyCriteria, user, period, start, end, exclusion, artistFilter,
+        included, excluded, includedMode, excludedMode, tool, playlistArtists, playlistTracks]) {
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      applyingRecipe = false;
+      updateFields(); persist(); invalidateCriteria();
+      status.textContent = "Ricetta applicata. Nessuna lettura, anteprima o scrittura avviata.";
+    } catch (error) {
+      applyingRecipe = false;
+      status.textContent = `Ricetta non applicata: ${error.message}`;
+    }
+  }
   settings.addEventListener("change", () => {
-    try { persist(); reset(); status.textContent = "Impostazioni salvate. Avvia una nuova ricerca."; }
+    if (applyingRecipe) return;
+    try { persist(); status.textContent = "Impostazioni salvate. Avvia una nuova ricerca."; }
     catch (error) { status.textContent = `Impostazioni non salvate: ${error.message}`; }
+    invalidateCriteria();
     updateFields();
   });
   function updateFields() {
@@ -164,6 +300,32 @@ export function initializeCatalogSuggestionsUI({
     for (const name of names) action(artists, name, () => void browseArtist(name));
     if (!records.length) output.append(node("p", "Nessun album verificato nel campione con i filtri scelti."));
     prepare.disabled = !records.length;
+    renderDecisionAudit(result);
+  }
+  function renderDecisionAudit(current) {
+    decisionList.replaceChildren();
+    if (!current) {
+      decisionList.append(node("p", "Nessuna ricerca corrente. Gli album non elencati non sono stati esaminati."));
+      return;
+    }
+    for (const decision of current.decisions || []) {
+      const row = node("p");
+      row.textContent = `${[decision.artist, decision.name].filter(Boolean).join(" · ") || "Album non identificato"} — ${decision.reason}`;
+      decisionList.append(row);
+    }
+    if (current.unexamined?.length) {
+      const heading = node("p", current.budgetLimited
+        ? "Limite del passaggio raggiunto: questi candidati non sono ancora esaminati."
+        : "Questi candidati non sono ancora esaminati.");
+      decisionList.append(heading);
+      for (const album of current.unexamined) {
+        decisionList.append(node("p", `${[album.artist, album.name].filter(Boolean).join(" · ") || "Album non identificato"} — Non ancora esaminato`));
+      }
+    }
+    if (!(current.decisions || []).length && !current.unexamined?.length) {
+      decisionList.append(node("p", "Nessuna esclusione registrata. L’assenza dal campione non prova che l’album non esista."));
+    }
+    decisionList.prepend(node("p", "Solo decisioni registrate durante la ricerca corrente; nessuna lettura aggiuntiva."));
   }
   action(settings, "Ripristina album esclusi", () => {
     try { excludedAlbums.clear(); persist(); reset(); render(); }
@@ -311,9 +473,12 @@ export function initializeCatalogSuggestionsUI({
         tool.value = spotifyChoice; spotifyToolChanged();
       }
     }
-    for (const item of [settings, seedLabel, choose, continuation, prepare, details, artists, historySelect.parentElement]) item.hidden = !local;
+    for (const item of [settings, seedLabel, choose, continuation, prepare, details, decisionDetails,
+      artists, historySelect.parentElement]) item.hidden = !local;
     document.getElementById("suggestionHistory").parentElement.hidden = local;
     document.getElementById("clearSuggestionHistory").hidden = local;
+    try { refreshRecipes(); }
+    catch (error) { status.textContent = `Ricette non leggibili: ${error.message}`; }
     if (!local) return;
     root.hidden = false;
     for (const child of document.getElementById("suggestionsPanel").children) {
@@ -330,7 +495,17 @@ export function initializeCatalogSuggestionsUI({
     continuation.hidden = !search?.canContinue;
     updateFields();
   }
-  tool.addEventListener("change", () => { if (gate.service !== "spotify") { reset(); updateFields(); } });
+  tool.addEventListener("change", () => {
+    if (applyingRecipe) return;
+    if (gate.service !== "spotify") updateFields();
+    invalidateCriteria();
+  });
+  document.querySelector(".spotify-suggestions").addEventListener("change", (event) => {
+    if (!applyingRecipe && gate.service === "spotify" && spotifyCriteria.includes(event.target)) invalidateCriteria();
+  });
+  for (const input of [playlistArtists, playlistTracks]) input.addEventListener("change", () => {
+    if (!applyingRecipe) window.dispatchEvent(new CustomEvent("accord:discovery-criteria-changed"));
+  });
   document.querySelector(".view-tabs").addEventListener("click", () => { if (gate.service !== "spotify") updateFields(); });
   configure();
   async function playlistSource(target, guard, excludedReferences = []) {

@@ -5,6 +5,7 @@ const gate = { service: "qobuz", epoch: 0, assert(service, epoch = this.epoch) {
   if (service !== this.service || epoch !== this.epoch) throw new Error("Servizio cambiato.");
 } };
 const saved = [], prepared = [], outcomes = [];
+let reads = 0;
 let accountRevision = 0, mode = "normal", release = null;
 const album = (id = "one", artist = "New artist", name = "Album") => ({
   id: `qobuz:${id}`, name, artist, url: `https://play.qobuz.com/album/${id}`, year: "2000",
@@ -13,10 +14,11 @@ const album = (id = "one", artist = "New artist", name = "Album") => ({
 const api = {
   revision: () => accountRevision,
   seed: () => ({ id: "qobuz:seed", label: "Album di partenza sintetico" }),
-  search: async (query) => query === "New artist"
+  search: async (query) => { reads += 1; return query === "New artist"
     ? [{ album: album() }, { album: album("edition", "New artist", "Album (Deluxe)") }]
-    : [{ album: album() }],
+    : [{ album: album() }]; },
   native: async () => {
+    reads += 1;
     if (mode === "error") throw new Error("Limite remoto sintetico: attendi.");
     if (mode === "late") await new Promise((resolve) => { release = resolve; });
     return { rows: [{ album: album() }, { album: album("two", "Other artist", "Other album") }], complete: true };
@@ -27,15 +29,15 @@ const find = (title, parent = document) => [...parent.querySelectorAll("button")
   .find((button) => button.textContent === title);
 const originalPreferences = new Map(["qobuz", "tidal"].flatMap((service) => [
   `accord-${service}-discovery-v2`, `accord-${service}-suggestion-excluded-artists-v1`,
-]).map((key) => [key, localStorage.getItem(key)]));
+]).concat(["accord-music-suggestion-recipes-v1"]).map((key) => [key, localStorage.getItem(key)]));
 
 async function run() {
   for (const key of originalPreferences.keys()) localStorage.removeItem(key);
   const ui = initializeCatalogSuggestionsUI({
     gate, providers: { qobuz: { suggestionAPI: api, openCatalog() {} }, tidal: { suggestionAPI: api, openCatalog() {} } },
-    history: async () => ({ seeds: [{ name: "Seed" }], heard: [], source: "Cronologia sintetica · non account reale" }),
-    similar: async () => [{ name: "New artist", match: .8 }],
-    topAlbums: async () => [{ name: "Album" }], genres: async () => ["jazz"],
+    history: async () => { reads += 1; return { seeds: [{ name: "Seed" }], heard: [], source: "Cronologia sintetica · non account reale" }; },
+    similar: async () => { reads += 1; return [{ name: "New artist", match: .8 }]; },
+    topAlbums: async () => { reads += 1; return [{ name: "Album" }]; }, genres: async () => { reads += 1; return ["jazz"]; },
     collection: () => saved, addAlbum: (record) => saved.push(record),
     appendActions() {}, notSnoozed: () => true, rateAlbum: async () => "Discogs sintetico",
     spotifyToolChanged() {
@@ -51,6 +53,34 @@ async function run() {
   assert(output.querySelectorAll("article").length === 1, "La cronologia deve generare un album verificato.");
   assert(output.textContent.includes("New artist"), "I metadati devono essere visibili.");
   assert(document.querySelector(".spotify-suggestion-controls").hidden, "I controlli Spotify devono essere nascosti.");
+  const readsBeforeRecipe = reads;
+  const audit = document.querySelector(".suggestion-decision-list");
+  assert(audit?.textContent.includes("Solo decisioni registrate"), "L'audit deve dichiarare la provenienza delle decisioni.");
+  const selection = output.querySelector('input[type="checkbox"]');
+  selection.checked = true; selection.dispatchEvent(new Event("change"));
+  assert(reads === readsBeforeRecipe, "Cambiare selezione non deve avviare letture.");
+  const auditSummary = [...document.querySelectorAll(".suggestion-source-picker details summary")]
+    .find((summary) => summary.textContent === "Perché un album non compare?");
+  assert(auditSummary, "L'audit deve essere accessibile dal pannello dei suggerimenti.");
+  auditSummary.click();
+  assert(reads === readsBeforeRecipe, "Aprire la spiegazione non deve avviare letture.");
+  document.getElementById("musicSuggestionRecipe").value = "preset:metal";
+  find("Applica ricetta", document.querySelector(".suggestion-source-picker")).click();
+  assert(reads === readsBeforeRecipe, "Applicare una ricetta non deve avviare letture.");
+  assert(audit.textContent.includes("Nessuna ricerca corrente"), "Cambiare i criteri deve invalidare le spiegazioni precedenti.");
+  assert(document.getElementById("playlistArtistCount").value === "20"
+    && document.getElementById("playlistTracksPerArtist").value === "2", "La ricetta deve applicare i criteri playlist.");
+  document.getElementById("lastfmSuggestionUser").value = "synthetic-account";
+  document.getElementById("musicSuggestionRecipeName").value = "Ricetta sintetica";
+  find("Salva criteri", document.querySelector(".suggestion-source-picker")).click();
+  const recipe = JSON.parse(localStorage.getItem("accord-music-suggestion-recipes-v1"))[0];
+  assert.deepEqual(Object.keys(recipe).sort(), ["criteria", "name"]);
+  assert.deepEqual(Object.keys(recipe.criteria).sort(), [
+    "artistFilter", "end", "excluded", "excludedMode", "exclusion", "included", "includedMode",
+    "period", "playlistArtists", "playlistTracks", "start", "tool",
+  ].sort());
+  assert(!JSON.stringify(recipe).includes("synthetic-account"), "La ricetta non deve conservare l'account.");
+  outcomes.push("Ricette allowlist applicate senza letture; nessun account o risultato salvato");
   outcomes.push("Cronologia → affinità → album verificato; riuso dei risultati Spotify");
   find("New artist", document.querySelector(".catalog-suggestion-artists")).click();
   await new Promise((resolve) => setTimeout(resolve, 0));

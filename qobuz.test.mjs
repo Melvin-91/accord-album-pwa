@@ -5,8 +5,10 @@ import { validateAlbum, validateDocument, createSyncDocument, encodeCoverArchive
 import { createLocalBackup, validateLocalBackup } from "./ui.mjs";
 
 const source = { id: "00123", title: "Title", artist: { name: "Artist" },
-  release_date_original: "2021-01-02", image: { large: "https://static.qobuz.com/images/a.jpg" } };
+  release_date_original: "2021-01-02", tracks_count: 12, duration: 3600,
+  image: { large: "https://static.qobuz.com/images/a.jpg" } };
 const album = qobuzAlbum(source).album;
+assert.deepEqual(qobuzAlbum(source).edition, { track_count: 12, duration_seconds: 3600 });
 
 test("Qobuz IDs preserve leading zeroes, exact links, backup and cover archives", async () => {
   assert.equal(album.id, "qobuz:00123");

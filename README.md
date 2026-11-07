@@ -2,9 +2,13 @@
 
 ## Stato corrente e gerarchia
 
-Rivisto il 6 novembre 2026. **PWA 1.16.0**, pacchetto per la pubblicazione su
+Rivisto il 7 novembre 2026. **PWA 1.17.0**, pacchetto di rilascio per
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
+Questa consegna comprende completamento dati mirato, spiegazione delle
+esclusioni, ricette, confronto edizioni, recupero player contestuale,
+conflitti per campo e backup verificabili, oltre al fix della ricerca TIDAL.
+Nessuna lettura o scrittura remota aggiunta all'apertura delle superfici.
 Release precedente 1.15.4: `d24975224ec904a85a3e147fbe08c175c26bab79`,
 workflow Pages `42227653246` concluso con successo.
 

@@ -3,6 +3,7 @@ const LEGACY_ALBUM_STATES = { heard: "liked", hidden: "disliked" };
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
 const ALBUM_FIELDS_V2 = [...ALBUM_FIELDS_V1, "collections", "tags", "cover_sha256"];
 export const ALBUM_FIELDS = [...ALBUM_FIELDS_V2, "primary_genre"];
+const ALBUM_FIELDS_V4 = [...ALBUM_FIELDS, "notes"];
 export const NO_PRIMARY_GENRE_FILTER = "__accord_no_primary_genre__";
 export const NO_SECONDARY_GENRE_FILTER = "__accord_no_secondary_genre__";
 
@@ -80,7 +81,7 @@ export function spotifyRedirectUriForPage(pageUrl) {
 
 export function validateAlbum(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
-      || ![ALBUM_FIELDS_V1, ALBUM_FIELDS_V2, ALBUM_FIELDS].some((fields) =>
+      || ![ALBUM_FIELDS_V1, ALBUM_FIELDS_V2, ALBUM_FIELDS, ALBUM_FIELDS_V4].some((fields) =>
         Object.keys(value).sort().join("|") === [...fields].sort().join("|"))) {
     throw new Error("Record album non valido.");
   }
@@ -155,6 +156,9 @@ export function validateAlbum(value) {
   }
   if (value.cover_sha256 !== null && (typeof value.cover_sha256 !== "string"
       || !/^[0-9a-f]{64}$/.test(value.cover_sha256))) throw new Error("Impronta copertina album non valida.");
+  if (Object.hasOwn(value, "notes") && (typeof value.notes !== "string" || value.notes.length > 100_000)) {
+    throw new Error("Note album non valide o troppo lunghe.");
+  }
   return { ...value, genres, primary_genre: primaryGenre, ...groups };
 }
 
@@ -1535,9 +1539,6 @@ export function topTracksPerAlbum(albumGroups, popularityById, tracksPerAlbum = 
 }
 
 export function threeWayMerge(base, local, remote, choices = {}) {
-  if (Object.values(choices).some((choice) => !["local", "remote"].includes(choice))) {
-    throw new Error("Scelta di conflitto non valida.");
-  }
   const old = mapAlbums(base);
   const here = mapAlbums(local);
   const there = mapAlbums(remote);
@@ -1556,17 +1557,34 @@ export function threeWayMerge(base, local, remote, choices = {}) {
       result.set(id, left);
       continue;
     }
-    if (!previous) {
-      if (JSON.stringify(left) === JSON.stringify(right)) result.set(id, left);
-      else if (choices[id]) result.set(id, choices[id] === "local" ? left : right);
-      else conflicts.push({ id, base: null, local: left, remote: right });
-      continue;
-    }
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (same(left, previous)) result.set(id, right);
-    else if (same(right, previous) || same(left, right)) result.set(id, left);
-    else if (choices[id]) result.set(id, choices[id] === "local" ? left : right);
-    else conflicts.push({ id, base: previous, local: left, remote: right });
+    const merged = { ...left };
+    const changedFields = new Set([...Object.keys(previous || {}), ...Object.keys(left), ...Object.keys(right)]);
+    const fieldConflicts = [];
+    const setField = (field, value) => {
+      if (value === undefined) delete merged[field];
+      else merged[field] = value;
+    };
+    for (const field of changedFields) {
+      if (field === "id") continue;
+      const before = previous?.[field];
+      const localValue = left[field];
+      const remoteValue = right[field];
+      if (same(localValue, before)) setField(field, remoteValue);
+      else if (same(remoteValue, before) || same(localValue, remoteValue)) setField(field, localValue);
+      else {
+        const selected = choices[id]?.[field] ?? (typeof choices[id] === "string" ? choices[id] : null);
+        if (selected === "local" || selected === "remote") {
+          setField(field, selected === "local" ? localValue : remoteValue);
+        } else {
+          if (selected !== null) throw new Error("Scelta di conflitto non valida.");
+          fieldConflicts.push({ field, base: before, local: localValue, remote: remoteValue });
+        }
+      }
+    }
+    if (fieldConflicts.length) conflicts.push({ id, base: previous || null, local: left, remote: right,
+      fields: fieldConflicts });
+    else result.set(id, validateAlbum(merged));
   }
   return { albums: [...result.values()].sort((a, b) => a.id.localeCompare(b.id)), conflicts };
 }

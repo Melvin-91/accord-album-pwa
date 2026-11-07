@@ -114,7 +114,7 @@ export function createTidalTransport({
         if (!active() || revision() !== currentRevision) throw new Error("Servizio cambiato: risposta TIDAL scartata.");
       } });
   }
-  async function requestJson(path, token, { method = "GET", body, signal } = {}) {
+  async function requestJson(path, token, { method = "GET", body, signal, beforeRead } = {}) {
     const url = tidalApiUrl(path, method).href;
     guard();
     const key = `${token}|${url}`;
@@ -139,7 +139,7 @@ export function createTidalTransport({
       let result;
       try {
         result = await response(url, { method, headers, signal, ...(body === undefined ? {} : { body: JSON.stringify(body) }) },
-          method === "GET" ? null : () => {
+          method === "GET" ? beforeRead : () => {
             if (writeStorage?.getItem(writeKey) || writeStorage?.getItem(lastWriteKey) === fingerprint) {
               throw new Error("Scrittura TIDAL già inviata da un’altra operazione: verifica lo stato remoto.");
             }
@@ -194,6 +194,23 @@ export function createTidalTransport({
   return {
     ready: () => { guard(); requests.ready(); },
     request: requestJson,
+    async searchPath(query, kind, token, { countryCode, include } = {}) {
+      if (typeof query !== "string" || !query.trim() || query.length > 256
+          || !["albums", "artists", "tracks", "playlists"].includes(kind)) {
+        throw new Error("Ricerca TIDAL non valida.");
+      }
+      const params = new URLSearchParams({ "filter[query]": query.trim() });
+      if (countryCode) params.set("countryCode", countryCode);
+      if (include) params.set("include", include);
+      const document = await requestJson(`searchResults?${params}`, token);
+      if (!Array.isArray(document.data) || document.data.length !== 1
+          || document.data[0]?.type !== "searchResults"
+          || typeof document.data[0].id !== "string" || !document.data[0].id) {
+        throw new Error("Risultati di ricerca TIDAL non validi: identificatore della ricerca assente.");
+      }
+      params.delete("filter[query]");
+      return `searchResults/${encodeURIComponent(document.data[0].id)}/relationships/${kind}?${params}`;
+    },
     async token(parameters) {
       const result = await response("https://auth.tidal.com/v1/oauth2/token", {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },

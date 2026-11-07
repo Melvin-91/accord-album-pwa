@@ -73,6 +73,7 @@ import {
   albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
   normalizeAccessibility, portablePreferences, adjacentAlbumIds, spotifyAlbumIntent,
   playlistPreviewStatistics, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
+  backupReminderItems,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
 } from "./ui.mjs";
@@ -151,9 +152,11 @@ test("sync summary reports both directions, unchanged albums, and resolved confl
 test("detail draft persistence keeps albums separate, clears unchanged drafts, and exposes write failure", () => {
   const album = qosAlbum("a");
   const context = {
-    detailsAlbumId: "a", detailsDraftSelectors: [".status-input", ".rating-input", ".genres-input", ".collections-input", ".tags-input"],
+    detailsAlbumId: "a", detailsDraftSelectors: [".status-input", ".rating-input", ".genres-input", ".collections-input",
+      ".tags-input", ".album-notes-input"],
     state: { albums: [album, qosAlbum("b")] }, qol: { drafts: {} },
-    fields: { ".status-input": "liked", ".rating-input": "4.5", ".genres-input": "", ".collections-input": "", ".tags-input": "" },
+    fields: { ".status-input": "liked", ".rating-input": "4.5", ".genres-input": "", ".collections-input": "",
+      ".tags-input": "", ".album-notes-input": "" },
     $: () => ({ querySelector: (selector) => ({ value: context.fields[selector] }) }),
     saveAlbumDraft: (key, fields) => { context.qol.drafts[key] = fields; return true; },
     clearAlbumDraft: (key) => { delete context.qol.drafts[key]; return true; },
@@ -247,7 +250,7 @@ test("incoming GET shares remove only share parameters, stage unknown albums, an
   const context = { URL, location: { href: original }, history: { state: {}, replaceState: (_state, _unused, url) => { replacement = url; } },
     musicService: { service: "spotify" }, spotifyAlbumIntent, state: { albums: [] }, $: (selector) => nodes[selector], activateViewTab() {}, showFeedback() {},
     openSpotifyAlbumIntent: () => { opens += 1; } };
-  const receive = runInNewContext(`${appFunction("function receiveSharedAlbum(", '\n$("#backupButton")')}\nreceiveSharedAlbum`, context);
+  const receive = runInNewContext(`${appFunction("function receiveSharedAlbum(", '\n$("#viewMenu").addEventListener')}\nreceiveSharedAlbum`, context);
   receive();
   assert.equal(opens, 0);
   assert.equal(nodes["#openSpotifyInput"].value, `https://open.spotify.com/album/${id}`);
@@ -272,7 +275,7 @@ test("incoming TIDAL shares stage catalog lookup or open local details without a
     openAlbumDetails: (id) => opened.push(id),
     openSpotifyAlbumIntent() { assert.fail("Spotify must not be used"); },
   };
-  runInNewContext(`${appFunction("function openTidalAlbumIntent(", '\n$("#openSpotifyForm")')}\n${appFunction("function receiveSharedAlbum(", '\n$("#backupButton")')}\nreceiveSharedAlbum()`, context);
+  runInNewContext(`${appFunction("function openTidalAlbumIntent(", '\n$("#openSpotifyForm")')}\n${appFunction("function receiveSharedAlbum(", '\n$("#viewMenu").addEventListener')}\nreceiveSharedAlbum()`, context);
   assert.deepEqual(staged, ["https://tidal.com/browse/album/42"]);
   assert.deepEqual(opened, []);
   assert.equal(replacement.searchParams.get("code"), "oauth");
@@ -307,7 +310,7 @@ test("backup exports the full local music set and explicit preference allowlist 
   assert.equal(JSON.stringify(backup).includes("PRIVATE"), false);
   assert.equal(JSON.stringify(backup).includes("?si"), false);
   assert.deepEqual(Object.keys(backup), ["format", "version", "albums", "preferences", "manualOrder",
-    "listeningQueue", "durations"]);
+    "listeningQueue", "durations", "suggestionRecipes", "completionProvenance", "completionEvidence"]);
   assert.deepEqual(backup.listeningQueue, { ids: ["a"], resume: "a", durations: { a: 120000 } });
   assert.deepEqual(backup.durations, { a: 240000 });
   const validated = validateLocalBackup(backup, validateDocument);
@@ -316,6 +319,8 @@ test("backup exports the full local music set and explicit preference allowlist 
   assert.deepEqual(validated.manualOrder, ["a"]);
   assert.deepEqual(validated.listeningQueue, backup.listeningQueue);
   assert.deepEqual(validated.durations, backup.durations);
+  assert.deepEqual(validated.suggestionRecipes, []);
+  assert.deepEqual(backupReminderItems(backup)["album:a"], JSON.stringify(backup.albums[0]));
   for (const changed of [{ ...backup, token: "secret" }, { ...backup, version: 99 },
     { ...backup, preferences: { ...backup.preferences, drafts: {} } },
     { ...backup, preferences: { density: "invalid" } }, { ...backup, preferences: [] },
@@ -334,6 +339,85 @@ test("legacy collection backups remain importable without inventing queue data",
   assert.deepEqual(validated.manualOrder, ["a"]);
   assert.deepEqual(validated.listeningQueue, { ids: [], resume: "", durations: {} });
   assert.deepEqual(validated.durations, {});
+  assert.deepEqual(validated.suggestionRecipes, []);
+});
+
+test("backup version three validates and preserves recipes and local completion provenance only", () => {
+  const album = qosAlbum("a");
+  const music = {
+    suggestionRecipes: [{ name: "Jazz", criteria: {
+      tool: "lastfm", period: "30", start: "", end: "", exclusion: "none",
+      artistFilter: "", included: "", excluded: "", includedMode: "exact",
+      excludedMode: "exact", playlistArtists: 10, playlistTracks: 3,
+    } }],
+    completionProvenance: { a: { duration: { source: "manual", updated: "2026-11-06T10:00:00Z" } } },
+    completionEvidence: { a: { source: "Discogs", updated: "2026-11-06T10:00:00Z",
+      data: { discogs_votes: 5, discogs_sampled: true }, detail: "Campione fittizio" } },
+  };
+  const backup = createLocalBackup([album], {}, validateAlbum, music);
+  const restored = validateLocalBackup(backup, validateDocument);
+  assert.deepEqual(restored.suggestionRecipes, music.suggestionRecipes);
+  assert.deepEqual(restored.completionProvenance, music.completionProvenance);
+  assert.deepEqual(restored.completionEvidence, music.completionEvidence);
+  assert.throws(() => validateLocalBackup({ ...backup, suggestionRecipes: [{ name: "X", criteria: {} }] }, validateDocument));
+  assert.throws(() => validateLocalBackup({ ...backup, completionEvidence: { a: {
+    source: "Discogs", updated: "now", detail: "no", data: { access_token: "secret" },
+  } } }, validateDocument));
+});
+
+test("PWA backup records success only after an attested file close and verifies without writes", async () => {
+  const handlers = {}, writes = [], feedback = [], status = { textContent: "" };
+  const backup = { albums: [qosAlbum("a")], suggestionRecipes: [] };
+  const nodes = {
+    "#backupButton": { addEventListener: (_event, handler) => { handlers.backup = handler; } },
+    "#verifyBackupButton": { addEventListener() {} },
+    "#verifyBackupInput": { value: "", addEventListener: (_event, handler) => { handlers.verify = handler; } },
+    "#backupStatus": status,
+  };
+  const context = {
+    $: (selector) => nodes[selector],
+    state: { loadError: "" },
+    BACKUP_SUCCESS_KEY: "accord-backup-last-success-v1",
+    localBackupDocument: () => backup,
+    backupReminderHashes: async () => ({ "album:a": "digest" }),
+    updateBackupStatus: async () => {},
+    showFeedback: (message) => feedback.push(message),
+    localStorage: { setItem: (...args) => writes.push(args) },
+    window: {},
+    URL: { createObjectURL: () => "blob:local", revokeObjectURL() {} },
+    Blob,
+    document: { createElement: () => ({ click() {} }) },
+    setTimeout: (callback) => callback(),
+  };
+  runInNewContext(appFunction('$("#backupButton").addEventListener("click"', '\n$("#verifyBackupButton").addEventListener'), context);
+  await handlers.backup();
+  assert.match(status.textContent, /non può attestare il salvataggio/);
+  assert.equal(writes.length, 0, "a browser download is not reported as a verified save");
+
+  context.window.showSaveFilePicker = async () => ({
+    createWritable: async () => ({
+      write: async () => writes.push(["write"]),
+      close: async () => writes.push(["close"]),
+      abort: async () => {},
+    }),
+  });
+  await handlers.backup();
+  assert.deepEqual(writes.map(([key]) => key), ["write", "close", "accord-backup-last-success-v1"]);
+  assert.match(feedback.at(-1), /Backup locale scritto e chiuso con successo/);
+  assert.match(writes[2][1], /createdAt/);
+
+  runInNewContext(appFunction('$("#verifyBackupInput").addEventListener("change"', "\nfunction previewLocalRestore("), {
+    $: (selector) => nodes[selector],
+    validateLocalBackup: () => ({ albums: [qosAlbum("a")], suggestionRecipes: [] }),
+    validateDocument() {},
+    showFeedback() { assert.fail("Successful verification should not prompt or write"); },
+  });
+  await handlers.verify({ currentTarget: {
+    value: "backup.json", files: [{ size: 12, text: async () => JSON.stringify(backup) }],
+  } });
+  assert.equal(nodes["#verifyBackupInput"].value, "");
+  assert.match(status.textContent, /sola lettura/);
+  assert.equal(writes.length, 3, "file verification leaves the backup marker and local data untouched");
 });
 
 test("selective restore is a non-destructive ID merge and commits atomically only after successful storage", () => {
@@ -371,6 +455,8 @@ test("restore dialog previews selective writes, refuses concurrent edits, and ap
     prepareSelectiveRestore, validateAlbum, albumChanges, changesText: () => "preview", portablePreferences,
     commitLocalRestore, localStorage: { getItem() { return null; }, setItem() { writes += 1; } },
     LISTENING_QUEUE_KEY: "queue", ALBUM_DURATIONS_KEY: "durations", STORAGE_KEY: "state",
+    SUGGESTION_RECIPES_KEY: "recipes", COMPLETION_PROVENANCE_KEY: "provenance",
+    COMPLETION_EVIDENCE_KEY: "evidence",
     $: (selector) => nodes[selector], applyAccessibility() {}, updateLocalSyncSummary() {}, rememberLocalChanges() {}, render() {}, showFeedback() {} };
   const preview = runInNewContext(`${appFunction("function previewLocalRestore(", '\n$("#restoreBackupInput")')}\npreviewLocalRestore`, context);
   const backup = { albums: [qosAlbum("a", { rating: 4 }), qosAlbum("b")],
@@ -1522,24 +1608,72 @@ test("installable shell links resolve locally and are present in the offline cac
   }
 });
 
+test("actual Last.fm completion reads count only HTTP sends, not fresh cache hits", async () => {
+  const values = new Map(), cached = new Map();
+  let requests = 0, budget = 0;
+  const context = {
+    LASTFM_KEY: "key", LASTFM_COOLDOWN_KEY: "cooldown", LASTFM_REQUEST_AT_KEY: "at",
+    LASTFM_REQUEST_INTERVAL_MS: 1000, LASTFM_RESPONSE_CACHE_TTL: 60000,
+    LASTFM_RESPONSE_CACHE_METHODS: new Set(["album.gettoptags"]), lastFmPendingRequests: new Map(),
+    lastFmApiRequestQueue: Promise.resolve(), navigator: {}, URLSearchParams, Date,
+    localStorage: { getItem: (key) => key === "key" ? "synthetic" : values.get(key) || null,
+      setItem: (key, value) => values.set(key, value) },
+    lastFmResponseCache: { get: (key) => cached.get(key), set: (key, value) => cached.set(key, value) },
+    fetchLastFmResponse: async () => { requests += 1; return { toptags: { tag: [] } }; },
+  };
+  const request = runInNewContext(`${appFunction("async function lastFmRequest(", "\nasync function fetchLastFmResponse(")}\nlastFmRequest`, context);
+  const parameters = { method: "album.gettoptags", artist: "Band", album: "Album" };
+  await request(parameters, () => {}, () => { budget += 1; });
+  await request(parameters, () => {}, () => { budget += 1; });
+  assert.equal(requests, 1);
+  assert.equal(budget, 1);
+});
+
+test("actual Last.fm completion rechecks shared cooldown after pacing before counting or sending", async () => {
+  const values = new Map([["at", String(Date.now())]]);
+  let requests = 0, budget = 0;
+  const context = {
+    LASTFM_KEY: "key", LASTFM_COOLDOWN_KEY: "cooldown", LASTFM_REQUEST_AT_KEY: "at",
+    LASTFM_REQUEST_INTERVAL_MS: 1000, LASTFM_RESPONSE_CACHE_TTL: 60000,
+    LASTFM_RESPONSE_CACHE_METHODS: new Set(["album.gettoptags"]), lastFmPendingRequests: new Map(),
+    lastFmApiRequestQueue: Promise.resolve(), navigator: {}, URLSearchParams, Date,
+    localStorage: { getItem: (key) => key === "key" ? "synthetic" : values.get(key) || null,
+      setItem: (key, value) => values.set(key, value) },
+    lastFmResponseCache: { get() {} },
+    setTimeout: (callback) => { values.set("cooldown", String(Date.now() + 120000)); callback(); },
+    fetchLastFmResponse: async () => { requests += 1; return {}; },
+  };
+  const request = runInNewContext(`${appFunction("async function lastFmRequest(", "\nasync function fetchLastFmResponse(")}\nlastFmRequest`, context);
+  await assert.rejects(request({ method: "album.gettoptags" }, () => {}, () => { budget += 1; }), /Limite Last.fm attivo/);
+  assert.equal(requests, 0);
+  assert.equal(budget, 0);
+});
+
 test("offline shell versions include every local module and responsive dialogs keep native modality", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=102", "style.css?v=36"]) {
+  for (const file of ["app.mjs?v=105", "style.css?v=37"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=46", "ui.mjs?v=11", "tidal.mjs?v=7", "tidal-ui.mjs?v=19", "qobuz-ui.mjs?v=15",
-    "catalog-suggestions.mjs?v=3", "suggestions-ui.mjs?v=5", "music-qol.mjs?v=1", "playlist-ui.mjs?v=3",
-    "music-app-links.mjs?v=1", "music-continuity.mjs?v=1"]) {
+  for (const file of ["core.mjs?v=47", "ui.mjs?v=12", "tidal.mjs?v=9", "tidal-ui.mjs?v=22", "qobuz-ui.mjs?v=17",
+    "qobuz.mjs?v=8", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=6",
+    "music-qol.mjs?v=1", "playlist-ui.mjs?v=4",
+    "music-app-links.mjs?v=1", "music-continuity.mjs?v=1", "music-completion.mjs?v=2", "music-completion-ui.mjs?v=2"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
-  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=3"));
-  assert.ok(sw.includes("catalog-playlist.mjs?v=3"));
+  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=4"));
+  assert.ok(sw.includes("catalog-playlist.mjs?v=4"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
     assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
+  }
+  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=7"));
+  assert.ok(readFileSync(new URL("./suggestions-ui.mjs", import.meta.url), "utf8")
+    .includes("music-suggestion-recipes.mjs?v=1"));
+  for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
+    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("edition-comparison.mjs?v=1"));
   }
   assert.ok(sw.includes("music-suggestion-filters.mjs?v=1"));
   assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
@@ -2539,21 +2673,49 @@ test("validates only the supported Spotify album fields and rating range", () =>
   assert.throws(() => validateAlbum(album("abc", { rating: 4.2 })), /voto/);
 });
 
-test("requires an explicit choice for divergent edits to the same album", () => {
+test("field-wise merge preserves independent edits and asks only for true conflicts", () => {
   const base = album("abc");
   const local = album("abc", { rating: 4 });
   const remote = album("abc", { genres: ["Jazz"] });
   const merged = threeWayMerge([base], [local], [remote]);
-  assert.equal(merged.conflicts.length, 1);
-  assert.equal(merged.albums.length, 0);
-  assert.equal(threeWayMerge([base], [local], [remote], { abc: "local" }).albums[0].rating, 4);
-  assert.deepEqual(threeWayMerge([base], [local], [remote], { abc: "remote" }).albums[0].genres, ["Jazz"]);
+  assert.equal(merged.conflicts.length, 0);
+  assert.equal(merged.albums[0].rating, 4);
+  assert.deepEqual(merged.albums[0].genres, ["Jazz"]);
 
   const conflict = threeWayMerge([base], [local], [album("abc", { rating: 3 })]);
   assert.equal(conflict.albums.length, 0);
   assert.equal(conflict.conflicts[0].id, "abc");
-  assert.equal(threeWayMerge([base], [local], [album("abc", { rating: 3 })], { abc: "local" }).albums[0].rating, 4);
-  assert.equal(threeWayMerge([base], [local], [album("abc", { rating: 3 })], { abc: "remote" }).albums[0].rating, 3);
+  assert.deepEqual(conflict.conflicts[0].fields.map((field) => field.field), ["rating"]);
+  assert.equal(threeWayMerge([base], [local], [album("abc", { rating: 3 })],
+    { abc: { rating: "local" } }).albums[0].rating, 4);
+  assert.equal(threeWayMerge([base], [local], [album("abc", { rating: 3 })],
+    { abc: { rating: "remote" } }).albums[0].rating, 3);
+});
+
+test("note conflicts are archived locally before choice without collapsing missing and empty notes", () => {
+  const values = new Map(), writes = [];
+  const context = {
+    ALBUM_NOTE_CONFLICT_ARCHIVE_KEY: "notes-conflicts",
+    localStorage: {
+      getItem: (key) => values.get(key) || null,
+      setItem: (key, value) => { values.set(key, value); writes.push(value); },
+    },
+    redactDiagnostics,
+  };
+  const archive = runInNewContext(`${appFunction("function archiveAlbumNoteConflicts(", "\nasync function sync(")}\narchiveAlbumNoteConflicts`,
+    context);
+  const conflict = { id: "abc", fields: [{ field: "notes", base: null, local: "", remote: "GitHub note" }] };
+  assert.equal(archive([conflict], "sha-1"), 1);
+  const first = JSON.parse(values.values().next().value);
+  assert.deepEqual(first[0].base, { present: false, value: "" });
+  assert.deepEqual(first[0].device, { present: true, value: "" });
+  assert.deepEqual(first[0].github, { present: true, value: "GitHub note" });
+  assert.equal(archive([conflict], "sha-1"), 0);
+  assert.equal(writes.length, 1, "an existing version is never overwritten");
+  assert.throws(() => archive([{ id: "abc", fields: [
+    { field: "notes", base: null, local: "access_token=secret", remote: "other" },
+  ] }], "sha-2"), /credenziale/);
+  assert.equal(writes.length, 1);
 });
 
 test("merges independent additions without propagating deletions", () => {

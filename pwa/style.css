@@ -261,6 +261,11 @@ body.manual-sort-dragging { user-select: none; }
   #albumDetailsDialog { width: min(680px, calc(100% - 40px)); }
 }
 dialog { box-sizing: border-box; width: min(620px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); overflow-x: hidden; overflow-y: auto; padding: 24px; color: #f2f2f2; background: var(--surface); border: 1px solid #404040; border-radius: 16px; }
+.album-comparison-dialog { width: min(980px, calc(100vw - 24px)); }
+.edition-comparison-table { max-width: 100%; }
+.edition-comparison-table table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: .8125rem; }
+.edition-comparison-table th, .edition-comparison-table td { padding: 8px; border: 1px solid var(--border); text-align: left; overflow-wrap: anywhere; }
+.edition-comparison-table tbody th { width: 140px; }
 dialog::backdrop { background: rgb(0 0 0 / 72%); }
 dialog form { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0; width: 100%; min-width: 0; max-height: calc(100dvh - 72px); overflow: hidden; }
 dialog form > * { min-width: 0; }

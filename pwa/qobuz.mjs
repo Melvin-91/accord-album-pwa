@@ -47,6 +47,10 @@ export function qobuzAlbum(value) {
       year: String(value.release_date_original || value.release_date_stream || value.dates?.original || value.dates?.stream || "").slice(0, 4),
       status: "queued", rating: null, genres: [], primary_genre: "", collections: [], tags: [], cover_sha256: null },
     coverUrl,
+    edition: {
+      ...(Number.isSafeInteger(value.tracks_count) && value.tracks_count >= 0 ? { track_count: value.tracks_count } : {}),
+      ...(Number.isSafeInteger(value.duration) && value.duration >= 0 ? { duration_seconds: value.duration } : {}),
+    },
   };
 }
 
@@ -92,7 +96,7 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
   function check() {
     if (!active()) throw new Error("Servizio musicale cambiato o account modificato: richiesta Qobuz interrotta.");
   }
-  async function send(path, { params, data } = {}) {
+  async function send(path, { params, data, beforeRead } = {}) {
     if (!["album/search", "album/get", "album/suggest", "favorite/getUserFavorites", "favorite/create", "favorite/delete",
       "playlist/getUserPlaylists", "playlist/get", "playlist/create", "playlist/update", "playlist/delete",
       "playlist/addTracks", "playlist/deleteTracks", "playlist/updateTracksPosition"].includes(path)) {
@@ -121,10 +125,11 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
           clearTimeout(timeout);
           signal?.removeEventListener("abort", abort);
         }
-      }, { read: !write, signal, check });
+      }, { read: !write, signal, check, beforeSend: !write ? beforeRead : undefined });
     } catch (error) {
       check();
       signal?.throwIfAborted();
+      if (beforeRead) throw error;
       if (/Retry-After|Stato richieste/.test(error.message)) throw error;
       throw new Error("Connessione Qobuz non riuscita." + (write ? " Esito incerto: verifica su Qobuz." : ""));
     }
@@ -204,10 +209,10 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
       const page = itemsPage(result, "tracks", offset), tracks = page.items.map((row) => qobuzTrack(row));
       return { playlist, tracks, offset, total: page.total, next: offset + tracks.length < page.total ? offset + tracks.length : null };
     },
-    albumTracks: async (value, offset = 0) => {
+    albumTracks: async (value, offset = 0, beforeRead) => {
       validOffset(offset);
       const id = qobuzAlbumId(value);
-      const result = await send("album/get", { params: { album_id: id, limit: QOBUZ_PAGE_SIZE, offset } });
+      const result = await send("album/get", { params: { album_id: id, limit: QOBUZ_PAGE_SIZE, offset }, beforeRead });
       const album = qobuzAlbum(result);
       if (album.album.id !== `qobuz:${id}`) throw new Error("Qobuz ha restituito un album diverso.");
       const page = itemsPage(result, "tracks", offset), tracks = page.items.map((row) => qobuzTrack(row, album));

@@ -1,8 +1,9 @@
-import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=6";
-import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=5";
+import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=8";
+import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=7";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 import { bindPauseNotice } from "./music-continuity.mjs?v=1";
+import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
 const UNCERTAIN = "accord-qobuz-write-uncertain-v1";
@@ -122,6 +123,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       const item = element("article", "", { class: "suggestion-album tidal-album-result" });
       const choice = element("label", "", { class: "tidal-album-choice" });
       const check = element("input", "", { type: "checkbox", "aria-label": `Seleziona ${row.album.name}` });
+      const compareCheck = element("input", "", { type: "checkbox", "aria-label": `Confronta ${row.album.name}` });
       const text = element("span");
       text.append(element("strong", row.album.name),
         element("span", `${row.album.artist} · ${row.album.year || "Anno sconosciuto"}`, { class: "suggestion-detail" }));
@@ -130,6 +132,13 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
           referrerpolicy: "no-referrer", class: "suggestion-cover" }));
       }
       choice.prepend(check); choice.append(text); item.append(choice);
+      const compare = element("label", "Confronta", { class: "check" });
+      if (editionSelection) {
+        compare.prepend(compareCheck); item.append(compare);
+        compareCheck.addEventListener("change", () => {
+          compareEditionsButton.disabled = rows.filter((entry) => entry.compareCheck.checked).length < 2;
+        });
+      }
       item.append(configureMusicAppLink(element("a", "Apri in Qobuz ↗", { class: "tidal-result-link" }),
         row.album.url, { query: `${row.album.artist} ${row.album.name}`,
           report: (message) => { status.textContent = message; } }));
@@ -137,9 +146,9 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       button(item, "Usa per playlist", () => useAlbum(row.album, "playlists"), false);
       if (editionSelection) button(item, "Associa questa edizione", () => {
         if (!editionSelection) { status.textContent = "Apri Associa edizione dalla raccolta prima di scegliere."; return; }
-        const callback = editionSelection; editionSelection = null; callback(row.album);
+        const callback = editionSelection; editionSelection = null; compareEditionsButton.hidden = true; callback(row.album);
       }, false);
-      results.append(item); rows.push({ ...row, check });
+      results.append(item); rows.push({ ...row, check, compareCheck });
     }
     status.textContent = `Qobuz: ${rows.length} risultati da ${offset + 1}, totale ${page.total}. `
       + "Seleziona gli album; le altre pagine restano disponibili.";
@@ -154,6 +163,14 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   }
   const selected = () => rows.filter((row) => row.check.checked);
   const actions = element("div", "", { class: "tidal-actions" });
+  const compareEditionsButton = button(actions, "Confronta edizioni selezionate (2–4)", () => {
+    try {
+      const editions = rows.filter((row) => row.compareCheck.checked);
+      showEditionComparison(editions.map((row) => ({ ...row.album, ...row.edition })), "qobuz");
+    } catch (error) { status.textContent = error.message; }
+  });
+  compareEditionsButton.hidden = true;
+  compareEditionsButton.disabled = true;
   button(actions, "Importa selezionati in Accord", () => run(async (guard) => {
     const chosen = selected();
     if (!chosen.length) throw new Error("Seleziona almeno un album.");
@@ -737,6 +754,8 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   let editionSelection = null;
   function openCatalog(value = "", selection = null) {
     editionSelection = selection;
+    compareEditionsButton.hidden = !selection;
+    compareEditionsButton.disabled = true;
     gate.assert("qobuz");
     selectView("collection");
     section.open = true;
@@ -807,7 +826,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     },
     batchSize: 100,
     preflight: async () => { gate.assert("qobuz"); client(); },
-    albumTracks: (id, offset = 0) => client().albumTracks(id, offset),
+    albumTracks: (id, offset = 0, beforeRead) => client().albumTracks(id, offset, beforeRead),
     create: (name) => client().createPlaylist(name, "Creata da Accord · nuovi artisti e album verificati"),
     add: (id, tracks) => client().addPlaylistTracks(id, tracks),
     management: openPlaylists,

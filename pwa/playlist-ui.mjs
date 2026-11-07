@@ -1,4 +1,4 @@
-import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=3";
+import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=4";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=1";
 
 export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView,
@@ -24,6 +24,14 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
   const parameters = () => inputs.map((input) => input.value);
   const durableCriteria = () => JSON.stringify([gate.service, inputs.slice(0, 2).map((input) => input.value),
     discoveryUI.playlistDurableSignature(), [...excludedReferences]]);
+  window.addEventListener("accord:discovery-criteria-changed", () => {
+    clearCheckpoint(localStorage, gate.service);
+    reset();
+    status.textContent = "Criteri di suggerimento o playlist cambiati. Genera una nuova anteprima.";
+  });
+  for (const input of inputs.slice(0, 2)) input.addEventListener("change", () => {
+    window.dispatchEvent(new CustomEvent("accord:discovery-criteria-changed"));
+  });
   async function identity() { return fingerprint(await api().identity()); }
   inputs[2].addEventListener("input", () => {
     try { persist(); } catch (error) { status.textContent = `Parametri non conservati: ${error.message}`; }
