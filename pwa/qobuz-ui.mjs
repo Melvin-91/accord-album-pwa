@@ -2,7 +2,7 @@ import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } fro
 import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=7";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=1";
+import { bindPauseNotice } from "./music-continuity.mjs?v=3";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
@@ -848,5 +848,5 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     [playlistStatus, () => playlistNext !== null ? "Pagina successiva legge la pagina seguente della playlist o dell'album."
       : "potrai rileggere la playlist o l'album; Continua riprende le letture mancanti dell'anteprima."],
   ]) bindPauseNotice(anchor, { storage: localStorage, provider: () => "qobuz", describe });
-  return { setActive, openCatalog, openPlaylists, suggestionAPI, playlistAPI };
+  return { setActive, openCatalog, openPlaylists, suggestionAPI, playlistAPI, isBusy: () => busy };
 }

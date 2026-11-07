@@ -1,27 +1,28 @@
-const CACHE = "accord-album-pwa-v1.17.0";
+const CACHE = "accord-album-pwa-v1.18.0";
 const FILES = [
   "./",
   "./index.html",
   "./style.css?v=37",
-  "./core.mjs?v=47",
-  "./ui.mjs?v=12",
-  "./app.mjs?v=105",
+  "./core.mjs?v=48",
+  "./ui.mjs?v=15",
+  "./app.mjs?v=108",
+  "./runtime-status.mjs?v=1",
   "./tidal.mjs?v=9",
-  "./tidal-ui.mjs?v=22",
+  "./tidal-ui.mjs?v=24",
   "./qobuz.mjs?v=8",
   "./qobuz-playback.mjs?v=7",
-  "./qobuz-ui.mjs?v=17",
+  "./qobuz-ui.mjs?v=19",
   "./service-requests.mjs?v=2",
   "./catalog-suggestions.mjs?v=4",
-  "./suggestions-ui.mjs?v=6",
+  "./suggestions-ui.mjs?v=9",
   "./music-suggestion-recipes.mjs?v=1",
   "./edition-comparison.mjs?v=1",
-  "./music-qol.mjs?v=1",
-  "./music-completion.mjs?v=2",
-  "./music-completion-ui.mjs?v=2",
+  "./music-qol.mjs?v=2",
+  "./music-completion.mjs?v=5",
+  "./music-completion-ui.mjs?v=5",
   "./catalog-playlist.mjs?v=4",
-  "./playlist-ui.mjs?v=4",
-  "./music-continuity.mjs?v=1",
+  "./playlist-ui.mjs?v=6",
+  "./music-continuity.mjs?v=3",
   "./music-app-links.mjs?v=1",
   "./music-suggestion-filters.mjs?v=1",
   "./manifest.json",
@@ -37,10 +38,8 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(caches.keys().then((keys) => Promise.all(
-    keys.filter((key) => key.startsWith("accord-album-pwa-") && key !== CACHE)
-      .map((key) => caches.delete(key)),
-  )).then(() => self.clients.claim()));
+  // Other tabs keep their loaded app until they explicitly confirm a restart.
+  event.waitUntil(self.clients.claim());
 });
 
 self.addEventListener("message", (event) => {
@@ -55,6 +54,14 @@ self.addEventListener("message", (event) => {
   }).catch((error) => event.ports[0].postMessage({ error: error.message })));
 });
 
+async function previousAsset(request) {
+  for (const key of await caches.keys()) {
+    if (!key.startsWith("accord-album-pwa-") || key === CACHE) continue;
+    const asset = await (await caches.open(key)).match(request);
+    if (asset) return asset;
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -63,6 +70,7 @@ self.addEventListener("fetch", (event) => {
     const shellNavigation = request.mode === "navigate"
       && [new URL("./", self.location.href).pathname, new URL("./index.html", self.location.href).pathname].includes(url.pathname);
     const cached = await cache.match(request)
+      || (request.mode !== "navigate" ? await previousAsset(request) : null)
       || (shellNavigation ? await cache.match("./index.html") : null);
     return cached || fetch(request).then((response) => {
       if (response.ok) {

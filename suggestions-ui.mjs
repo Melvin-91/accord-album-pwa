@@ -1,7 +1,7 @@
 import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=4";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice, clearCheckpoint } from "./music-continuity.mjs?v=1";
-import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=1";
+import { bindPauseNotice, clearCheckpoint } from "./music-continuity.mjs?v=3";
+import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=2";
 import { validateSuggestionCriteria, validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=1";
 
 const node = (tag, text = "") => {
@@ -549,7 +549,7 @@ export function initializeCatalogSuggestionsUI({
     excludedAlbums = new Set(saved.excludedAlbums);
     persist(); reset();
   }
-  return { configure, run, playlistSource, restorePlaylistSource,
+  return { configure, run, playlistSource, restorePlaylistSource, isBusy: () => busy,
     playlistParameters: () => ({ settings: Object.fromEntries(Object.entries(playlistControls).map(([key, input]) => [key, input.value])),
       excludedAlbums: [...excludedAlbums] }),
     restorePlaylistParameters,

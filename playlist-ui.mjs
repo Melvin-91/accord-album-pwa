@@ -1,5 +1,5 @@
 import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=4";
-import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=1";
+import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=3";
 
 export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView,
   spotifyPreview = () => null }) {
@@ -305,5 +305,5 @@ export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, rend
   window.addEventListener("pagehide", () => clearTimeout(pauseTimer));
   window.addEventListener("pageshow", updatePause);
   configure();
-  return { configure, run, create, prepareRecords };
+  return { configure, run, create, prepareRecords, isBusy: () => busy };
 }

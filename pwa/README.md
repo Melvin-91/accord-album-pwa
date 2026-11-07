@@ -2,7 +2,8 @@
 
 ## Stato corrente e gerarchia
 
-Rivisto il 7 novembre 2026. **PWA 1.17.0**, pacchetto di rilascio per
+Rivisto il 7 novembre 2026. **PWA 1.18.0 locale, non ancora pubblicata**;
+online resta la 1.17.0 su
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Questa consegna comprende completamento dati mirato, spiegazione delle
@@ -34,6 +35,23 @@ note su limiti o disponibilita' si riferiscono alla versione indicata.
 Lo stato corrente prevale sui vecchi annunci. Le release 1.15.0-1.15.3
 sono incluse nella 1.15.4 pubblicata. La revisione della documentazione
 nel workspace non provoca un nuovo deployment.
+
+## Nel workspace · Aggiornamenti e persistenza chiari
+
+QoL 6/7 implementati, non ancora pubblicati; prodotto e cache restano
+1.17.0 fino al bump coordinato. **App attiva v...** indica la versione
+caricata. **Nuova versione pronta** arriva dal lifecycle SW esistente:
+riavvio su conferma, rinvio durante bozze/operazioni e nessun reload
+automatico da controllerchange o attivazione in un'altra scheda.
+Errori di persistenza o attivazione non diventano successi fittizi.
+
+Il riepilogo distingue raccolta salvata nel browser, modifiche non
+salvate, differenze musicali dalla base locale e disponibilita' GitHub
+non verificata. Offline non e' un errore dei dati; rete rilevata non
+certifica i singoli servizi. Nessun nuovo fetch diagnostico, auto-sync,
+autoplay, chiave persistente o formato remoto. Le cache precedenti
+restano per gli asset delle schede aperte: prima di pulire i dati del
+sito nel browser, crea un backup.
 
 ## PWA 1.16.0 · Continuita', confronto e coda locale
 

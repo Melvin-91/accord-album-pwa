@@ -1607,7 +1607,7 @@ export function filterAlbums(albums, {
   search = "", genre = "", primaryGenre = "", secondaryGenre = "",
   status = "", collection = "", tag = "", order = "artist",
 } = {}) {
-  const query = search.trim().toLocaleLowerCase();
+  const terms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   const legacyGenre = normalizeAlbumGenre(genre);
   const result = albums.filter((album) => (!status || album.status === status)
     && (!legacyGenre || album.genres.some((value) => normalizeAlbumGenre(value) === legacyGenre))
@@ -1618,8 +1618,8 @@ export function filterAlbums(albums, {
       : albumSecondaryGenres(album).some((value) => normalizeAlbumGenre(value) === normalizeAlbumGenre(secondaryGenre))))
     && (!collection || album.collections.some((value) => value.toLocaleLowerCase() === collection))
     && (!tag || album.tags.some((value) => value.toLocaleLowerCase() === tag))
-    && (!query || [album.name, album.artist, ...album.genres, ...album.collections, ...album.tags]
-      .join(" ").toLocaleLowerCase().includes(query)));
+    && terms.every((term) => [album.name, album.artist, album.notes || "", ...album.genres, ...album.collections, ...album.tags]
+      .join(" ").toLocaleLowerCase().includes(term)));
   const key = ["artist", "name", "year", "rating", "genre", "collection", "manual"].includes(order)
     ? order : "artist";
   if (key === "manual") return result;

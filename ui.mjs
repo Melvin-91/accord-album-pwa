@@ -92,6 +92,216 @@ export function albumChanges(before, after) {
   });
 }
 
+const HISTORY_LIMIT = 200;
+const COLLECTION_STORAGE_KEY = "accord-album-pwa-v1";
+const EDITION_LINKS_KEY = "accord-music-edition-links-v1";
+const HISTORY_STORAGE_LABELS = {
+  "accord-listening-album-durations-v1": "durata",
+  "accord-music-edition-links-v1": "associazione edizione",
+  "accord-music-completion-provenance-v1": "provenienza dati",
+  "accord-music-completion-evidence-v1": "evidenze",
+};
+const sameValue = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+
+function historyAlbum(album) {
+  const record = { ...album };
+  const id = String(record.id || "");
+  record.url = id.startsWith("tidal:") && /^tidal:[1-9][0-9]*$/.test(id)
+    ? `https://tidal.com/browse/album/${id.slice(6)}`
+    : id.startsWith("qobuz:") && /^qobuz:[A-Za-z0-9]{1,120}$/.test(id)
+      ? `https://play.qobuz.com/album/${id.slice(6)}`
+      : id.startsWith("mb:") && /^mb:[0-9a-f-]{36}$/i.test(id)
+        ? `https://musicbrainz.org/release-group/${id.slice(3)}`
+        : /^[A-Za-z0-9]+$/.test(id) ? `https://open.spotify.com/album/${id}` : "";
+  return record;
+}
+
+export function createCollectionHistoryEntry(before, after, label, now = new Date().toISOString(),
+  storageChanges = []) {
+  const old = new Map(before.map((album, index) => [album.id, { album: historyAlbum(album), index }]));
+  const next = new Map(after.map((album, index) => [album.id, { album: historyAlbum(album), index }]));
+  const changes = [...new Set([...old.keys(), ...next.keys()])].sort().flatMap((id) => {
+    const left = old.get(id), right = next.get(id);
+    if (!left || !right) return [{
+      id, kind: left ? "removed" : "added", fields: ["album"],
+      before: left?.album ?? null, after: right?.album ?? null,
+      beforeIndex: left?.index ?? null, afterIndex: right?.index ?? null,
+    }];
+    const fields = albumFieldChanges(left.album, right.album);
+    return fields.length ? [{
+      id, kind: "updated", fields,
+      before: left.album, after: right.album,
+      beforeIndex: left.index, afterIndex: right.index,
+    }] : [];
+  });
+  return changes.length || storageChanges.length
+    ? { id: crypto.randomUUID(), createdAt: now, label, changes, storageChanges } : null;
+}
+
+export function appendCollectionHistory(history, entry) {
+  if (!entry) return Array.isArray(history) ? history : [];
+  return [...(Array.isArray(history) ? history : []), entry].slice(-HISTORY_LIMIT);
+}
+
+export function prepareCollectionHistoryRestore(albums, entry, editionLinks = {}, storedRecords = {}) {
+  if (!entry || !Array.isArray(entry.changes) || !Array.isArray(entry.storageChanges)
+      || !entry.changes.length && !entry.storageChanges.length) {
+    throw new Error("Voce di cronologia non valida.");
+  }
+  const next = albums.map((album) => ({ ...album }));
+  const indexes = new Map(next.map((album, index) => [album.id, index]));
+  const touched = new Set();
+  for (const change of entry.changes) {
+    touched.add(change.id);
+    const currentIndex = indexes.get(change.id);
+    const current = currentIndex === undefined ? null : next[currentIndex];
+    if (change.kind === "added") {
+      if (!current || !sameValue(current, change.after)) {
+        throw new Error(`L'album ${change.id} è cambiato dopo l'operazione. Nessun ripristino applicato.`);
+      }
+    } else if (change.kind === "removed") {
+      if (current) throw new Error(`L'ID ${change.id} è già presente. Nessun ripristino applicato.`);
+    } else if (change.kind === "updated") {
+      if (!current || change.fields.some((field) => !sameValue(current[field], change.after[field]))) {
+        throw new Error(`Il campo di ${change.id} è cambiato dopo l'operazione. Nessun ripristino applicato.`);
+      }
+    } else throw new Error("Tipo di modifica storica non valido.");
+  }
+  for (const change of entry.changes.filter((row) => row.kind === "added")
+    .sort((left, right) => (indexes.get(right.id) ?? -1) - (indexes.get(left.id) ?? -1))) {
+    next.splice(next.findIndex((album) => album.id === change.id), 1);
+  }
+  for (const change of entry.changes.filter((row) => row.kind === "removed")
+    .sort((left, right) => (left.beforeIndex ?? next.length) - (right.beforeIndex ?? next.length))) {
+    next.splice(Math.min(change.beforeIndex ?? next.length, next.length), 0, { ...change.before });
+  }
+  for (const change of entry.changes.filter((row) => row.kind === "updated")) {
+    const album = next.find((record) => record.id === change.id);
+    for (const field of change.fields) {
+      if (Object.hasOwn(change.before, field)) album[field] = change.before[field];
+      else delete album[field];
+    }
+  }
+  const storageUpdates = {};
+  for (const change of entry.storageChanges) {
+    const rawRecords = storedRecords[change.storageKey];
+    const records = rawRecords && typeof rawRecords === "object" && !Array.isArray(rawRecords) ? rawRecords : {};
+    const currentPresent = Object.hasOwn(records, change.id);
+    if (currentPresent !== change.afterPresent
+        || currentPresent && !sameValue(records[change.id], change.after)) {
+      throw new Error(`Il campo ${change.field} di ${change.id} è cambiato dopo l'operazione. Nessun ripristino applicato.`);
+    }
+    storageUpdates[change.storageKey] ||= { ...records };
+    if (change.beforePresent) storageUpdates[change.storageKey][change.id] = change.before;
+    else delete storageUpdates[change.storageKey][change.id];
+    touched.add(change.id);
+  }
+  const restoredLinks = storageUpdates[EDITION_LINKS_KEY] || editionLinks;
+  for (const album of next.filter((record) => touched.has(record.id))) {
+    const links = restoredLinks?.[album.id];
+    if (!links || typeof links !== "object" || Array.isArray(links)) continue;
+    for (const [provider, link] of Object.entries(links)) {
+      if (!link || link.source !== JSON.stringify([album.id, album.artist, album.name])) {
+        throw new Error(`Il ripristino renderebbe obsoleta l'associazione ${provider} di ${album.id}.`);
+      }
+    }
+  }
+  const restoredProvenance = storageUpdates["accord-music-completion-provenance-v1"]
+    || storedRecords["accord-music-completion-provenance-v1"] || {};
+  for (const id of touched) {
+    const album = next.find((record) => record.id === id);
+    for (const category of Object.values(restoredProvenance[id] || {})) {
+      if (category?.identity && !sameValue(category.identity, [id, album?.artist, album?.name])) {
+        throw new Error(`Il ripristino renderebbe obsoleta la provenienza dati di ${id}.`);
+      }
+      if (category?.target && category.target !== id && ["tidal", "qobuz"].includes(category.source)
+          && restoredLinks?.[id]?.[category.source]?.id !== category.target) {
+        throw new Error(`Il ripristino renderebbe obsoleta l'associazione di ${id}.`);
+      }
+    }
+  }
+  return { albums: next, storageUpdates };
+}
+
+export function collectionHealthSummary(albums, {
+  rawAlbums = albums, durations = {}, editionLinks = {}, completionProvenance = {}, completionEvidence = {},
+} = {}) {
+  const byId = new Map(albums.filter((album) => typeof album?.id === "string")
+    .map((album) => [album.id, album]));
+  const malformedLinkIds = [];
+  for (const [index, album] of rawAlbums.entries()) {
+    const id = typeof album?.id === "string" ? album.id : `record#${index + 1}`;
+    let valid = false;
+    try {
+      const url = new URL(album?.url);
+      if (url.protocol === "https:" && !url.username && !url.password) {
+        if (id.startsWith("tidal:")) {
+          valid = /^tidal:[1-9][0-9]*$/.test(id) && url.host === "tidal.com"
+            && url.pathname === `/browse/album/${id.slice(6)}` && !url.search && !url.hash;
+        } else if (id.startsWith("qobuz:")) {
+          valid = /^qobuz:[A-Za-z0-9]{1,120}$/.test(id) && url.host === "play.qobuz.com"
+            && url.pathname === `/album/${id.slice(6)}` && !url.search && !url.hash;
+        } else if (id.startsWith("mb:")) {
+          valid = /^mb:[0-9a-f-]{36}$/i.test(id) && url.host === "musicbrainz.org"
+            && url.pathname === `/release-group/${id.slice(3)}` && !url.search && !url.hash;
+        } else if (id.startsWith("ann:")) valid = Boolean(url.host);
+        else valid = /^[A-Za-z0-9]+$/.test(id) && url.host === "open.spotify.com"
+          && url.pathname === `/album/${id}` && !url.search && !url.hash;
+      }
+    } catch { /* Invalid local URL is reported below. */ }
+    if (!valid) malformedLinkIds.push(id);
+  }
+
+  const malformedEditionIds = new Set(), incoherentEditionIds = new Set();
+  if (!editionLinks || typeof editionLinks !== "object" || Array.isArray(editionLinks)) {
+    malformedEditionIds.add("registro associazioni non leggibile");
+  } else for (const [id, providers] of Object.entries(editionLinks)) {
+    const album = byId.get(id);
+    if (!providers || typeof providers !== "object" || Array.isArray(providers)) {
+      malformedEditionIds.add(id);
+      continue;
+    }
+    for (const [provider, record] of Object.entries(providers)) {
+      const validId = provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(record?.id || "")
+        : provider === "qobuz" && /^qobuz:[A-Za-z0-9]{1,120}$/.test(record?.id || "");
+      if (!validId || typeof record?.source !== "string") malformedEditionIds.add(id);
+      else if (!album || record.source !== JSON.stringify([id, album.artist, album.name])) incoherentEditionIds.add(id);
+    }
+  }
+
+  const staleDerivedIds = new Set();
+  const provenance = completionProvenance && typeof completionProvenance === "object"
+    && !Array.isArray(completionProvenance) ? completionProvenance : {};
+  for (const [id, categories] of Object.entries(provenance)) {
+    const album = byId.get(id);
+    if (!album || !categories || typeof categories !== "object" || Array.isArray(categories)) {
+      staleDerivedIds.add(id);
+      continue;
+    }
+    for (const record of Object.values(categories)) {
+      if (!record || typeof record !== "object"
+          || record.identity && !sameValue(record.identity, [id, album.artist, album.name])) {
+        staleDerivedIds.add(id);
+        continue;
+      }
+      if (record.target && record.target !== id && ["tidal", "qobuz"].includes(record.source)
+          && editionLinks?.[id]?.[record.source]?.id !== record.target) staleDerivedIds.add(id);
+    }
+  }
+  if (completionEvidence && typeof completionEvidence === "object" && !Array.isArray(completionEvidence)) {
+    for (const id of Object.keys(completionEvidence)) if (!byId.has(id)) staleDerivedIds.add(id);
+  }
+  const durationValues = durations && typeof durations === "object" && !Array.isArray(durations) ? durations : {};
+  return {
+    malformedLinkIds: [...new Set(malformedLinkIds)].sort(),
+    malformedEditionIds: [...malformedEditionIds].sort(),
+    incoherentEditionIds: [...incoherentEditionIds].sort(),
+    missingDurationIds: [...byId.keys()].filter((id) => !Number.isSafeInteger(durationValues[id])
+      || durationValues[id] <= 0).sort(),
+    staleDerivedIds: [...staleDerivedIds].sort(),
+  };
+}
+
 export function smartAlbumMatch(key, album, changedAt = {}, now = Date.now()) {
   const changed = Date.parse(changedAt[album.id] || "");
   const listened = ["liked", "neutral", "disliked"].includes(album.status);
@@ -172,11 +382,14 @@ export function prepareAlbumReview(albums, ids, transform) {
   const next = albums.map((album) => ids.has(album.id) ? transform(album) : album);
   const changes = albumChanges(albums, next);
   return { snapshot: JSON.stringify(albums), next, changes,
+    selectedIds: [...ids],
     selected: selected.length, changed: changes.length, unchanged: selected.length - changes.length };
 }
 
-export function assertAlbumReviewCurrent(review, albums) {
-  if (!review || review.snapshot !== JSON.stringify(albums)) {
+export function assertAlbumReviewCurrent(review, albums, persisted) {
+  if (!review || review.snapshot !== JSON.stringify(albums)
+      || persisted !== undefined && review.snapshot !== JSON.stringify(
+        persisted === null ? [] : JSON.parse(persisted)?.albums)) {
     throw new Error("La raccolta è cambiata. Rigenera l'anteprima prima di confermare.");
   }
 }
@@ -522,11 +735,58 @@ export function prepareSelectiveRestore(current, backup, ids, validate) {
   return [...next.values()];
 }
 
-export function commitLocalRestore(storage, key, current, next, related = {}) {
-  const writes = [[key, JSON.stringify(next)]];
-  for (const [relatedKey, value] of Object.entries(related)) {
-    writes.push([relatedKey, value === null ? null : JSON.stringify(value)]);
+export function commitLocalRestore(storage, key, current, next, related = {}, historyLabel = "Modifica locale raccolta",
+  normalize = (albums) => albums) {
+  const savedCollection = JSON.parse(storage.getItem(COLLECTION_STORAGE_KEY) || "{}");
+  const collectionWrite = key === COLLECTION_STORAGE_KEY;
+  if (collectionWrite && (Object.hasOwn(current, "albums")
+      && JSON.stringify(normalize(current.albums)) !== JSON.stringify(normalize(savedCollection.albums || []))
+      || Object.hasOwn(current, "base")
+      && JSON.stringify(normalize(current.base)) !== JSON.stringify(normalize(savedCollection.base || [])))) {
+    throw new Error("La raccolta o la base salvata e' cambiata. Riapri l'anteprima: nessun dato locale sovrascritto.");
   }
+  const historyChanges = [];
+  const candidateRecords = { ...related };
+  if (HISTORY_STORAGE_LABELS[key]) candidateRecords[key] = next;
+  for (const [recordKey, updated] of Object.entries(candidateRecords)) {
+    if (!HISTORY_STORAGE_LABELS[recordKey]) continue;
+    const previous = JSON.parse(storage.getItem(recordKey) || "{}");
+    const beforeRecords = previous && typeof previous === "object" && !Array.isArray(previous) ? previous : {};
+    const afterRecords = updated && typeof updated === "object" && !Array.isArray(updated) ? updated : {};
+    for (const id of new Set([...Object.keys(beforeRecords), ...Object.keys(afterRecords)])) {
+      const beforePresent = Object.hasOwn(beforeRecords, id), afterPresent = Object.hasOwn(afterRecords, id);
+      if (beforePresent === afterPresent && (!beforePresent || sameValue(beforeRecords[id], afterRecords[id]))) continue;
+      historyChanges.push({ storageKey: recordKey, id, field: HISTORY_STORAGE_LABELS[recordKey],
+        beforePresent, before: beforeRecords[id] ?? null,
+        afterPresent, after: afterRecords[id] ?? null });
+    }
+  }
+  const beforeAlbums = Array.isArray(savedCollection.albums) ? savedCollection.albums : [];
+  const afterAlbums = collectionWrite && Array.isArray(next.albums) ? next.albums : beforeAlbums;
+  const entry = historyLabel !== null && (key === COLLECTION_STORAGE_KEY || historyChanges.length)
+    ? createCollectionHistoryEntry(beforeAlbums, afterAlbums, historyLabel, new Date().toISOString(), historyChanges)
+    : null;
+  if (collectionWrite && historyLabel === null) {
+    next = { ...next, collectionHistory: savedCollection.collectionHistory || [] };
+  }
+  if (entry) {
+    let history = Array.isArray(savedCollection.collectionHistory) ? savedCollection.collectionHistory : [];
+    if (collectionWrite && Array.isArray(next.collectionHistory)) {
+      const marked = new Map(next.collectionHistory.filter((row) => row?.restoredAt).map((row) => [row.id, row.restoredAt]));
+      history = history.map((row) => marked.has(row.id) ? { ...row, restoredAt: marked.get(row.id) } : row);
+    }
+    history = appendCollectionHistory(history, entry);
+    if (collectionWrite) next = { ...next, collectionHistory: history };
+    else candidateRecords[COLLECTION_STORAGE_KEY] = { ...savedCollection, collectionHistory: history };
+  }
+  const writesByKey = new Map([[key, JSON.stringify(next)]]);
+  for (const [relatedKey, value] of Object.entries(related)) {
+    writesByKey.set(relatedKey, value === null ? null : JSON.stringify(value));
+  }
+  if (!collectionWrite && Object.hasOwn(candidateRecords, COLLECTION_STORAGE_KEY)) {
+    writesByKey.set(COLLECTION_STORAGE_KEY, JSON.stringify(candidateRecords[COLLECTION_STORAGE_KEY]));
+  }
+  const writes = [...writesByKey];
   const originals = writes.map(([writeKey]) => [
     writeKey, typeof storage.getItem === "function" ? storage.getItem(writeKey) : undefined,
   ]);
@@ -540,9 +800,8 @@ export function commitLocalRestore(storage, key, current, next, related = {}) {
   } catch (error) {
     let rollbackError = null;
     for (const [writeKey, value] of originals.slice(0, written).reverse()) {
-      if (value === undefined) continue;
       try {
-        if (value === null) storage.removeItem(writeKey);
+        if (value === undefined || value === null) storage.removeItem(writeKey);
         else storage.setItem(writeKey, value);
       } catch (failure) { rollbackError ||= failure; }
     }

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { tidalAlbumId } from "./tidal.mjs";
 import { fingerprint } from "./music-continuity.mjs";
+import { createUpdateLifecycle, localCollectionStatus, serviceFailure } from "./runtime-status.mjs";
 import {
   buildSimilarityQueue,
   resolveArtistFromTracks,
@@ -429,13 +430,22 @@ test("selective restore is a non-destructive ID merge and commits atomically onl
   assert.deepEqual(current.albums, [a, b]);
   assert.throws(() => prepareSelectiveRestore(current.albums, backup, new Set(["missing"]), validateAlbum));
   const next = { ...current, albums, preferences: { density: "compact" } };
-  assert.throws(() => commitLocalRestore({ setItem() { throw new Error("quota"); } }, "state", current, next), /quota/);
+  const failingStorage = {
+    getItem: () => null,
+    setItem() { throw new Error("quota"); },
+    removeItem() {},
+  };
+  assert.throws(() => commitLocalRestore(failingStorage, "state", current, next), /quota/);
   assert.deepEqual(current.albums, [a, b]);
   assert.equal(current.preferences.density, "touch");
-  let stored;
-  commitLocalRestore({ setItem: (key, value) => { stored = [key, JSON.parse(value)]; } }, "state", current, next);
-  assert.equal(stored[0], "state");
-  assert.deepEqual(stored[1], current);
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    removeItem: (key) => values.delete(key),
+  };
+  commitLocalRestore(storage, "state", current, next);
+  assert.deepEqual(JSON.parse(values.get("state")), current);
   assert.deepEqual(current.base, [a], "restore must remain pending local changes, not pretend to sync");
 });
 
@@ -536,7 +546,7 @@ test("shared offline navigation uses only the active version shell without reque
   let requests = 0, stored = 0, response;
   const shell = { body: "current shell" };
   const version = readFileSync(new URL("./index.html", import.meta.url), "utf8")
-    .match(/<span class="app-version">v(\d+\.\d+\.\d+)<\/span>/)?.[1];
+    .match(/<span class="app-version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
   assert.ok(version);
   runInNewContext(readFileSync(new URL("./sw.js", import.meta.url), "utf8"), {
     URL,
@@ -561,10 +571,14 @@ test("shared offline navigation uses only the active version shell without reque
 
 test("update guard blocks drafts, open editing dialogs, and current work but permits already-persisted local albums", () => {
   const context = { commandGuard: createCommandGuard(), qol: { drafts: {} }, busyActivitySelectors: ["#syncButton"],
-    document: { querySelectorAll: () => context.dialogs }, dialogs: [],
-    busy: false, $: () => ({ disabled: context.busy }),
+    document: { querySelectorAll: (selector) => selector === "dialog" ? context.dialogs : [],
+      querySelector: () => null }, dialogs: [],
+    busy: false, $: () => ({ disabled: context.busy, hidden: true, querySelectorAll: () => [] }),
+    localSaveError: "", localCollectionStatus: () => ({ unsaved: false }), localStorage: {}, STORAGE_KEY: "",
+    normalizeLocalAlbums: (albums) => albums,
+    catalogSuggestionsUI: null, catalogPlaylistUI: null, tidalUI: { isBusy: () => false }, qobuzUI: { isBusy: () => false },
     state: { albums: [qosAlbum("a")], base: [] } };
-  const guard = runInNewContext(`${appFunction("function updateHasUnsavedWork(", '\n$("#applyUpdateButton")')}\nupdateHasUnsavedWork`, context);
+  const guard = runInNewContext(`${appFunction("function updateHasUnsavedWork(", '\nconst updateLifecycle =')}\nupdateHasUnsavedWork`, context);
   assert.equal(guard(), false);
   context.qol.drafts["edit:a"] = {};
   assert.equal(guard(), true);
@@ -604,28 +618,32 @@ test("explicit update action persists view and preview before activation, never 
   const nodes = Object.fromEntries(["#applyUpdateButton", "#updateStatus", "#pinnedOnlyInput", "#playlistBuilderName",
     "#playlistArtistCount", "#playlistTracksPerArtist", "#openSpotifyInput", "#searchInput", "#sortOrder"]
     .map((selector) => [selector, { value: selector, checked: false, addEventListener(_name, listener) { this.listener = listener; } }]));
-  let blocked = true, saves = 0, activations = 0, snapshot;
-  const context = { $: (selector) => nodes[selector], waitingUpdate: { postMessage: (message) => {
+  let blocked = true, activations = 0, snapshot;
+  const worker = { state: "installed", postMessage: (message) => {
     assert.equal(message.type, "accord-activate-update"); activations += 1;
-  } }, updateChosen: false, updateReadyToReload: false,
+  } };
+  const context = { $: (selector) => nodes[selector], createUpdateLifecycle: (options) => {
+    const lifecycle = createUpdateLifecycle({ ...options, schedule: () => 1, cancel() {} });
+    lifecycle.ready(worker);
+    return lifecycle;
+  }, presentUpdateBanner() {},
+    localCollectionChecks: [], collectionSelectionOnly: false,
     persistDetailsDraft: () => true, updateHasUnsavedWork: () => blocked,
-    saveState: () => { saves += 1; }, collectionViewSelectors: ["#searchInput", "#sortOrder"],
-    selectedAlbumIds: new Set(["a"]), window: { scrollY: 123 },
+    collectionViewSelectors: ["#searchInput", "#sortOrder"],
+    selectedAlbumIds: new Set(["a"]), window: { scrollY: 123, confirm: () => true },
     localFacet: { field: "artist", value: "Band" },
     appliedCollectionSearch: "committed",
     facetReturnViews: [{ fields: { "#searchInput": "before" }, scroll: 50, selected: ["a"], facet: null }],
     topArtistPlaylistPreview: { tracks: [{ uri: "t1" }] },
     sessionStorage: { setItem: (_key, value) => { snapshot = JSON.parse(value); } } };
-  runInNewContext(appFunction('$("#applyUpdateButton").addEventListener("click"', '\ninitializeCollectionQol();'), context);
+  runInNewContext(appFunction("const updateLifecycle =", '\ninitializeCollectionQol();'), context);
   assert.equal(activations, 0);
   nodes["#applyUpdateButton"].listener();
   assert.equal(activations, 0);
-  assert.equal(saves, 0);
   blocked = false;
   context.sessionStorage.setItem = () => { throw new Error("quota"); };
   nodes["#applyUpdateButton"].listener();
   assert.equal(activations, 0);
-  assert.equal(context.updateChosen, false);
   assert.equal(nodes["#applyUpdateButton"].disabled, false);
   context.sessionStorage.setItem = (_key, value) => { snapshot = JSON.parse(value); };
   nodes["#applyUpdateButton"].listener();
@@ -636,7 +654,7 @@ test("explicit update action persists view and preview before activation, never 
   assert.deepEqual(snapshot.facet, { field: "artist", value: "Band" });
   assert.equal(snapshot.facetReturnViews[0].fields["#searchInput"], "before");
   assert.equal(snapshot.appliedSearch, "committed");
-  assert.equal(context.updateChosen, true);
+  assert.equal(nodes["#applyUpdateButton"].disabled, true);
 });
 
 test("activity center reads the shared Spotify deadline locally and bounds its in-memory event history", () => {
@@ -768,6 +786,9 @@ test("sync previews do not write before approval and reject local edits made dur
     const state = { albums: [record], base: [] };
     const context = {
       state, JSON, Uint8Array, Map, Date, albumChanges, formatSyncSummary, commandGuard: createCommandGuard(),
+      localStorage: { getItem: () => JSON.stringify(state) }, STORAGE_KEY: "state",
+      localCollectionStatus: () => ({ unsaved: false }), serviceFailure, navigator: { onLine: true },
+      normalizeLocalAlbums: (albums) => albums,
       $: () => ({ disabled: false }),
       credentials: () => ({ owner: "owner", token: "not-a-real-token" }),
       readRemote: async () => ({ albums: [], covers: new Map(), coverArchive: new Uint8Array(), branch: "main" }),
@@ -780,7 +801,8 @@ test("sync previews do not write before approval and reject local edits made dur
         return outcome !== "cancel";
       },
       writeRemote: async () => { writes += 1; },
-      saveState: () => { saves += 1; }, render() {}, setSyncState() {}, updateLocalSyncSummary() {},
+      commitLocalRestore: (_storage, _key, current, next) => { saves += 1; Object.assign(current, next); },
+      render() {}, setSyncState() {}, updateLocalSyncSummary() {},
       saveCollectionQol() { return true; }, qol: {}, automaticSyncQueued: false,
       showMessage: (_title, message) => errors.push(message),
     };
@@ -927,6 +949,7 @@ test("each collection filter gesture has exactly one render listener", () => {
   const controls = new Map();
   let renders = 0;
   const context = { render: () => { renders += 1; }, state: {}, saveState: () => {},
+    localCollectionChecks: ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"],
     $: (id) => {
       if (!controls.has(id)) controls.set(id, new EventTarget());
       return controls.get(id);
@@ -982,7 +1005,7 @@ test("exact local facets match whole artists and labels, never substrings or ano
 
 test("detail facet navigation is local and Back restores search, filters, sort, layout, selection and scroll", () => {
   const selectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
   const elements = new Map(selectors.map((selector, index) => [selector, { value: `value${index}`, focus() {} }]));
   const callbacks = {};
   const element = (selector) => {
@@ -992,9 +1015,12 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   };
   element("#pinnedOnlyInput").checked = true;
   element("#collectionFilters").open = true;
+  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+  for (const selector of localCollectionChecks) element(selector).checked = true;
   const original = Object.fromEntries(selectors.map((selector) => [selector, element(selector).value]));
   let scroll = null, renders = 0;
   const context = { $: element, collectionViewSelectors: selectors, facetReturnViews: [],
+    localCollectionChecks, collectionSelectionOnly: true,
     selectedAlbumIds: new Set(["a", "b"]), localFacet: null, navigatingToFacet: false,
     appliedCollectionSearch: original["#searchInput"],
     collectionPreferences: { layout: original["#collectionLayout"] }, state: {},
@@ -1020,6 +1046,8 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   assert.deepEqual([...context.selectedAlbumIds], ["a", "b"]);
   assert.equal(context.collectionPreferences.layout, original["#collectionLayout"]);
   assert.equal(element("#pinnedOnlyInput").checked, true);
+  assert.ok(localCollectionChecks.every((selector) => element(selector).checked));
+  assert.equal(context.collectionSelectionOnly, true);
   assert.equal(element("#collectionFilters").open, true);
   assert.equal(scroll, 540);
   assert.equal(renders, 2);
@@ -1044,6 +1072,9 @@ test("batch review counts actual changes and preserves incremental lists and pri
   assert.equal(JSON.stringify(albums), before);
   assert.doesNotThrow(() => assertAlbumReviewCurrent(review, albums));
   assert.throws(() => assertAlbumReviewCurrent(review, [...albums, qosAlbum("d")]), /cambiata/);
+  assert.throws(() => assertAlbumReviewCurrent(review, albums,
+    JSON.stringify({ albums: [...albums, qosAlbum("d")] })), /cambiata/);
+  assert.throws(() => assertAlbumReviewCurrent(review, albums, null), /cambiata/);
   assert.throws(() => prepareAlbumReview(albums, new Set(["missing"]), (album) => album), /Selezione cambiata/);
   assert.throws(() => prepareAlbumReview(albums, new Set(["a", "b"]),
     (album) => validateAlbum({ ...album, rating: 7 })), /voto/);
@@ -1104,7 +1135,7 @@ test("review UI requires explicit confirmation, rejects stale albums or drafts, 
     changesText: (changes) => `${changes[0]?.before.status} -> ${changes[0]?.after.status}`,
     safeDiagnostics: (value) => value, appendErrorActions() {},
     commitLocalRestore: (_storage, _key, current, next) => { saves += 1; Object.assign(current, next); },
-    localStorage: {}, STORAGE_KEY: "collection", rememberLocalChanges() {},
+    localStorage: { getItem() { return JSON.stringify(state); } }, STORAGE_KEY: "collection", rememberLocalChanges() {},
     render: () => { renders += 1; }, showFeedback() {} };
   const attach = runInNewContext(`${appFunction("function appendAlbumReview(", "\nfunction openLabelNormalization(")}\nappendAlbumReview`, context);
   attach(form, dialog, build, error);
@@ -1302,6 +1333,10 @@ test("sync applies a directional summary and records the number of resolved conf
     showMessage: (_title, message) => assert.fail(message),
     showFeedback: () => assert.fail("Unexpected feedback"),
     state: { albums: [local], base: [local], loadError: null },
+    localStorage: { getItem: () => "stable" }, STORAGE_KEY: "state",
+    localCollectionStatus: () => ({ unsaved: false }), serviceFailure, navigator: { onLine: true },
+    normalizeLocalAlbums: (albums) => albums,
+    commitLocalRestore: (_storage, _key, current, next) => Object.assign(current, next),
     remote: { albums: [remoteOnly], covers: new Map(), coverArchive: new Uint8Array(),
       coversSha: null, sha: null, branch: "main", legacyStatusesFound: false },
     readRemote: async () => context.remote,
@@ -1343,6 +1378,9 @@ test("sync explicitly reports a confirmed partial write and does not retry it", 
     setSyncState: () => {},
     showMessage: (title, message) => messages.push({ title, message }),
     state: { albums: [local], base: [local], loadError: null },
+    localStorage: { getItem: () => "stable" }, STORAGE_KEY: "state",
+    localCollectionStatus: () => ({ unsaved: false }), serviceFailure, navigator: { onLine: true },
+    normalizeLocalAlbums: (albums) => albums,
     readRemote: async () => remote,
     threeWayMerge: () => ({ albums: [local], conflicts: [] }),
     albumChanges,
@@ -1501,8 +1539,9 @@ test("album persistence rolls back the collection on storage failure", () => {
   const previous = [{ id: "a", status: "queued" }];
   const state = { albums: previous };
   const context = {
-    state, prepareAlbumUpdates, validateAlbum: (album) => album,
-    saveState: () => { throw new Error("storage full"); },
+    state, prepareAlbumUpdates, prepareAlbumReview, assertAlbumReviewCurrent, validateAlbum: (album) => album,
+    commitLocalRestore, localStorage: { getItem() { return JSON.stringify(state); }, setItem() { throw new Error("storage full"); } },
+    STORAGE_KEY: "collection",
     setSyncState: () => assert.fail("must not announce a failed save"),
   };
   const body = appFunction("function commitAlbumChanges(", "\nfunction openAlbumDetails(");
@@ -1515,26 +1554,30 @@ test("album persistence rolls back the collection on storage failure", () => {
 
 test("reset clears all local filters including pinned-only without changing saved sort or making requests", () => {
   const elements = new Map(["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter", "#smartCollectionList"].map((id) => [id, { value: "active", focus() {} }]));
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#smartCollectionList"].map((id) => [id, { value: "active", focus() {} }]));
+  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+  for (const selector of localCollectionChecks) elements.set(selector, { checked: true });
   elements.set("#pinnedOnlyInput", { checked: true });
   const state = { sortOrder: "manual", manualOrder: ["b", "a"] };
   let renders = 0;
   runInNewContext(`${appFunction("function resetCollectionFilters(", "\nfunction openLocalFacet(")}\nresetCollectionFilters();`, {
-    $: (id) => elements.get(id), state, render: () => { renders += 1; },
+    $: (id) => elements.get(id), state, render: () => { renders += 1; }, localCollectionChecks,
     localFacet: { field: "artist", value: "Band" },
     fetch: () => assert.fail("filters must not fetch"),
   });
   assert.equal(renders, 1);
   assert.equal(elements.get("#pinnedOnlyInput").checked, false);
+  assert.ok(localCollectionChecks.every((selector) => !elements.get(selector).checked));
   assert.equal([...elements.values()].some((element) => element.value), false);
   assert.deepEqual(state, { sortOrder: "manual", manualOrder: ["b", "a"] });
 });
 
 test("contextual selection actions are hidden until an album is selected", () => {
-  const elements = new Map(["#selectionToolbar", "#selectionCount", "#removeSelectedButton", "#applyBulkStatus", "#bulkStatus"]
+  const elements = new Map(["#selectionToolbar", "#selectionCount", "#removeSelectedButton", "#applyBulkStatus", "#bulkStatus", "#dropHiddenSelectionButton"]
     .map((id) => [id, { value: "" }]));
-  const context = { $: (id) => elements.get(id), selectedAlbumIds: new Set() };
-  const body = appFunction("function updateSelectionToolbar(", "\nfunction commitAlbumChanges(");
+  const context = { $: (id) => elements.get(id), selectedAlbumIds: new Set(), visibleAlbums: [],
+    selectionVisibility: (ids) => ({ hidden: ids.size }) };
+  const body = appFunction("function updateSelectionToolbar(", '\n$("#showSelectionButton")');
   const update = () => runInNewContext(`${body}\nupdateSelectionToolbar();`, context);
   update();
   assert.equal(elements.get("#selectionToolbar").hidden, true);
@@ -1571,7 +1614,7 @@ test("local cover rendering never enqueues catalog work, while explicit loading 
 test("PWA release version matches the title, visible badge and offline cache", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
-  const version = html.match(/<span class="app-version">v(\d+\.\d+\.\d+)<\/span>/)?.[1];
+  const version = html.match(/<span class="app-version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
   assert.ok(version, "The header must show a semantic release version");
   assert.ok(html.includes(`<title>Accord v${version} · La mia raccolta</title>`));
   assert.ok(sw.includes(`const CACHE = "accord-album-pwa-v${version}";`));
@@ -1653,14 +1696,14 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=105", "style.css?v=37"]) {
+  for (const file of ["app.mjs?v=108", "style.css?v=37"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=47", "ui.mjs?v=12", "tidal.mjs?v=9", "tidal-ui.mjs?v=22", "qobuz-ui.mjs?v=17",
-    "qobuz.mjs?v=8", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=6",
-    "music-qol.mjs?v=1", "playlist-ui.mjs?v=4",
-    "music-app-links.mjs?v=1", "music-continuity.mjs?v=1", "music-completion.mjs?v=2", "music-completion-ui.mjs?v=2"]) {
+  for (const file of ["core.mjs?v=48", "ui.mjs?v=15", "tidal.mjs?v=9", "tidal-ui.mjs?v=24", "qobuz-ui.mjs?v=19",
+    "qobuz.mjs?v=8", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=9",
+    "music-qol.mjs?v=2", "playlist-ui.mjs?v=6",
+    "music-app-links.mjs?v=1", "music-continuity.mjs?v=3", "music-completion.mjs?v=5", "music-completion-ui.mjs?v=5"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

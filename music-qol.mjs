@@ -1,5 +1,80 @@
 const normalized = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
+export function listeningStep(album) {
+  if (!["liked", "neutral", "disliked"].includes(album.status)) {
+    return album.status === "queued" ? "Da ascoltare" : "In ascolto";
+  }
+  return album.rating === null || album.rating === undefined ? "Ascoltato" : "Valutato";
+}
+
+export function localCollectionMatch(album, {
+  unrated = false, missingDuration = false, notesPresent = false, service = "", durations = {},
+} = {}) {
+  const provider = album.id.startsWith("tidal:") ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz"
+    : album.url?.includes("open.spotify.com/album/") ? "spotify" : "other";
+  return (!unrated || album.rating === null || album.rating === undefined)
+    && (!missingDuration || !Object.hasOwn(durations, album.id))
+    && (!notesPresent || Boolean(album.notes?.trim()))
+    && (!service || provider === service);
+}
+
+export function selectionVisibility(selected, albums) {
+  const visible = new Set(albums.map((album) => album.id));
+  return { total: selected.size, hidden: [...selected].filter((id) => !visible.has(id)).length };
+}
+
+export function reviewManualGenres(review, ids, storage, key, updated) {
+  const raw = storage.getItem(key);
+  const provenance = JSON.parse(raw || "{}");
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    throw new Error("Provenienza dei dati locali non valida.");
+  }
+  const changes = [...review.changes];
+  for (const album of review.next.filter((record) => ids.has(record.id))) {
+    const previous = provenance[album.id]?.genres;
+    const change = changes.find((entry) => entry.id === album.id);
+    if (previous?.source === "manual" && !change?.fields.includes("genres")) continue;
+    provenance[album.id] = { ...provenance[album.id], genres: {
+      source: "manual", target: album.id, identity: [album.id, album.artist, album.name],
+      updated, complete_tracks: null,
+    } };
+    if (previous?.source !== "manual") {
+      const sourceChange = {
+        id: album.id, kind: "updated",
+        before: { ...(change?.before || album), genre_source: previous?.source ?? null },
+        after: { ...(change?.after || album), genre_source: "manual" },
+        fields: [...(change?.fields || []), "genre_source"],
+      };
+      if (change) changes[changes.indexOf(change)] = sourceChange;
+      else changes.push(sourceChange);
+    }
+  }
+  return { ...review, changes, changed: changes.length, unchanged: review.selected - changes.length,
+    related: { [key]: provenance }, relatedSnapshot: { [key]: raw } };
+}
+
+export function appendListeningActions(container, album, { markListened, rate, document: doc = document }) {
+  const actions = doc.createElement("div");
+  actions.className = "qol-actions";
+  actions.setAttribute("aria-label", `Percorso di ascolto di ${album.name}`);
+  const progress = doc.createElement("span");
+  progress.textContent = listeningStep(album);
+  const listened = doc.createElement("button");
+  listened.type = "button";
+  listened.className = "secondary";
+  listened.textContent = "Segna ascoltato";
+  listened.disabled = !["queued", "listening"].includes(album.status);
+  listened.addEventListener("click", () => markListened(album.id));
+  const vote = doc.createElement("button");
+  vote.type = "button";
+  vote.className = "secondary";
+  vote.textContent = album.rating === null || album.rating === undefined ? "Valuta" : "Modifica voto";
+  vote.addEventListener("click", () => rate(album.id));
+  actions.append(progress, listened, vote);
+  container.append(actions);
+  return actions;
+}
+
 function editionTitle(value) {
   const edition = "(?:deluxe|remaster(?:ed)?|expanded|anniversary|special edition|bonus|legacy edition)";
   const marker = new RegExp(`\\b${edition}\\b`);

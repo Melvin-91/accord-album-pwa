@@ -1,5 +1,5 @@
-import { editionLink } from "./music-continuity.mjs?v=1";
-import { commitLocalRestore } from "./ui.mjs?v=12";
+import { editionLink } from "./music-continuity.mjs?v=3";
+import { commitLocalRestore } from "./ui.mjs?v=15";
 
 export const COMPLETION_KEY = "accord-music-completion-v1";
 export const COMPLETION_EVIDENCE_KEY = "accord-music-completion-evidence-v1";
@@ -104,7 +104,7 @@ export function applyCompletion(storage, row, value) {
       throw new Error("Generi della fonte non validi.");
     }
     if (!value.length) return "unavailable";
-    album.genres = value; album.primary_genre = value[0]; album.genre_source = "Last.fm";
+    album.genres = value; album.primary_genre = value[0];
   } else if (row.category === "evidence") {
     const evidence = stored(storage, COMPLETION_EVIDENCE_KEY, {});
     if (Object.hasOwn(evidence, album.id)) return "preserved";
@@ -117,7 +117,8 @@ export function applyCompletion(storage, row, value) {
     identity: identity(row.album), updated: new Date().toISOString(),
     complete_tracks: row.category === "duration" ? row.total : null };
   related[COMPLETION_PROVENANCE_KEY] = provenance;
-  commitLocalRestore(storage, COLLECTION, {}, collection, related);
+  commitLocalRestore(storage, COLLECTION, {}, collection, related,
+    `Completamento locale: ${COMPLETION_CATEGORIES[row.category]}`);
   return "completed";
 }
 

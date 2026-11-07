@@ -1,7 +1,8 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=6";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=4";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=9";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=6";
+import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=1";
+  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=3";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=4";
 import {
   addPlaylistAlbums,
@@ -56,7 +57,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=47";
+} from "./core.mjs?v=48";
 import {
   localCommandResults,
   collectionAuditSummary,
@@ -67,19 +68,24 @@ import {
   duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch,
   albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
   normalizeAccessibility, adjacentAlbumIds, spotifyAlbumIntent, playlistPreviewStatistics,
-  portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore,
+  portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore as persistLocalRestore,
   backupReminderItems,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-} from "./ui.mjs?v=12";
+  appendCollectionHistory, collectionHealthSummary, createCollectionHistoryEntry,
+  prepareCollectionHistoryRestore,
+} from "./ui.mjs?v=15";
 import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=9";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { createAlbumComparisonToolbar, suggestDurationQueue } from "./music-qol.mjs?v=1";
+import {
+  createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
+  selectionVisibility, appendListeningActions, reviewManualGenres,
+} from "./music-qol.mjs?v=2";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=2";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=2";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=22";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=17";
+  from "./music-completion.mjs?v=5";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=5";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=24";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=19";
 import { qobuzAlbumId } from "./qobuz.mjs?v=8";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -178,6 +184,9 @@ const $ = (selector) => document.querySelector(selector);
 $("#removeSelectedButton").addEventListener("click", removeSelectedAlbums);
 const template = $("#albumTemplate");
 const state = loadState();
+let localSaveError = state.loadError || "";
+let githubAvailability = "GitHub: disponibilita' non verificata";
+let persistedCollectionIdentity = JSON.stringify([normalizeLocalAlbums(state.albums), normalizeLocalAlbums(state.base)]);
 const QOL_KEY = "accord-collection-qol-v1";
 const qol = loadCollectionQol();
 const COLLECTION_UI_KEY = "accord-collection-ui-v1";
@@ -190,6 +199,7 @@ try {
   queueMicrotask(() => showFeedback(`Preferenze locali non leggibili: ${error.message}`, true));
 }
 let selectedAlbumIds = new Set();
+let collectionSelectionOnly = false;
 let visibleAlbums = [];
 let detailsAlbumId = null;
 let detailsReturnFocus = null;
@@ -366,16 +376,50 @@ function loadState() {
       Array.isArray(records) && records.some((album) =>
         album && normalizeAlbumStatus(album.status) !== album.status));
     if (hasLegacyStatuses) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, albums, base }));
-    return { albums, base, manualOrder, sortOrder, preferences: saved.preferences };
+    return { albums, base, manualOrder, sortOrder, preferences: saved.preferences,
+      collectionHistory: Array.isArray(saved.collectionHistory) ? saved.collectionHistory : [] };
   } catch (error) {
     queueMicrotask(() => showMessage("Archivio locale non leggibile", error.message));
-    return { albums: [], base: [], manualOrder: [], sortOrder: "artist", loadError: error.message };
+    return { albums: [], base: [], manualOrder: [], sortOrder: "artist",
+      collectionHistory: [], loadError: error.message };
   }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  updateLocalSyncSummary();
+function normalizeLocalAlbums(albums) {
+  return validateDocument({ format: "accord-album-collection", version: 1, albums }).map((album) => {
+    const record = { ...album, notes: album.notes || "" };
+    return Object.fromEntries(Object.keys(record).sort().map((field) => [field, record[field]]));
+  });
+}
+
+function commitLocalRestore(storage, key, current, next, related = {}, label = "Modifica locale raccolta") {
+  return persistLocalRestore(storage, key, current, next, related, label, normalizeLocalAlbums);
+}
+
+function saveState(historyLabel = "Modifica locale raccolta") {
+  try {
+    if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    if (JSON.stringify([normalizeLocalAlbums(saved.albums || []), normalizeLocalAlbums(saved.base || [])])
+        !== persistedCollectionIdentity) {
+      throw new Error("La raccolta salvata e' cambiata in un'altra scheda. Conserva le bozze e riapri l'app prima di scrivere.");
+    }
+    const entry = createCollectionHistoryEntry(
+      Array.isArray(saved.albums) ? saved.albums : [], state.albums, historyLabel,
+    );
+    const collectionHistory = appendCollectionHistory(
+      Array.isArray(saved.collectionHistory) ? saved.collectionHistory : state.collectionHistory, entry,
+    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, collectionHistory }));
+    state.collectionHistory = collectionHistory;
+    localSaveError = "";
+    updateLocalSyncSummary();
+  } catch (error) {
+    localSaveError = error.message;
+    updateLocalSyncSummary();
+    showFeedback(`Raccolta non salvata nel browser: ${error.message}`, true);
+    throw error;
+  }
 }
 
 function ensureManualOrder() {
@@ -822,19 +866,26 @@ function setAlbumPins(ids, pinned) {
 
 function collectionHasFilters() {
   return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
-    || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value) || Boolean(localFacet);
+    "#collectionFilter", "#tagFilter", "#serviceFilter"].some((selector) => Boolean($(selector).value.trim()))
+    || localCollectionChecks.some((selector) => $(selector).checked)
+    || collectionSelectionOnly || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value) || Boolean(localFacet);
 }
 
-function resetCollectionFilters() {
+const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+
+function resetCollectionFilters({ refresh = true } = {}) {
+  collectionSelectionOnly = false;
   localFacet = null;
   appliedCollectionSearch = "";
   for (const selector of ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter"]) $(selector).value = "";
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter"]) $(selector).value = "";
+  for (const selector of localCollectionChecks) $(selector).checked = false;
   $("#pinnedOnlyInput").checked = false;
   $("#smartCollectionList").value = "";
-  render();
-  $("#searchInput").focus();
+  if (refresh) {
+    render();
+    $("#searchInput").focus();
+  }
 }
 
 function openLocalFacet(field, value) {
@@ -844,12 +895,16 @@ function openLocalFacet(field, value) {
     appliedSearch: appliedCollectionSearch,
     pinned: $("#pinnedOnlyInput").checked, facet: localFacet, scroll: window.scrollY,
     selected: [...selectedAlbumIds], filtersOpen: $("#collectionFilters").open,
+    localChecks: localCollectionChecks.map((selector) => $(selector).checked),
+    selectionOnly: collectionSelectionOnly,
   });
   navigatingToFacet = true;
   $("#albumDetailsDialog").close();
   for (const selector of collectionViewSelectors) {
     if (!["#sortOrder", "#collectionLayout"].includes(selector)) $(selector).value = "";
   }
+  for (const selector of localCollectionChecks) $(selector).checked = false;
+  collectionSelectionOnly = false;
   appliedCollectionSearch = "";
   $("#pinnedOnlyInput").checked = false;
   localFacet = { field, value };
@@ -870,6 +925,8 @@ $("#facetBackButton").addEventListener("click", () => {
   $("#pinnedOnlyInput").checked = previous.pinned;
   $("#collectionFilters").open = previous.filtersOpen;
   selectedAlbumIds = new Set(previous.selected);
+  localCollectionChecks.forEach((selector, index) => { $(selector).checked = previous.localChecks[index]; });
+  collectionSelectionOnly = previous.selectionOnly;
   const layout = previous.fields["#collectionLayout"];
   if (collectionPreferences.layout !== layout) saveCollectionPreferences({ ...collectionPreferences, layout });
   $("#albumList").dataset.layout = layout;
@@ -882,10 +939,55 @@ $("#facetBackButton").addEventListener("click", () => {
 
 function updateSelectionToolbar() {
   const count = selectedAlbumIds.size;
+  const { hidden } = selectionVisibility(selectedAlbumIds, visibleAlbums);
   $("#selectionToolbar").hidden = !count;
-  $("#selectionCount").textContent = `${count} selezionat${count === 1 ? "o" : "i"}`;
+  $("#selectionCount").textContent = `${count} selezionati, ${hidden} nascosti dai filtri`;
+  $("#dropHiddenSelectionButton").disabled = !hidden;
   $("#applyBulkStatus").disabled = !count || !$("#bulkStatus").value;
   $("#removeSelectedButton").disabled = !count;
+}
+
+$("#showSelectionButton").addEventListener("click", () => {
+  resetCollectionFilters({ refresh: false });
+  collectionSelectionOnly = true;
+  render();
+});
+$("#dropHiddenSelectionButton").addEventListener("click", () => {
+  selectedAlbumIds = visibleSelection(selectedAlbumIds, visibleAlbums);
+  render();
+});
+$("#unratedSummary").addEventListener("click", () => {
+  resetCollectionFilters({ refresh: false });
+  $("#smartCollectionList").value = "unrated";
+  render();
+});
+
+function renderCollectionFilterChips() {
+  const chips = $("#collectionFilterChips");
+  chips.replaceChildren();
+  const append = (text, clear) => {
+    const button = document.createElement("button");
+    button.type = "button"; button.className = "secondary";
+    button.textContent = `${text} ×`;
+    button.setAttribute("aria-label", `Rimuovi filtro ${text}`);
+    button.addEventListener("click", () => { clear(); render(); });
+    chips.append(button);
+  };
+  if (appliedCollectionSearch) append(`Ricerca: ${appliedCollectionSearch}`, () => {
+    appliedCollectionSearch = ""; $("#searchInput").value = "";
+  });
+  for (const selector of ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
+    "#collectionFilter", "#tagFilter", "#serviceFilter", "#smartCollectionList"]) {
+    const control = $(selector);
+    if (control.value) append(control.selectedOptions[0].textContent, () => { control.value = ""; });
+  }
+  for (const [selector, text] of [["#unratedFilter", "Senza voto"],
+    ["#missingDurationFilter", "Durata mancante"], ["#notesPresentFilter", "Note presenti"]]) {
+    if ($(selector).checked) append(text, () => { $(selector).checked = false; });
+  }
+  if ($("#pinnedOnlyInput").checked) append("In evidenza", () => { $("#pinnedOnlyInput").checked = false; });
+  if (localFacet) append(`${localFacet.field}: ${localFacet.value}`, () => { localFacet = null; });
+  if (collectionSelectionOnly) append("Solo selezionati", () => { collectionSelectionOnly = false; });
 }
 
 function removeSelectedAlbums() {
@@ -901,7 +1003,7 @@ function removeSelectedAlbums() {
   try {
     state.albums = prepareAlbumRemoval(previousAlbums, ids);
     state.manualOrder = previousOrder.filter((id) => !ids.has(id));
-    saveState();
+    saveState(`Rimozione di ${count} album`);
   } catch (error) {
     state.albums = previousAlbums;
     state.manualOrder = previousOrder;
@@ -918,16 +1020,15 @@ function commitAlbumChanges(ids, changes) {
   if (Object.hasOwn(changes, "genres") && !Object.hasOwn(changes, "primary_genre")) {
     changes = { ...changes, primary_genre: changes.genres[0] || "" };
   }
-  if (Object.hasOwn(changes, "genres")) changes = { ...changes, genre_source: "manual" };
   const next = prepareAlbumUpdates(state.albums, ids, changes, validateAlbum);
-  const previous = state.albums;
-  state.albums = next;
-  try {
-    saveState();
-  } catch (error) {
-    state.albums = previous;
-    throw error;
+  let review = prepareAlbumReview(state.albums, ids, (album) => next.find((record) => record.id === album.id));
+  assertAlbumReviewCurrent(review, state.albums, localStorage.getItem(STORAGE_KEY));
+  if (Object.hasOwn(changes, "genres")) {
+    review = reviewManualGenres(review, ids, localStorage, COMPLETION_PROVENANCE_KEY, new Date().toISOString());
   }
+  commitLocalRestore(localStorage, STORAGE_KEY, state, { ...state, albums: next }, review?.related,
+    ids.size > 1 ? `Modifica di ${ids.size} album` : "Modifica album");
+  updateLocalSyncSummary();
   rememberLocalChanges(ids);
   setSyncState("Modifiche locali in attesa di sincronizzazione");
 }
@@ -979,6 +1080,19 @@ function openAlbumDetails(id, returnFocus = document.activeElement) {
   }
   rating.value = album.rating === null ? "" : String(album.rating);
   $("#albumDetailsFields").replaceChildren(fields);
+  appendListeningActions(fields, album, {
+    markListened: () => {
+      if (!persistDetailsDraft()) return;
+      if (qol.drafts[`edit:${id}`]) {
+        $("#albumDetailsError").textContent = "Salva o scarta la bozza prima di segnare l'album ascoltato.";
+        $("#albumDetailsError").hidden = false;
+        return;
+      }
+      updateAlbum(id, { status: "neutral" });
+      openAlbumDetails(id, returnFocus);
+    },
+    rate: () => rating.focus(),
+  });
   restoreDetailsDraft(id);
   const adjacent = adjacentAlbumIds(visibleAlbums, id);
   $("#previousAlbumButton").disabled = !adjacent.previous;
@@ -1289,6 +1403,22 @@ function render(options = {}) {
   refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
   refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
   const sortOrder = $("#sortOrder").value;
+  let durations;
+  try {
+    const queue = JSON.parse(localStorage.getItem(LISTENING_QUEUE_KEY) || '{"durations":{}}');
+    const known = JSON.parse(localStorage.getItem(ALBUM_DURATIONS_KEY) || "{}");
+    if (!queue || !known || !queue.durations || typeof queue.durations !== "object"
+        || Array.isArray(queue.durations) || typeof known !== "object" || Array.isArray(known)) {
+      throw new Error("Formato durate non valido.");
+    }
+    durations = { ...queue.durations, ...known };
+    if (Object.values(durations).some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error("Durate locali non valide.");
+    }
+  } catch (error) {
+    showFeedback(`Impossibile filtrare la raccolta: ${error.message}`, true);
+    return;
+  }
   const filteredAlbums = filterAlbums(state.albums, {
     search: appliedCollectionSearch,
     primaryGenre: $("#primaryGenreFilter").value,
@@ -1297,7 +1427,12 @@ function render(options = {}) {
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
     order: sortOrder,
-  }).filter((album) => smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt));
+  }).filter((album) => smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
+    && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
+    && localCollectionMatch(album, {
+      unrated: $("#unratedFilter").checked, missingDuration: $("#missingDurationFilter").checked,
+      notesPresent: $("#notesPresentFilter").checked, service: $("#serviceFilter").value, durations,
+    }));
   const sortedAlbums = sortOrder === "manual"
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
     : filteredAlbums;
@@ -1309,12 +1444,14 @@ function render(options = {}) {
   $("#facetSummary").hidden = !localFacet;
   $("#facetSummary").textContent = localFacet ? `Filtro locale esatto · ${localFacet.field}: ${localFacet.value}` : "";
   visibleAlbums = albums;
-  selectedAlbumIds = visibleSelection(selectedAlbumIds, albums);
+  selectedAlbumIds = visibleSelection(selectedAlbumIds, state.albums);
   updateSelectionToolbar();
+  renderCollectionFilterChips();
   $("#resetFiltersButton").hidden = !collectionHasFilters();
   const filterCount = ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter"].filter((selector) => $(selector).value).length
-    + Number($("#pinnedOnlyInput").checked);
+    "#collectionFilter", "#tagFilter", "#serviceFilter"].filter((selector) => $(selector).value).length
+    + localCollectionChecks.filter((selector) => $(selector).checked).length
+    + Number($("#pinnedOnlyInput").checked) + Number(collectionSelectionOnly);
   $("#activeFilterCount").textContent = filterCount ? `· ${filterCount} attivi` : "";
   const manualSorting = sortOrder === "manual";
   $("#manualOrderHint").hidden = !manualSorting;
@@ -1329,6 +1466,8 @@ function render(options = {}) {
   $("#albumList").replaceChildren();
   const cardsFragment = document.createDocumentFragment();
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
+  $("#unratedSummary").textContent = `${state.albums.filter((album) =>
+    smartAlbumMatch("unrated", album, qol.changedAt)).length} ascoltati senza voto · mostra`;
   $("#emptyState").hidden = albums.length !== 0;
   $("#emptyHeading").textContent = state.albums.length ? "Nessun album trovato" : "La tua raccolta inizia qui";
   $("#emptyDescription").textContent = state.albums.length
@@ -1394,6 +1533,10 @@ function render(options = {}) {
     quick.setAttribute("aria-label", `Modifica rapida di ${album.name}`);
     card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
+    appendListeningActions(quick, album, {
+      markListened: (id) => updateAlbum(id, { status: "neutral" }),
+      rate: () => card.querySelector(".rating-input").focus(),
+    });
     const link = card.querySelector(".album-player-link");
     const tidalAlbum = musicService.service === "tidal", qobuzAlbum = musicService.service === "qobuz";
     let associated = null;
@@ -1495,6 +1638,7 @@ function render(options = {}) {
     URL.revokeObjectURL(url);
     return false;
   });
+  updateLocalSyncSummary();
   void renderCovers(albums, generation, Boolean(options.remoteCovers));
 }
 
@@ -1846,7 +1990,7 @@ function addAlbumToCollection(album, { syncAutomatically = false } = {}) {
   if (!result.added) return false;
   state.albums = result.albums;
   try {
-    saveState();
+    saveState("Aggiungi album");
   } catch (error) {
     state.albums = previous;
     throw error;
@@ -4249,12 +4393,28 @@ function rememberLocalChanges(ids) {
 }
 
 function updateLocalSyncSummary() {
-  const count = albumChanges(state.base, state.albums).length;
   const lastSync = qol.lastSync ? new Date(qol.lastSync).toLocaleString() : "mai su questo dispositivo";
   const summary = qol.lastSyncSummary;
   const detail = summary ? ` · ${formatSyncSummary(summary)}` : "";
-  $("#localSyncSummary").textContent =
-    `${count} album con modifiche locali da sincronizzare · ultimo successo: ${lastSync}${detail}`;
+  let persistence;
+  try {
+    const saved = localCollectionStatus(localStorage, STORAGE_KEY, state, normalizeLocalAlbums);
+    if (!saved.unsaved && !state.loadError) {
+      localSaveError = "";
+      persistedCollectionIdentity = JSON.stringify([normalizeLocalAlbums(state.albums), normalizeLocalAlbums(state.base)]);
+    }
+    persistence = saved.unsaved || localSaveError
+      ? `Modifiche non salvate nel browser${localSaveError ? `: ${localSaveError}` : ""}`
+      : saved.exists ? "Raccolta salvata nel browser" : "Raccolta vuota: nessun salvataggio ancora";
+    persistence += ` · ${saved.pending} album salvati non ancora sincronizzati`;
+    if (!saved.pending) persistence += " (nessuna differenza musicale dalla base locale; non verifica il remoto)";
+  } catch (error) {
+    localSaveError = error.message;
+    persistence = `Salvataggio locale non verificabile: ${error.message}`;
+  }
+  $("#localSyncSummary").textContent = `${persistence} · ${
+    navigator.onLine ? "Rete rilevata, servizi non verificati" : "Offline: modifiche locali disponibili"
+  } · ${githubAvailability} · ultimo successo: ${lastSync}${detail}`;
 }
 
 function changesText(changes) {
@@ -4425,7 +4585,7 @@ function appendSuggestionActions(card, album, rerender) {
 }
 
 const collectionViewSelectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-  "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+  "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
 function refreshSavedCollectionViews() {
   const select = $("#savedCollectionView");
   select.replaceChildren(new Option("Scegli vista", ""));
@@ -4717,9 +4877,14 @@ function composeDurationQueue() {
 function openBulkEditor(initialValues = {}) {
   if (!selectedAlbumIds.size) return;
   const ids = new Set(selectedAlbumIds);
+  const genreEditTime = new Date().toISOString();
   const dialog = document.createElement("dialog");
   const heading = document.createElement("h2");
   heading.textContent = `Modifica ${ids.size} album`;
+  const hidden = selectionVisibility(ids, visibleAlbums).hidden;
+  const notice = document.createElement("p");
+  notice.textContent = `${hidden} nascosti dai filtri inclusi. Solo i campi spuntati cambiano. `
+    + "Aggiungi mantiene gli altri valori; Rimuovi toglie solo quelli indicati; Sostituisci con elenco vuoto svuota il campo.";
   dialog.setAttribute("aria-label", heading.textContent);
   const form = document.createElement("form");
   const controls = new Map();
@@ -4758,19 +4923,26 @@ function openBulkEditor(initialValues = {}) {
   close.addEventListener("click", () => dialog.close());
   form.append(mode, error);
   appendAlbumReview(form, dialog, () => {
+      if (ids.size !== selectedAlbumIds.size || [...ids].some((id) => !selectedAlbumIds.has(id))) {
+        throw new Error("Selezione cambiata: riapri la modifica multipla.");
+      }
       const values = {};
       for (const [key, { enabled, field }] of controls) {
         if (!enabled.checked) continue;
         values[key] = key === "status" ? field.value : key === "rating" ? (field.value ? Number(field.value) : null)
           : field.value.split(",").map((value) => value.trim()).filter(Boolean);
+        if (["genres", "collections", "tags"].includes(key) && mode.value !== "replace" && !values[key].length) {
+          delete values[key];
+        }
       }
       if (!Object.keys(values).length) throw new Error("Spunta almeno un campo.");
-      return prepareAlbumReview(state.albums, ids,
-        (album) => validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value),
-          ...(Object.hasOwn(values, "genres") ? { genre_source: "manual" } : {}) }));
+      const review = prepareAlbumReview(state.albums, ids,
+        (album) => validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value) }));
+      return Object.hasOwn(values, "genres")
+        ? reviewManualGenres(review, ids, localStorage, COMPLETION_PROVENANCE_KEY, genreEditTime) : review;
   }, error);
   form.append(close);
-  dialog.append(heading, form);
+  dialog.append(heading, notice, form);
   document.body.append(dialog);
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
   dialog.showModal();
@@ -4814,7 +4986,11 @@ function appendAlbumReview(form, dialog, buildReview, error) {
       review = proposed;
       draftSnapshot = JSON.stringify(qol.drafts);
       preview.textContent = `${review.selected} selezionati · ${review.changed} realmente modificati · ${
-        review.unchanged} invariati.\nNessuna scrittura eseguita.\n\n${changesText(review.changes) || "Nessuna differenza."}`;
+        review.unchanged} invariati.\nNessuna scrittura eseguita.\n\n${changesText(review.changes) || "Nessuna differenza."}`
+        + "\n\nInvariati:\n" + review.next.filter((album) =>
+          review.selectedIds.includes(album.id)
+          && !review.changes.some((change) => change.id === album.id))
+          .map((album) => `${album.artist} - ${album.name}`).join("\n");
       confirm.disabled = !review.changed;
       error.textContent = "";
       errorActions.replaceChildren();
@@ -4825,12 +5001,18 @@ function appendAlbumReview(form, dialog, buildReview, error) {
     confirm.disabled = true;
     try {
       if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
-      assertAlbumReviewCurrent(review, state.albums);
+      assertAlbumReviewCurrent(review, state.albums, localStorage.getItem(STORAGE_KEY));
+      if (Object.entries(review.relatedSnapshot || {}).some(([key, value]) => localStorage.getItem(key) !== value)) {
+        throw new Error("Provenienza dei dati cambiata: rigenera l'anteprima.");
+      }
+      const currentReview = buildReview();
       if (JSON.stringify(qol.drafts) !== draftSnapshot
-          || JSON.stringify(buildReview().next) !== JSON.stringify(review.next)) {
+          || JSON.stringify(currentReview.next) !== JSON.stringify(review.next)
+          || JSON.stringify(currentReview.related) !== JSON.stringify(review.related)) {
         throw new Error("Campi, selezione o bozze cambiati: rigenera l'anteprima.");
       }
-      commitLocalRestore(localStorage, STORAGE_KEY, state, { ...state, albums: review.next });
+      commitLocalRestore(localStorage, STORAGE_KEY, state, { ...state, albums: review.next }, review.related,
+        `Modifica di ${review.changed} album`);
       rememberLocalChanges(new Set(review.changes.map((change) => change.id)));
       dialog.close();
       render();
@@ -5044,7 +5226,7 @@ async function updateOfflineReadiness() {
     const coverIds = new Set(inventory.map((entry) => entry.id));
     const count = state.albums.filter((album) => coverIds.has(album.id)).length;
     notice.textContent = `App offline: ${appReady ? "cache installata" : "non ancora pronta"} · copertine salvate: ${
-      count}/${state.albums.length} · ${inventory.reduce((total, entry) => total + entry.bytes, 0).toLocaleString()} byte effettivi di immagini · ${navigator.onLine ? "rete rilevata (servizi non verificati)" : "offline: Spotify, Last.fm e GitHub non disponibili"}. Ricerca e modifiche locali restano disponibili.`;
+      count}/${state.albums.length} · ${inventory.reduce((total, entry) => total + entry.bytes, 0).toLocaleString()} byte effettivi di immagini · ${navigator.onLine ? "rete rilevata (servizi non verificati)" : "offline rilevato: nessuna disponibilita' remota verificata"}. Ricerca e modifiche locali restano disponibili.`;
   } catch (error) {
     notice.textContent = `Verifica offline non riuscita: ${error.message}. Disponibilita' non confermata.`;
   }
@@ -5069,7 +5251,8 @@ function initializeCollectionQol() {
   $("#resumeMusicCompletionButton").addEventListener("click", () => completeSelectedMusic({ resume: true }));
   $("#bulkEditButton").addEventListener("click", openBulkEditor);
   $("#syncChangesButton").addEventListener("click", () => showMessage("Modifiche locali",
-    changesText(albumChanges(state.base, state.albums)) || "Nessuna modifica da sincronizzare."));
+    changesText(albumChanges(musicalRecords(state.base), musicalRecords(state.albums)))
+      || "Nessuna differenza musicale dalla base locale. Il remoto non e' stato verificato."));
   $("#statisticsButton").addEventListener("click", () => {
     const stats = albumStatistics(state.albums, qol.changedAt);
     showMessage("Statistiche locali", `${stats.total} album · ${stats.rated} votati · media ${
@@ -5085,27 +5268,67 @@ function initializeCollectionQol() {
     showMessage("Possibili duplicati: confronto locale", text || "Nessun possibile duplicato. Nessuna fusione automatica.");
   });
   $("#auditCollectionButton").addEventListener("click", async () => {
-    if (state.loadError) {
-      showFeedback(`Controllo non eseguito: archivio locale non leggibile: ${state.loadError}`, true);
-      return;
-    }
     const button = $("#auditCollectionButton");
     button.disabled = true;
     try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      const rawAlbums = Array.isArray(saved.albums) ? saved.albums : [];
+      const albums = state.loadError ? rawAlbums : state.albums;
+      const parseObject = (key) => {
+        const value = JSON.parse(localStorage.getItem(key) || "{}");
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error(`Dato locale non leggibile: ${key}.`);
+        }
+        return value;
+      };
+      const queue = parseObject(LISTENING_QUEUE_KEY);
+      if (queue.durations !== undefined
+          && (!queue.durations || typeof queue.durations !== "object" || Array.isArray(queue.durations))) {
+        throw new Error("Durate della coda locale non leggibili.");
+      }
+      const durations = { ...(queue.durations || {}), ...parseObject(ALBUM_DURATIONS_KEY) };
+      const editionLinks = parseObject("accord-music-edition-links-v1");
+      const completionProvenance = parseObject(COMPLETION_PROVENANCE_KEY);
+      const completionEvidence = parseObject(COMPLETION_EVIDENCE_KEY);
+      const health = collectionHealthSummary(albums, {
+        rawAlbums, durations, editionLinks, completionProvenance, completionEvidence,
+      });
+      const byId = new Map(albums.filter((album) => typeof album?.id === "string")
+        .map((album) => [album.id, album]));
+      const named = (ids) => ids.slice(0, 40).map((id) => {
+        const album = byId.get(id);
+        return album ? `${album.artist || "Artista sconosciuto"} · ${album.name || id}` : id;
+      }).join("\n") + (ids.length > 40 ? `\n… e altri ${ids.length - 40}` : "");
+      if (state.loadError) {
+        showMessage("Controllo qualità locale", [
+          `Archivio album non leggibile: ${state.loadError}`,
+          ...[
+            ["Collegamenti album malformati", health.malformedLinkIds],
+            ["Associazioni d'edizione malformate", health.malformedEditionIds],
+            ["Associazioni d'edizione non coerenti", health.incoherentEditionIds],
+            ["Durate mancanti o non valide", health.missingDurationIds],
+            ["Dati derivati obsoleti o orfani", health.staleDerivedIds],
+          ].map(([label, ids]) => `${label}: ${ids.length}${ids.length ? `\n${named(ids)}` : ""}`),
+          "",
+          "Controllo solo locale: nessuna richiesta remota e nessuna correzione automatica.",
+        ].join("\n"));
+        return;
+      }
       const coveredIds = state.albums.length ? await getCachedCoverIds() : new Set();
       const audit = collectionAuditSummary(state.albums, coveredIds);
-      const byId = new Map(state.albums.map((album) => [album.id, album]));
-      const named = (ids) => ids.slice(0, 40).map((id) =>
-        `${byId.get(id).artist} · ${byId.get(id).name}`).join("\n")
-        + (ids.length > 40 ? `\n… e altri ${ids.length - 40}` : "");
       const lines = [
         `Album controllati: ${audit.total}`,
         `Possibili duplicati: ${audit.duplicateGroups.length} gruppi · ${audit.duplicateIds.length} album`,
         `Copertine non disponibili offline: ${audit.missingCoverIds.length}`,
         `Anno non specificato: ${audit.missingYearIds.length}`,
         `Generi non assegnati: ${audit.missingGenreIds.length}`,
+        `Collegamenti album malformati: ${health.malformedLinkIds.length}`,
+        `Associazioni d'edizione malformate: ${health.malformedEditionIds.length}`,
+        `Associazioni d'edizione non coerenti: ${health.incoherentEditionIds.length}`,
+        `Durate mancanti o non valide: ${health.missingDurationIds.length}`,
+        `Dati derivati obsoleti o orfani: ${health.staleDerivedIds.length}`,
         "",
-        "Controllo solo locale: nessuna richiesta ai servizi musicali e nessuna modifica automatica.",
+        "Controllo solo locale: nessuna richiesta remota e nessuna correzione automatica.",
       ];
       if (audit.duplicateGroups.length) {
         lines.push("", "Possibili duplicati (da verificare manualmente):",
@@ -5117,6 +5340,11 @@ function initializeCollectionQol() {
         ["Copertine mancanti offline", audit.missingCoverIds],
         ["Anno non specificato", audit.missingYearIds],
         ["Generi non assegnati", audit.missingGenreIds],
+        ["Collegamenti album malformati", health.malformedLinkIds],
+        ["Associazioni d'edizione malformate", health.malformedEditionIds],
+        ["Associazioni d'edizione non coerenti", health.incoherentEditionIds],
+        ["Durate mancanti o non valide", health.missingDurationIds],
+        ["Dati derivati obsoleti o orfani", health.staleDerivedIds],
       ]) {
         if (ids.length) lines.push("", `${label}:`, named(ids));
       }
@@ -5127,6 +5355,7 @@ function initializeCollectionQol() {
       button.disabled = false;
     }
   });
+  $("#collectionHistoryButton").addEventListener("click", openCollectionHistory);
   $("#saveCollectionViewButton").addEventListener("click", () => {
     const name = window.prompt("Nome della vista locale");
     if (!name?.trim()) return;
@@ -5134,6 +5363,7 @@ function initializeCollectionQol() {
     view.appliedSearch = appliedCollectionSearch;
     view.pinnedOnly = $("#pinnedOnlyInput").checked;
     view.facet = localFacet;
+    view.localChecks = localCollectionChecks.map((selector) => $(selector).checked);
     if (saveCollectionQol({ ...qol, views: { ...qol.views, [name.trim()]: view } })) refreshSavedCollectionViews();
   });
   $("#deleteCollectionViewButton").addEventListener("click", () => {
@@ -5150,8 +5380,11 @@ function initializeCollectionQol() {
     catch (error) { showFeedback(`Vista non applicata: ${error.message}`, true); return; }
     for (const selector of collectionViewSelectors) {
       if (typeof view[selector] === "string") $(selector).value = view[selector];
+      else if (selector === "#serviceFilter") $(selector).value = "";
       if (selector === "#primaryGenreFilter") refreshGenreFilters();
     }
+    localCollectionChecks.forEach((selector, index) => { $(selector).checked = view.localChecks?.[index] === true; });
+    collectionSelectionOnly = false;
     appliedCollectionSearch = view.appliedSearch ?? view["#searchInput"] ?? "";
     $("#pinnedOnlyInput").checked = Boolean(view.pinnedOnly);
     saveCollectionPreferences({ ...collectionPreferences, layout: $("#collectionLayout").value });
@@ -5211,8 +5444,16 @@ function initializeCollectionQol() {
     if (saveCollectionQol({ ...qol, snoozes: {} })) showFeedback("Rinvii rimossi. Riapri i risultati precedenti per rivederli.");
   });
   $("#offlineStatusButton").addEventListener("click", () => void updateOfflineReadiness());
-  window.addEventListener("online", () => void updateOfflineReadiness());
-  window.addEventListener("offline", () => void updateOfflineReadiness());
+  const networkChanged = () => {
+    githubAvailability = "GitHub: disponibilita' non verificata dopo il cambio di rete";
+    updateLocalSyncSummary();
+    void updateOfflineReadiness();
+  };
+  window.addEventListener("online", networkChanged);
+  window.addEventListener("offline", networkChanged);
+  window.addEventListener("storage", (event) => {
+    if (event.key === STORAGE_KEY || event.key === null) updateLocalSyncSummary();
+  });
   void updateOfflineReadiness();
 }
 
@@ -5257,6 +5498,90 @@ function updateAlbum(id, changes) {
   }
 }
 
+function openCollectionHistory() {
+  const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+  state.collectionHistory = Array.isArray(persisted.collectionHistory) ? persisted.collectionHistory : [];
+  const dialog = document.createElement("dialog");
+  dialog.className = "album-comparison-dialog";
+  const heading = document.createElement("h2");
+  heading.textContent = "Cronologia locale della raccolta";
+  const note = document.createElement("p");
+  note.textContent = "Registra modifiche agli album avviate da questa PWA. Il ripristino controlla i campi cambiati e non sostituisce modifiche successive.";
+  const list = document.createElement("div");
+  list.className = "collection-history-list";
+  const entries = [...state.collectionHistory].reverse();
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "Nessuna modifica registrata su questo dispositivo.";
+    list.append(empty);
+  }
+  for (const entry of entries) {
+    const item = document.createElement("section");
+    item.className = "collection-history-entry";
+    const title = document.createElement("strong");
+    title.textContent = `${entry.label} · ${entry.createdAt}`;
+    item.append(title);
+    for (const change of entry.changes || []) {
+      const detail = document.createElement("p");
+      const action = change.kind === "added" ? "album aggiunto" : change.kind === "removed" ? "album rimosso"
+        : change.fields.join(", ");
+      detail.textContent = `${change.id}: ${action}`;
+      item.append(detail);
+    }
+    for (const change of entry.storageChanges || []) {
+      const detail = document.createElement("p");
+      detail.textContent = `${change.id}: ${change.field}`;
+      item.append(detail);
+    }
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "secondary";
+    restore.textContent = entry.restoredAt ? "Già ripristinata" : "Ripristina questa modifica";
+    restore.disabled = Boolean(entry.restoredAt);
+    restore.addEventListener("click", () => {
+      try {
+        const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+        if (JSON.stringify(persisted.albums) !== JSON.stringify(state.albums)) {
+          throw new Error("La raccolta è cambiata in un'altra scheda. Ricarica prima di ripristinare.");
+        }
+        if (!window.confirm(`Ripristinare “${entry.label}”? La cronologia resta locale; nessuna modifica viene inviata a GitHub.`)) return;
+        const recordKeys = [ALBUM_DURATIONS_KEY, "accord-music-edition-links-v1",
+          COMPLETION_PROVENANCE_KEY, COMPLETION_EVIDENCE_KEY];
+        const records = Object.fromEntries(recordKeys.map((key) => [key,
+          JSON.parse(localStorage.getItem(key) || "{}")]));
+        const { albums: restored, storageUpdates } = prepareCollectionHistoryRestore(
+          state.albums, entry, records["accord-music-edition-links-v1"], records,
+        );
+        const known = new Set(restored.map((album) => album.id));
+        const nextHistory = state.collectionHistory.map((row) => row.id === entry.id
+          ? { ...row, restoredAt: new Date().toISOString() } : row);
+        const next = { ...state, albums: restored,
+          manualOrder: [...state.manualOrder.filter((id) => known.has(id)),
+            ...restored.map((album) => album.id).filter((id) => !state.manualOrder.includes(id))],
+          collectionHistory: nextHistory };
+        commitLocalRestore(localStorage, STORAGE_KEY, state, next, storageUpdates, `Ripristino: ${entry.label}`);
+        updateLocalSyncSummary();
+        dialog.close();
+        render();
+        showFeedback("Modifica ripristinata localmente; sincronizza per propagare la scelta.");
+      } catch (error) {
+        showFeedback(`Ripristino non applicato: ${error.message}`, true);
+      }
+    });
+    item.append(restore);
+    list.append(item);
+  }
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "secondary";
+  close.textContent = "Chiudi";
+  close.addEventListener("click", () => dialog.close());
+  dialog.append(heading, note, list, close);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  dialog.showModal();
+}
+
 function applyCollectionSearch() {
   const query = $("#searchInput").value.trim();
   if (query === appliedCollectionSearch) return;
@@ -5275,7 +5600,7 @@ $("#searchInput").addEventListener("keydown", (event) => {
   }
 });
 for (const input of [$("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
-  $("#collectionFilter"), $("#tagFilter")]) {
+  $("#collectionFilter"), $("#tagFilter"), $("#serviceFilter"), ...localCollectionChecks.map($)]) {
   input.addEventListener("change", render);
 }
 $("#sortOrder").addEventListener("change", () => {
@@ -5563,7 +5888,7 @@ async function runPlaylistImport(input, accessToken) {
   const previous = state.albums;
   state.albums = result.albums;
   try {
-    if (result.added) saveState();
+    if (result.added) saveState("Importa playlist nella raccolta");
   } catch (error) {
     state.albums = previous;
     throw error;
@@ -5846,19 +6171,50 @@ function authHeaders() {
   };
 }
 
+async function githubFetch(url, options) {
+  try {
+    const response = await fetch(url, options);
+    if (!response.ok && response.status !== 304 && response.status !== 404) {
+      githubAvailability = `GitHub: ${serviceFailure({ response }, navigator.onLine)}`;
+    } else githubAvailability = "GitHub: ultima richiesta raggiungibile (non e' un controllo attuale)";
+    updateLocalSyncSummary();
+    return response;
+  } catch (error) {
+    githubAvailability = `GitHub: ${serviceFailure(error, navigator.onLine)}`;
+    updateLocalSyncSummary();
+    throw error;
+  }
+}
+
+function githubHttpError(message, response) {
+  if (response.status === 429 || response.status === 403 && (
+    response.headers.get("retry-after") || response.headers.get("x-ratelimit-remaining") === "0")) {
+    message = "Limite GitHub / cooldown: attendi prima di riprovare.";
+  }
+  const error = new Error(message);
+  error.response = response;
+  githubAvailability = `GitHub: ${serviceFailure(error, navigator.onLine)}`;
+  updateLocalSyncSummary();
+  return error;
+}
+
 async function githubRequest(url, options = {}) {
-  const response = await fetch(url, {
+  const response = await githubFetch(url, {
     ...options,
     headers: { ...authHeaders(), ...options.headers },
     credentials: "omit",
     referrerPolicy: "no-referrer",
   });
   if (!response.ok) {
-    if (response.status === 409) throw new Error("Repository modificato in parallelo. Rileggi e risolvi di nuovo i conflitti.");
-    if ([401, 403, 404].includes(response.status)) {
-      throw new Error(`GitHub ha rifiutato l'accesso (HTTP ${response.status}). Verifica proprietario, repository privato e permessi Contents del token.`);
+    if (response.status === 409) throw githubHttpError("Repository modificato in parallelo. Rileggi e risolvi di nuovo i conflitti.", response);
+    if (response.status === 429 || response.status === 403 && (
+      response.headers.get("retry-after") || response.headers.get("x-ratelimit-remaining") === "0")) {
+      throw githubHttpError("Limite GitHub / cooldown: attendi prima di riprovare.", response);
     }
-    throw new Error(`Errore GitHub HTTP ${response.status}.`);
+    if ([401, 403, 404].includes(response.status)) {
+      throw githubHttpError(`GitHub ha rifiutato l'accesso (HTTP ${response.status}). Verifica proprietario, repository privato e permessi Contents del token.`, response);
+    }
+    throw githubHttpError(`Errore GitHub HTTP ${response.status}.`, response);
   }
   return response.json();
 }
@@ -5870,14 +6226,14 @@ async function readRemote(owner) {
   if (!repository.default_branch) throw new Error("GitHub non ha restituito il branch predefinito.");
   const branch = repository.default_branch;
   const fileUrl = `${repoUrl}/contents/albums.json?ref=${encodeURIComponent(branch)}`;
-  const response = await fetch(fileUrl, { headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer" });
+  const response = await githubFetch(fileUrl, { headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer" });
   let albums = [];
   let sha = null;
   let legacyStatusesFound = false;
   if (response.status !== 404) {
     if (!response.ok) {
-      if ([401, 403].includes(response.status)) throw new Error(`Accesso al file rifiutato da GitHub (HTTP ${response.status}). Verifica il permesso Contents.`);
-      throw new Error(`Errore GitHub HTTP ${response.status} durante la lettura di albums.json.`);
+      if ([401, 403].includes(response.status)) throw githubHttpError(`Accesso al file rifiutato da GitHub (HTTP ${response.status}). Verifica il permesso Contents.`, response);
+      throw githubHttpError(`Errore GitHub HTTP ${response.status} durante la lettura di albums.json.`, response);
     }
     const file = await response.json();
     if (file.type !== "file" || typeof file.content !== "string") throw new Error("albums.json non e' un file GitHub valido.");
@@ -5895,7 +6251,7 @@ async function readRemote(owner) {
   const lastFmHistory = credentials().useSyncedLastFmHistory
     ? await readRemoteLastFmHistory(repoUrl, branch) : null;
   const coverUrl = `${repoUrl}/contents/covers.bin?ref=${encodeURIComponent(branch)}`;
-  const metadataResponse = await fetch(coverUrl, {
+  const metadataResponse = await githubFetch(coverUrl, {
     headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
   });
   if (metadataResponse.status === 404) {
@@ -5906,17 +6262,17 @@ async function readRemote(owner) {
     };
   }
   if (!metadataResponse.ok) {
-    if ([401, 403].includes(metadataResponse.status)) throw new Error(`Accesso a covers.bin rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
-    throw new Error(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura di covers.bin.`);
+    if ([401, 403].includes(metadataResponse.status)) throw githubHttpError(`Accesso a covers.bin rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`, metadataResponse);
+    throw githubHttpError(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura di covers.bin.`, metadataResponse);
   }
   const metadata = await metadataResponse.json();
   if (metadata.type !== "file" || typeof metadata.sha !== "string") throw new Error("covers.bin non e' un file GitHub valido.");
-  const rawResponse = await fetch(coverUrl, {
+  const rawResponse = await githubFetch(coverUrl, {
     headers: { ...authHeaders(), Accept: "application/vnd.github.raw+json" },
     credentials: "omit",
     referrerPolicy: "no-referrer",
   });
-  if (!rawResponse.ok) throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download di covers.bin.`);
+  if (!rawResponse.ok) throw githubHttpError(`Errore GitHub HTTP ${rawResponse.status} durante il download di covers.bin.`, rawResponse);
   const coverArchive = new Uint8Array(await rawResponse.arrayBuffer());
   const covers = await decodeCoverArchive(coverArchive);
   return {
@@ -5928,15 +6284,15 @@ async function readRemote(owner) {
 
 async function readRemoteLastFmHistory(repoUrl, branch) {
   const url = `${repoUrl}/contents/lastfm-history.json.gz?ref=${encodeURIComponent(branch)}`;
-  const metadataResponse = await fetch(url, {
+  const metadataResponse = await githubFetch(url, {
     headers: authHeaders(), credentials: "omit", referrerPolicy: "no-referrer",
   });
   if (metadataResponse.status === 404) return null;
   if (!metadataResponse.ok) {
     if ([401, 403].includes(metadataResponse.status)) {
-      throw new Error(`Accesso alla cronologia Last.fm rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`);
+      throw githubHttpError(`Accesso alla cronologia Last.fm rifiutato da GitHub (HTTP ${metadataResponse.status}). Verifica il permesso Contents.`, metadataResponse);
     }
-    throw new Error(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura della cronologia Last.fm.`);
+    throw githubHttpError(`Errore GitHub HTTP ${metadataResponse.status} durante la lettura della cronologia Last.fm.`, metadataResponse);
   }
   const metadata = await metadataResponse.json();
   if (metadata.type !== "file" || typeof metadata.sha !== "string") {
@@ -5945,13 +6301,13 @@ async function readRemoteLastFmHistory(repoUrl, branch) {
   if (Number.isFinite(metadata.size) && metadata.size > MAX_LASTFM_HISTORY_ARCHIVE_BYTES) {
     throw new Error("La cronologia Last.fm supera il limite di 50 MB compresso.");
   }
-  const rawResponse = await fetch(url, {
+  const rawResponse = await githubFetch(url, {
     headers: { ...authHeaders(), Accept: "application/vnd.github.raw+json" },
     credentials: "omit",
     referrerPolicy: "no-referrer",
   });
   if (!rawResponse.ok) {
-    throw new Error(`Errore GitHub HTTP ${rawResponse.status} durante il download della cronologia Last.fm.`);
+    throw githubHttpError(`Errore GitHub HTTP ${rawResponse.status} durante il download della cronologia Last.fm.`, rawResponse);
   }
   const archive = new Uint8Array(await rawResponse.arrayBuffer());
   if (!archive.length || archive.length > MAX_LASTFM_HISTORY_ARCHIVE_BYTES) {
@@ -6201,6 +6557,15 @@ async function performSync(choices = {}, resolvedConflicts = 0) {
   let localStateApplied = false;
   try {
     if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+    const storedSnapshot = localStorage.getItem(STORAGE_KEY);
+    const assertSyncCurrent = () => {
+      if (localStorage.getItem(STORAGE_KEY) !== storedSnapshot) {
+        throw new Error("La raccolta salvata o la base sono cambiate in un'altra scheda. Nessuna sovrascrittura locale; riapri Sincronizza.");
+      }
+    };
+    if (localCollectionStatus(localStorage, STORAGE_KEY, state, normalizeLocalAlbums).unsaved) {
+      throw new Error("Sono presenti modifiche non salvate o una raccolta diversa in un'altra scheda. Risolvi il salvataggio locale prima di sincronizzare.");
+    }
     const remote = await readRemote(owner);
     let historySyncNote = "";
     if (remote.lastFmHistory) {
@@ -6236,6 +6601,7 @@ async function performSync(choices = {}, resolvedConflicts = 0) {
       return;
     }
     if (JSON.stringify(state.albums) !== snapshot) throw new Error("La raccolta e' cambiata durante l'anteprima. Riapri Sincronizza.");
+    assertSyncCurrent();
     const selectedCovers = new Map();
     for (const album of merged.albums) {
       if (!album.cover_sha256) continue;
@@ -6260,18 +6626,20 @@ async function performSync(choices = {}, resolvedConflicts = 0) {
       && (updatedCoverArchive.length !== remote.coverArchive.length
         || updatedCoverArchive.some((value, index) => value !== remote.coverArchive[index]));
     if (coversChanged) {
+      assertSyncCurrent();
       await writeRemoteCovers(owner, updatedCoverArchive, remote.coversSha, remote.branch);
       completedRemoteWrites.push("copertine");
     }
     const remoteState = JSON.stringify(remote.albums);
     const finalState = JSON.stringify(merged.albums);
     if (finalState !== remoteState || remote.legacyStatusesFound) {
+      assertSyncCurrent();
       await writeRemote(owner, merged.albums, remote.sha, remote.branch);
       completedRemoteWrites.push("elenco album");
     }
-    state.albums = merged.albums;
-    state.base = merged.albums;
-    saveState();
+    assertSyncCurrent();
+    commitLocalRestore(localStorage, STORAGE_KEY, state,
+      { ...state, albums: merged.albums, base: merged.albums }, {}, null);
     localStateApplied = true;
     const syncAt = new Date().toISOString();
     const summarySaved = saveCollectionQol({ ...qol, lastSync: syncAt, lastSyncSummary: summary });
@@ -6284,12 +6652,14 @@ async function performSync(choices = {}, resolvedConflicts = 0) {
   } catch (error) {
     automaticSyncQueued = false;
     const partial = completedRemoteWrites.length > 0;
-    setSyncState(partial ? "Sincronizzazione parziale · controlla i dettagli" : "Sincronizzazione non riuscita");
+    const failure = serviceFailure(error, navigator.onLine);
+    setSyncState(partial ? `Sincronizzazione parziale · ${failure}` : failure);
+    updateLocalSyncSummary();
     const completion = partial
       ? `GitHub ha confermato: ${completedRemoteWrites.join(", ")}. `
         + (localStateApplied ? "La raccolta locale è aggiornata. " : "La raccolta locale non è stata aggiornata. ")
       : "";
-    showMessage(partial ? "Sincronizzazione parziale" : "Errore di sincronizzazione",
+    showMessage(partial ? "Sincronizzazione parziale" : "Sincronizzazione non completata",
       `${completion}${error.message}\nNessun nuovo invio automatico. Se la scrittura ha avuto esito incerto, verifica i file nel repository GitHub e le modifiche locali prima di avviare una nuova sincronizzazione.`);
   } finally {
     $("#syncButton").disabled = false;
@@ -6714,7 +7084,7 @@ function previewLocalRestore(backup) {
             .filter(([id]) => albums.some((album) => album.id === id))),
         } : {}),
       } : {};
-      commitLocalRestore(localStorage, STORAGE_KEY, state, next, related);
+      commitLocalRestore(localStorage, STORAGE_KEY, state, next, related, "Ripristino backup locale");
       collectionPreferences = portablePreferences(state.preferences);
       $("#collectionLayout").value = collectionPreferences.layout;
       $("#albumList").dataset.layout = collectionPreferences.layout;
@@ -6809,50 +7179,58 @@ $("#activityButton").addEventListener("click", () => {
 });
 $("#closeActivityButton").addEventListener("click", () => $("#activityDialog").close());
 
-let waitingUpdate = null;
-let updateChosen = false;
-let updateReadyToReload = false;
-function presentUpdate(worker) {
-  waitingUpdate = worker;
+function presentUpdateBanner() {
   $("#updateBanner").hidden = false;
   $("#showUpdateButton").hidden = false;
   recordActivity("Aggiornamento disponibile; attivazione solo su scelta esplicita.");
 }
-$("#deferUpdateButton").addEventListener("click", () => { $("#updateBanner").hidden = true; });
+$("#deferUpdateButton").addEventListener("click", () => {
+  updateLifecycle.defer();
+  $("#updateBanner").hidden = true;
+});
 $("#showUpdateButton").addEventListener("click", () => {
   $("#updateBanner").hidden = false;
   $("#activityDialog").close();
 });
 function updateHasUnsavedWork() {
   if (commandGuard.isBusy()) return true;
+  if (!$("#qolStorageError").hidden) return true;
+  if ([...$("#albumList").querySelectorAll(".album-card")].some((card) => {
+    const album = state.albums.find((record) => record.id === card.dataset.albumId);
+    return album && [[".genres-input", album.genres], [".collections-input", album.collections], [".tags-input", album.tags]]
+      .some(([selector, values]) => card.querySelector(selector)?.value !== values.join(", "));
+  })) return true;
+  if (localSaveError || state.loadError || localCollectionStatus(localStorage, STORAGE_KEY, state, normalizeLocalAlbums).unsaved) return true;
   return Object.keys(qol.drafts).length > 0
     || [...document.querySelectorAll("dialog")].some((dialog) => dialog.open && dialog.id !== "activityDialog")
-    || busyActivitySelectors.some((selector) => $(selector).disabled);
+    || busyActivitySelectors.some((selector) => $(selector).disabled)
+    || $("#loadCoversButton").disabled
+    || Boolean(document.querySelector("[aria-busy='true']"))
+    || catalogSuggestionsUI?.isBusy() || catalogPlaylistUI?.isBusy() || tidalUI.isBusy() || qobuzUI.isBusy()
+    || [...document.querySelectorAll("audio, video")].some((media) => !media.paused);
 }
-$("#applyUpdateButton").addEventListener("click", () => {
-  try {
-    if (!waitingUpdate) throw new Error("Nessun aggiornamento pronto.");
-    if (!persistDetailsDraft()) return;
-    if (updateHasUnsavedWork()) throw new Error("Completa o scarta le bozze, attendi le attività e chiudi le finestre prima di aggiornare. Le modifiche locali già salvate restano sul dispositivo.");
-    saveState();
+const updateLifecycle = createUpdateLifecycle({
+  hasWork: updateHasUnsavedWork,
+  confirm: () => window.confirm("Riavviare con la nuova versione? I dati salvati nel browser restano locali: questo non sincronizza GitHub."),
+  reload: () => location.reload(),
+  present: presentUpdateBanner,
+  status: (text, chosen) => {
+    $("#applyUpdateButton").disabled = chosen;
+    $("#updateStatus").textContent = text;
+  },
+  prepare: () => {
     const session = { fields: Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value])),
       appliedSearch: appliedCollectionSearch, pinnedOnly: $("#pinnedOnlyInput").checked, scrollY: window.scrollY,
       playlist: { name: $("#playlistBuilderName").value, artists: $("#playlistArtistCount").value,
         tracks: $("#playlistTracksPerArtist").value, preview: topArtistPlaylistPreview },
       openSpotify: $("#openSpotifyInput").value, selectedIds: [...selectedAlbumIds],
+      localChecks: localCollectionChecks.map((selector) => $(selector).checked),
+      selectionOnly: collectionSelectionOnly,
       facet: localFacet, facetReturnViews };
     sessionStorage.setItem("accord-update-view-v1", JSON.stringify(session));
-    updateChosen = true;
-    $("#applyUpdateButton").disabled = true;
-    $("#updateStatus").textContent = "Aggiornamento richiesto. Attendi il riavvio.";
-    if (updateReadyToReload) location.reload();
-    else waitingUpdate.postMessage({ type: "accord-activate-update" });
-  } catch (error) {
-    updateChosen = false;
-    $("#applyUpdateButton").disabled = false;
-    $("#updateStatus").textContent = error.message;
-  }
+  },
 });
+$("#applyUpdateButton").addEventListener("click", () => updateLifecycle.apply());
 
 initializeCollectionQol();
 applyAccessibility();
@@ -6877,6 +7255,8 @@ if (updateView) {
     }
     appliedCollectionSearch = saved.appliedSearch ?? saved.fields?.["#searchInput"] ?? "";
     $("#pinnedOnlyInput").checked = saved.pinnedOnly === true;
+    localCollectionChecks.forEach((selector, index) => { $(selector).checked = saved.localChecks?.[index] === true; });
+    collectionSelectionOnly = saved.selectionOnly === true;
     if (saved.playlist) {
       $("#playlistBuilderName").value = saved.playlist.name;
       $("#playlistArtistCount").value = saved.playlist.artists;
@@ -6885,7 +7265,8 @@ if (updateView) {
       if (topArtistPlaylistPreview) renderTopArtistPlaylistPreview(topArtistPlaylistPreview);
     }
     if (typeof saved.openSpotify === "string") $("#openSpotifyInput").value = saved.openSpotify;
-    selectedAlbumIds = new Set(Array.isArray(saved.selectedIds) ? saved.selectedIds : []);
+    selectedAlbumIds = new Set((Array.isArray(saved.selectedIds) ? saved.selectedIds : [])
+      .filter((id) => state.albums.some((album) => album.id === id)));
     requestAnimationFrame(() => window.scrollTo(0, Number(saved.scrollY) || 0));
     sessionStorage.removeItem("accord-update-view-v1");
   } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
@@ -7069,7 +7450,7 @@ setInterval(updateSpotifyPlaylistPause, 1000);
 window.addEventListener("storage", updateSpotifyPlaylistPause);
 updateSpotifyPlaylistPause();
 for (const provider of [tidalUI, qobuzUI]) provider.suggestionAPI.prepare = catalogPlaylistUI.prepareRecords;
-render({ remoteCovers: !incomingShare && !updateView });
+render();
 receiveSharedAlbum();
 restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {
@@ -7079,11 +7460,11 @@ finishSpotifyAuthorization().catch((error) => {
 if ("serviceWorker" in navigator && window.isSecureContext) {
   const initialController = navigator.serviceWorker.controller;
   navigator.serviceWorker.register("./sw.js").then((registration) => {
-    if (registration.waiting) presentUpdate(registration.waiting);
+    if (registration.waiting) updateLifecycle.ready(registration.waiting);
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       worker?.addEventListener("statechange", () => {
-        if (worker.state === "installed" && navigator.serviceWorker.controller) presentUpdate(worker);
+        if (worker.state === "installed" && navigator.serviceWorker.controller) updateLifecycle.ready(worker);
       });
     });
   }).catch((error) => {
@@ -7093,14 +7474,8 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
   });
   navigator.serviceWorker.ready.then(() => updateOfflineReadiness());
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (updateChosen) location.reload();
-    else {
-      if (initialController) {
-        updateReadyToReload = true;
-        presentUpdate(navigator.serviceWorker.controller);
-      }
-      void updateOfflineReadiness();
-    }
+    updateLifecycle.controllerChanged(navigator.serviceWorker.controller, Boolean(initialController));
+    void updateOfflineReadiness();
   });
 }
 if (!incomingShare && !updateView && credentials().autoSync && credentials().token) sync();

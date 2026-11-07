@@ -50,7 +50,12 @@ test("durations are exact positive ms, with complete-track provenance and person
   assert.equal(result.state, "completed");
   assert.equal(result.reads, 1);
   assert.equal(json(storage, DURATIONS)[ID], 120001);
-  assert.deepEqual(json(storage, COLLECTION), before);
+  const saved = json(storage, COLLECTION);
+  assert.deepEqual(saved.albums, before.albums);
+  assert.deepEqual(saved.base, before.base);
+  assert.deepEqual(saved.preferences, before.preferences);
+  assert.equal(saved.collectionHistory.length, 1);
+  assert.equal(saved.collectionHistory[0].storageChanges[0].field, "durata");
   assert.equal(json(storage, COMPLETION_PROVENANCE_KEY)[ID].duration.complete_tracks, 1);
   assert.equal(json(storage, COMPLETION_PROVENANCE_KEY)[ID].duration.target, ID);
 });

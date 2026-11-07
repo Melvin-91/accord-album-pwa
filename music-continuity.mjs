@@ -1,4 +1,6 @@
 // Local-only checkpoints: no credentials, signed URLs, callbacks, or write queue.
+import { commitLocalRestore } from "./ui.mjs?v=15";
+
 export async function fingerprint(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
@@ -71,7 +73,10 @@ export function setEditionLink(storage, album, provider, selected = null) {
   links[album.id] ||= {};
   if (selected) links[album.id][provider] = { id: selected.id, name: selected.name, source: sourceIdentity(album) };
   else delete links[album.id][provider];
-  storage.setItem("accord-music-edition-links-v1", JSON.stringify(links));
+  const key = "accord-album-pwa-v1";
+  const collection = JSON.parse(storage.getItem(key) || "{}");
+  commitLocalRestore(storage, key, collection, collection,
+    { "accord-music-edition-links-v1": links }, "Associazione esplicita di edizione");
 }
 
 export function pauseRemaining(storage, provider, now = Date.now()) {

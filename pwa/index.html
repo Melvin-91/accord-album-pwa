@@ -12,13 +12,13 @@
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css?v=37">
-    <title>Accord v1.17.0 · La mia raccolta</title>
+    <title>Accord v1.18.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">v1.17.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.18.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -32,7 +32,7 @@
     <main>
       <section id="updateBanner" class="notice" role="status" hidden>
         <p>Nuova versione pronta. Le bozze restano locali; completa o scarta le modifiche prima di aggiornare.</p>
-        <button id="applyUpdateButton" type="button">Aggiorna ora</button>
+        <button id="applyUpdateButton" type="button">Riavvia con la nuova versione</button>
         <button id="deferUpdateButton" type="button">Più tardi</button>
         <p id="updateStatus"></p>
       </section>
@@ -64,6 +64,7 @@
               <button id="resumeMusicCompletionButton" type="button">Riprendi completamento dati…</button>
               <button id="duplicatesButton" type="button">Confronta possibili duplicati</button>
               <button id="auditCollectionButton" type="button">Controllo qualità locale</button>
+              <button id="collectionHistoryButton" type="button">Cronologia modifiche locali</button>
               <button id="statisticsButton" type="button">Statistiche locali</button>
               <button id="syncChangesButton" type="button">Modifiche da sincronizzare</button>
               <button id="offlineStatusButton" type="button">Disponibilita' offline</button>
@@ -123,6 +124,12 @@
         <label>Tag
           <select id="tagFilter"><option value="">Tutti i tag</option></select>
         </label>
+        <label class="check"><input id="unratedFilter" type="checkbox">Senza voto</label>
+        <label class="check"><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
+        <label class="check"><input id="notesPresentFilter" type="checkbox">Note presenti</label>
+        <label>Servizio dell'album
+          <select id="serviceFilter"><option value="">Tutti i servizi</option><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option><option value="other">Altri cataloghi</option></select>
+        </label>
         <label>Ordina per
           <select id="sortOrder">
             <option value="artist">Artista</option><option value="name">Album</option>
@@ -133,8 +140,10 @@
         </label>
       </section>
       </details>
+      <div id="collectionFilterChips" class="qol-actions" aria-label="Filtri locali attivi"></div>
 
       <p id="collectionSummary" class="summary" aria-live="polite"></p>
+      <button id="unratedSummary" type="button" class="secondary"></button>
       <label>Lista intelligente
         <select id="smartCollectionList">
           <option value="">Tutti gli album</option>
@@ -150,6 +159,8 @@
       <p id="offlineSummary" class="summary" role="status"></p>
       <section id="selectionToolbar" class="selection-toolbar" aria-label="Azioni album selezionati" hidden>
         <strong id="selectionCount"></strong>
+        <button id="showSelectionButton" type="button">Vedi selezione</button>
+        <button id="dropHiddenSelectionButton" type="button">Togli nascosti</button>
         <button id="selectVisibleButton" type="button">Seleziona visibili</button>
         <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option></select></label>
         <button id="applyBulkStatus" type="button">Applica stato</button>
@@ -528,6 +539,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=105"></script>
+    <script type="module" src="app.mjs?v=108"></script>
   </body>
 </html>
