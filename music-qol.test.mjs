@@ -10,9 +10,202 @@ import {
   visibleSelection, prepareAlbumReview, batchAlbumChanges, appendCollectionHistory,
   collectionHealthSummary, commitLocalRestore, createCollectionHistoryEntry,
   prepareCollectionHistoryRestore,
+  selectCollectionAlbum,
+  runPlatformAccessChecks,
+  userFacingStatus,
+  installDialogLayout,
+  installCollectionLayout,
 } from "./ui.mjs";
 
 const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+
+test("collection options keep every control connected and only one panel open", () => {
+  const observers = [];
+  class Node {
+    constructor(tag, id = "", className = "") {
+      this.tagName = tag.toUpperCase(); this.id = id; this.children = []; this.dataset = {};
+      this.events = {}; this.attributes = {}; this.hidden = false; this.open = false;
+      const classes = new Set(className.split(/\s+/));
+      this.classList = { add: (name) => classes.add(name), contains: (name) => classes.has(name) };
+      Object.defineProperty(this, "className", { set: (value) => {
+        classes.clear(); value.split(/\s+/).forEach((name) => classes.add(name));
+      } });
+    }
+    matches(selector) {
+      return selector.startsWith(".") ? this.classList.contains(selector.slice(1))
+        : selector.startsWith("#") ? this.id === selector.slice(1) : this.tagName === selector.toUpperCase();
+    }
+    querySelector(selector) {
+      const selectors = selector.split(",").map((value) => value.trim());
+      for (const child of this.children) {
+        if (selectors.some((value) => child.matches(value))) return child;
+        const nested = child.querySelector(selector);
+        if (nested) return nested;
+      }
+      return null;
+    }
+    detach(node) {
+      if (node.parentElement) node.parentElement.children =
+        node.parentElement.children.filter((child) => child !== node);
+      node.parentElement = this;
+    }
+    append(...nodes) { nodes.forEach((node) => { this.detach(node); this.children.push(node); }); }
+    prepend(...nodes) { nodes.forEach((node) => this.detach(node)); this.children.unshift(...nodes); }
+    before(node) {
+      const parent = this.parentElement; parent.detach(node);
+      parent.children.splice(parent.children.indexOf(this), 0, node);
+    }
+    after(node) {
+      const parent = this.parentElement; parent.detach(node);
+      parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+    }
+    setAttribute(name, value) { this.attributes[name] = value; }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    focus() { document.activeElement = this; }
+  }
+  const root = new Node("main"), panel = new Node("section", "collectionPanel");
+  const service = new Node("section", "", "music-service-picker");
+  root.append(service, panel);
+  const document = {
+    createElement: (tag) => new Node(tag), createComment: () => new Node("comment"),
+    getElementById: (id) => root.querySelector(`#${id}`), querySelector: (selector) => root.querySelector(selector),
+    addEventListener(name, callback) { this[name] = callback; },
+    defaultView: { MutationObserver: class {
+      constructor(callback) { this.callback = callback; observers.push(this); }
+      observe(target) { this.target = target; }
+    } },
+  };
+  const toolbar = new Node("section", "", "playlist-import");
+  const actions = new Node("div", "", "playlist-import-actions");
+  const manual = new Node("button", "manualAlbumButton"); actions.append(manual);
+  toolbar.append(new Node("div"), actions);
+  const filters = new Node("details", "collectionFilters");
+  const count = new Node("span", "activeFilterCount");
+  filters.append(count);
+  const view = new Node("details", "viewMenu"), content = new Node("div", "", "view-menu-content");
+  const playlist = new Node("button", "playlistImportButton");
+  const saved = new Node("label"), savedSelect = new Node("select", "savedCollectionView");
+  saved.append(savedSelect); content.append(playlist, saved); view.append(content);
+  const storage = new Node("details", "", "collection-storage-details");
+  const selection = new Node("section", "selectionToolbar");
+  const selectionSummary = new Node("div", "", "selection-summary");
+  const selectedCount = new Node("strong", "selectionCount"), clear = new Node("button", "clearSelectionButton");
+  selectionSummary.append(selectedCount, clear);
+  const primary = new Node("div", "", "selection-primary");
+  const genres = new Node("button", "bulkGenresButton"), bulk = new Node("button", "bulkEditButton");
+  primary.append(genres, bulk);
+  const secondary = new Node("details", "", "selection-secondary");
+  const options = new Node("div", "", "selection-options");
+  const apply = new Node("button", "applyBulkStatus"); options.append(apply); secondary.append(options);
+  selection.append(selectionSummary, primary, secondary);
+  panel.append(toolbar, new Node("div", "", "collection-search"), filters, view, storage, selection,
+    new Node("p", "", "selection-help"));
+  const records = new Map([manual, playlist, count, savedSelect, genres, bulk, clear, selectedCount, apply].map((node) => [node.id, node]));
+  for (const id of ["collectionFilterChips", "tidalCollectionMount", "unratedSummary", "manualOrderHint",
+    "coverSyncNotice", "albumList", "emptyState", "collectionSummary"]) {
+    const node = new Node("section", id); records.set(id, node); panel.append(node);
+  }
+  const controller = installCollectionLayout(document);
+  for (const [id, node] of records) assert.equal(document.getElementById(id), node, id);
+  const aside = document.getElementById("collectionOptions");
+  assert.equal(aside.hidden, true);
+  assert.equal(selection.parentElement.classList.contains("collection-results-footer"), true);
+  assert.deepEqual(primary.children.map((node) => node.id), ["bulkGenresButton", "collectionSelectionToggle"]);
+  assert.equal(bulk.parentElement, options);
+  assert.equal(clear.parentElement, options);
+  for (const key of ["filters", "view", "import", "state", "selection"]) {
+    controller.show(key);
+    assert.equal(aside.hidden, false);
+    const pages = aside.querySelector(".collection-options-scroll").children;
+    assert.equal(pages.filter((node) => node.open && !node.hidden).length, 1);
+    assert.equal(document.getElementById("albumList").parentElement.classList.contains("collection-results"), true);
+  }
+  selection.hidden = true; observers.find((observer) => observer.target === selection).callback();
+  assert.equal(aside.hidden, true);
+  filters.open = true; filters.events.toggle();
+  assert.equal(aside.hidden, false);
+  document.keydown({ key: "Escape", preventDefault() {} });
+  assert.equal(aside.hidden, true);
+  assert.equal(document.activeElement.id, "collectionFiltersToggle");
+  controller.show("import");
+  controller.close();
+  assert.equal(document.activeElement.id, "collectionViewToggle");
+  panel.hidden = true; controller.updateView();
+  assert.equal(service.parentElement, root);
+  panel.hidden = false; controller.updateView();
+  assert.equal(service.parentElement, actions);
+});
+
+test("dynamic dialogs preserve their form and actions outside the scrollable content", () => {
+  class Node {
+    constructor(tag) {
+      this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {};
+      const classes = new Set();
+      this.classList = { add: (value) => classes.add(value), contains: (value) => classes.has(value) };
+      Object.defineProperty(this, "className", { set: (value) => {
+        classes.clear(); value.split(/\s+/).forEach((entry) => classes.add(entry));
+      } });
+    }
+    append(...nodes) {
+      for (const node of nodes) {
+        if (node.parentElement) node.parentElement.children = node.parentElement.children.filter((child) => child !== node);
+        node.parentElement = this; this.children.push(node);
+      }
+    }
+    replaceChildren(...nodes) {
+      this.children.forEach((node) => { node.parentElement = null; });
+      this.children = []; this.append(...nodes);
+    }
+    querySelector() { return this.children.find((node) => node.classList.contains("dialog-scroll")); }
+  }
+  let observer;
+  const document = { createElement: (tag) => new Node(tag), defaultView: { MutationObserver: class {
+    constructor(callback) { this.callback = callback; observer = this; }
+    observe() {} disconnect() { this.disconnected = true; }
+  } } };
+  const dialog = new Node("dialog"), form = new Node("form"), title = new Node("h2");
+  const input = new Node("input"), preview = new Node("pre"), prepare = new Node("button");
+  const confirm = new Node("button"), cancel = new Node("button");
+  form.append(input, prepare, preview, confirm);
+  dialog.append(title, form, cancel);
+  const root = { ownerDocument: document, querySelectorAll: () => [dialog] };
+  const stop = installDialogLayout(root);
+  assert.equal(dialog.children[0], form);
+  assert.deepEqual(form.children[0].children, [title, input, preview]);
+  assert.deepEqual(form.children[1].children, [prepare, confirm, cancel]);
+  observer.callback([{ addedNodes: [preview] }]);
+  assert.equal(form.children.length, 2);
+  stop();
+  assert.equal(observer.disconnected, true);
+});
+
+test("technical presentation keeps useful results and actions while hiding SQL and HTTP diagnostics", () => {
+  assert.equal(userFacingStatus("3 album salvati\nUPDATE albums SET title='x'\nDettagli tecnici: Error; HTTP 503"), "3 album salvati");
+  const failed = userFacingStatus("Accesso rifiutato (HTTP 403).\nVerifica il collegamento prima di ripetere.");
+  assert.match(failed, /Accesso rifiutato/);
+  assert.match(failed, /Verifica il collegamento/);
+  assert.doesNotMatch(failed, /HTTP/);
+});
+
+test("startup checks skip missing connections, retain failures, and reject changed accounts", async () => {
+  let identity = "account-a";
+  const results = new Map();
+  let missingReads = 0;
+  await runPlatformAccessChecks([
+    { key: "missing", identity: () => "", configured: () => false, check: () => missingReads++ },
+    { key: "failure", identity: () => "a", configured: () => true, check: async () => { throw new Error("Refused"); } },
+    { key: "changed", identity: () => identity, configured: () => true, check: async () => {
+      identity = "account-b"; return { account: "old account" };
+    } },
+    { key: "ok", identity: () => "a", configured: () => true, check: async () => ({ account: "verified" }) },
+  ], (key, result) => results.set(key, result));
+  assert.equal(missingReads, 0);
+  assert.match(results.get("missing").state, /non eseguita/);
+  assert.equal(results.get("failure").state, "Verifica non riuscita");
+  assert.match(results.get("changed").detail, /Configurazione cambiata/);
+  assert.equal(results.get("changed").account, undefined);
+  assert.equal(results.get("ok").account, "verified");
+});
 function appSection(start, end) {
   const index = app.indexOf(start);
   assert.notEqual(index, -1);
@@ -31,6 +224,56 @@ class Element {
   remove() {}
   focus() {}
 }
+
+test("plain selection replaces hidden or visible members; only control-click toggles membership", () => {
+  let selected = new Set(["hidden", "a"]);
+  selected = selectCollectionAlbum(selected, "b");
+  assert.deepEqual([...selected], ["b"]);
+  selected = selectCollectionAlbum(selected, "a", true);
+  assert.deepEqual([...selected], ["b", "a"]);
+  selected = selectCollectionAlbum(selected, "b", true);
+  assert.deepEqual([...selected], ["a"]);
+  assert.deepEqual([...selectCollectionAlbum(selected, "a")], ["a"]);
+  const checkbox = new Element("input");
+  const card = { dataset: { albumId: "b" }, querySelector: () => checkbox };
+  const context = { selectedAlbumIds: new Set(["hidden"]), selectCollectionAlbum,
+    $: () => ({ children: [card] }), updateSelectionToolbar: () => {} };
+  runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
+    + '\nselectAlbumCard("b", { ctrlKey: false })', context);
+  assert.deepEqual([...context.selectedAlbumIds], ["b"]);
+  assert.equal(checkbox.checked, true);
+});
+
+test("dedicated multiple genre editor uses the existing guarded preview without changing other fields", () => {
+  const albums = ["a", "b"].map((id) => validateAlbum({
+    id, name: id, artist: "Band", url: `https://open.spotify.com/album/${id}`,
+    year: "", status: "liked", rating: 4, genres: id === "a" ? ["Rock"] : [],
+    collections: [], tags: ["Keep"], notes: "", primary_genre: id === "a" ? "Rock" : "", cover_sha256: null,
+  }));
+  let form, build;
+  const body = new Element("body");
+  const context = { document: { body, createElement: (tag) => new Element(tag) },
+    Option: class { constructor(text, value) { this.textContent = text; this.value = value; } },
+    selectedAlbumIds: new Set(["a", "b"]), visibleAlbums: albums, state: { albums },
+    labels: { liked: "Piaciuto" }, selectionVisibility, prepareAlbumReview, batchAlbumChanges, validateAlbum,
+    reviewManualGenres, localStorage: { getItem: () => null }, COMPLETION_PROVENANCE_KEY: "provenance",
+    appendAlbumReview: (target, _dialog, builder) => { form = target; build = builder; } };
+  runInNewContext(appSection("function openBulkEditor(", "\nfunction appendAlbumReview(")
+    + "\nopenBulkEditor({}, { genresOnly: true })", context);
+  assert.equal(body.children[0].children[0].textContent, "Generi di 2 album");
+  const rows = form.children.filter((child) => child.className === "qol-bulk-row");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].children[1].checked, true);
+  rows[0].children[2].value = "Jazz";
+  const review = build();
+  assert.deepEqual(review.next[0].genres, ["Rock", "Jazz"]);
+  assert.deepEqual(review.next[1].genres, ["Jazz"]);
+  assert.equal(review.next[0].rating, 4);
+  assert.deepEqual(review.next[0].tags, ["Keep"]);
+  assert.equal(review.related.provenance.a.genres.source, "manual");
+  context.selectedAlbumIds.delete("b");
+  assert.throws(build, /Selezione cambiata/);
+});
 
 test("local criteria combine with title/artist and distinguish missing durations, empty notes and catalog identity", () => {
   const albums = [

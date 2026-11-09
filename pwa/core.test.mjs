@@ -616,9 +616,10 @@ test("quick edits refuse existing drafts and otherwise use one local commit with
 
 test("explicit update action persists view and preview before activation, never activates if work or storage fails", () => {
   const nodes = Object.fromEntries(["#applyUpdateButton", "#updateStatus", "#pinnedOnlyInput", "#playlistBuilderName",
-    "#playlistArtistCount", "#playlistTracksPerArtist", "#openSpotifyInput", "#searchInput", "#sortOrder"]
+    "#playlistArtistCount", "#playlistTracksPerArtist", "#openSpotifyInput", "#searchInput", "#sortOrder", "#albumList"]
     .map((selector) => [selector, { value: selector, checked: false, addEventListener(_name, listener) { this.listener = listener; } }]));
   let blocked = true, activations = 0, snapshot;
+  nodes["#albumList"].scrollTop = 123;
   const worker = { state: "installed", postMessage: (message) => {
     assert.equal(message.type, "accord-activate-update"); activations += 1;
   } };
@@ -630,7 +631,7 @@ test("explicit update action persists view and preview before activation, never 
     localCollectionChecks: [], collectionSelectionOnly: false,
     persistDetailsDraft: () => true, updateHasUnsavedWork: () => blocked,
     collectionViewSelectors: ["#searchInput", "#sortOrder"],
-    selectedAlbumIds: new Set(["a"]), window: { scrollY: 123, confirm: () => true },
+    selectedAlbumIds: new Set(["a"]), window: { scrollY: 0, confirm: () => true },
     localFacet: { field: "artist", value: "Band" },
     appliedCollectionSearch: "committed",
     facetReturnViews: [{ fields: { "#searchInput": "before" }, scroll: 50, selected: ["a"], facet: null }],
@@ -691,7 +692,7 @@ test("accessibility application updates controls and document attributes without
 
 test("local view preferences reject malformed storage and never decorate album titles", () => {
   for (const value of [null, [], 42, "bad", { layout: "invalid", pinnedIds: false }]) {
-    assert.deepEqual(normalizeCollectionPreferences(value), { layout: "comfortable", pinnedIds: [] });
+    assert.deepEqual(normalizeCollectionPreferences(value), { layout: "compact", pinnedIds: [] });
   }
   assert.deepEqual(normalizeCollectionPreferences({
     layout: "compact", pinnedIds: ["abc", "abc", null, "../bad", "xyz"],
@@ -775,7 +776,16 @@ test("sync changes show before and after values for each changed field", () => {
   const after = { ...before, rating: 4.5 };
   const source = appFunction("function changesText(", "\nfunction confirmSyncChanges(");
   const text = runInNewContext(`${source}\nchangesText(changes)`, { changes: albumChanges([before], [after]) });
-  assert.match(text, /rating: null -> 4.5/);
+  assert.match(text, /Il tuo voto: Non impostato → 4.5/);
+  assert.doesNotMatch(text, /rating:|null/);
+  const details = runInNewContext(`${source}\nchangesText(changes, true)`, { changes: albumChanges([before], [after]) });
+  assert.match(details, /rating: null -> 4.5/);
+  const hash = "a".repeat(64);
+  const cover = runInNewContext(`${source}\nchangesText(changes)`, {
+    changes: albumChanges([before], [{ ...before, cover_sha256: hash }]),
+  });
+  assert.match(cover, /Copertina: aggiornata/);
+  assert.equal(cover.includes(hash), false);
 });
 
 test("sync previews do not write before approval and reject local edits made during review", async () => {
@@ -1015,16 +1025,17 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   };
   element("#pinnedOnlyInput").checked = true;
   element("#collectionFilters").open = true;
+  element("#albumList").scrollTop = 540;
   const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
   for (const selector of localCollectionChecks) element(selector).checked = true;
   const original = Object.fromEntries(selectors.map((selector) => [selector, element(selector).value]));
-  let scroll = null, renders = 0;
+  let renders = 0;
   const context = { $: element, collectionViewSelectors: selectors, facetReturnViews: [],
     localCollectionChecks, collectionSelectionOnly: true,
     selectedAlbumIds: new Set(["a", "b"]), localFacet: null, navigatingToFacet: false,
     appliedCollectionSearch: original["#searchInput"],
     collectionPreferences: { layout: original["#collectionLayout"] }, state: {},
-    window: { scrollY: 540, scrollTo: (_x, y) => { scroll = y; } },
+    window: { scrollY: 0 },
     persistDetailsDraft: () => true, activateViewTab() {}, render: () => { renders += 1; },
     requestAnimationFrame: (fn) => fn(), refreshGenreFilters() {}, saveState() {},
     saveCollectionPreferences: (preferences) => { context.collectionPreferences = preferences; },
@@ -1040,6 +1051,7 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   element("#collectionLayout").value = "compact";
   context.collectionPreferences.layout = "compact";
   context.selectedAlbumIds.clear();
+  element("#albumList").scrollTop = 0;
   callbacks["#facetBackButton:click"]();
   assert.deepEqual(Object.fromEntries(selectors.map((selector) => [selector, element(selector).value])), original);
   assert.equal(context.localFacet, null);
@@ -1049,7 +1061,7 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   assert.ok(localCollectionChecks.every((selector) => element(selector).checked));
   assert.equal(context.collectionSelectionOnly, true);
   assert.equal(element("#collectionFilters").open, true);
-  assert.equal(scroll, 540);
+  assert.equal(element("#albumList").scrollTop, 540);
   assert.equal(renders, 2);
   context.persistDetailsDraft = () => false;
   open("tags", "blocked");
@@ -1481,7 +1493,8 @@ test("actionable errors offer redacted copy, settings and canonical playlist rev
   const id = "a".repeat(22);
   append(actions, `Sessione Spotify: playlist incompleta https://open.spotify.com/playlist/${id}?token=saved-secret`);
   assert.equal(actions.children.length, 3);
-  await actions.children[0].events.click();
+  assert.equal(actions.children[0].tag, "details");
+  await actions.children[0].children[1].events.click();
   assert.equal(copied.length, 1);
   assert.equal(copied[0].includes("saved-secret"), false);
   actions.children[1].events.click();
@@ -1505,7 +1518,7 @@ test("copied diagnostics allow only technical metadata, never album, artist, pas
   };
   const append = runInNewContext(`${appFunction("function appendErrorActions(", "\nfunction openSettings(")}\nappendErrorActions`, context);
   append(actions, raw);
-  await actions.children[0].events.click();
+  await actions.children[0].children[1].events.click();
   assert.deepEqual(JSON.parse(copied[0]), { product: "Accord PWA", version: "1.4.1",
     stage: "message", httpStatuses: [403], counts: { albums: 1, drafts: 1, failedCovers: 0 } });
   for (const secret of [album.name, album.artist, "private personal notes", "private-user", "private-password",
@@ -1696,14 +1709,14 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=108", "style.css?v=37"]) {
+  for (const file of ["app.mjs?v=110", "style.css?v=39"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=48", "ui.mjs?v=15", "tidal.mjs?v=9", "tidal-ui.mjs?v=24", "qobuz-ui.mjs?v=19",
-    "qobuz.mjs?v=8", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=9",
-    "music-qol.mjs?v=2", "playlist-ui.mjs?v=6",
-    "music-app-links.mjs?v=1", "music-continuity.mjs?v=3", "music-completion.mjs?v=5", "music-completion-ui.mjs?v=5"]) {
+  for (const file of ["core.mjs?v=48", "ui.mjs?v=17", "tidal.mjs?v=9", "tidal-ui.mjs?v=26", "qobuz-ui.mjs?v=21",
+    "qobuz.mjs?v=9", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=11",
+    "music-qol.mjs?v=2", "playlist-ui.mjs?v=8",
+    "music-app-links.mjs?v=1", "music-continuity.mjs?v=5", "music-completion.mjs?v=7", "music-completion-ui.mjs?v=7"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -1712,7 +1725,7 @@ test("offline shell versions include every local module and responsive dialogs k
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
     assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
   }
-  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=7"));
+  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=8"));
   assert.ok(readFileSync(new URL("./suggestions-ui.mjs", import.meta.url), "utf8")
     .includes("music-suggestion-recipes.mjs?v=1"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {

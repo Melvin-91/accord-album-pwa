@@ -1,9 +1,257 @@
 const LOCAL_LAYOUTS = new Set(["comfortable", "compact"]);
 
+export function userFacingStatus(message) {
+  const text = String(message).split("Dettagli tecnici:")[0];
+  return text.split("\n").filter((line) =>
+    !/^\s*(?:SQL\b|(?:SELECT|INSERT|UPDATE|DELETE|PRAGMA|BEGIN|COMMIT|ROLLBACK)\b|Traceback\b|File ")/i.test(line))
+    .map((line) => line.replace(/\s*\(?HTTP\s+[1-5]\d{2}\)?/gi, "")
+      .replace(/\b(?:SQLite|database)\b/gi, "archivio locale")
+      .replace(/^\s*(?:[A-Za-z_]\w*\.)*(?:\w*Error|Exception):\s*/, "").trim())
+    .filter(Boolean).join("\n") || "Consulta Dettagli per l'esito dell'operazione.";
+}
+
+export function installTechnicalStatusDetails(root) {
+  const document = root.ownerDocument || root;
+  const Observer = document.defaultView.MutationObserver;
+  const bind = (node) => {
+    if (node.dataset.technicalDisclosure || node.children.length) return;
+    node.dataset.technicalDisclosure = "true";
+    const wrapper = document.createElement("div");
+    wrapper.className = `${node.className} technical-status-wrapper`;
+    const visible = document.createElement("p");
+    visible.dataset.technicalDisclosure = "presentation";
+    visible.setAttribute("role", node.getAttribute("role") || "status");
+    visible.setAttribute("aria-live", node.getAttribute("aria-live") || "polite");
+    const details = document.createElement("details");
+    details.className = "technical-status-details";
+    const toggle = document.createElement("summary");
+    toggle.textContent = "ⓘ Dettagli";
+    toggle.setAttribute("aria-label", "Mostra o nascondi i dettagli tecnici");
+    details.append(toggle);
+    node.before(wrapper);
+    details.append(node);
+    wrapper.append(visible, details);
+    const update = () => {
+      const text = node.textContent;
+      visible.textContent = text.trim() ? userFacingStatus(text) : "";
+      wrapper.hidden = node.hidden || !text.trim();
+      wrapper.classList.toggle("feedback-error", node.classList.contains("feedback-error"));
+      details.hidden = visible.textContent === text;
+    };
+    new Observer(update).observe(node, { childList: true, characterData: true, subtree: true,
+      attributes: true, attributeFilter: ["hidden", "class"] });
+    update();
+  };
+  const scan = () => root.querySelectorAll("p[role='status'], span[role='status'], p[role='alert'], [data-access-status]")
+    .forEach(bind);
+  scan();
+  const additions = new Observer((records) => {
+    if (records.some((record) => record.addedNodes.length)) scan();
+  });
+  additions.observe(root, { childList: true, subtree: true });
+  return () => additions.disconnect();
+}
+
+export function installDialogLayout(root) {
+  const document = root.ownerDocument || root;
+  const prepare = (dialog) => {
+    if (dialog.dataset.responsiveLayout) return;
+    dialog.dataset.responsiveLayout = "true";
+    dialog.classList.add("responsive-dialog");
+    const form = [...dialog.children].find((child) => child.tagName === "FORM");
+    if (form?.querySelector(":scope > .dialog-scroll")) {
+      form.classList.add("responsive-dialog-body");
+      return;
+    }
+    const body = form || document.createElement("div");
+    body.classList.add("responsive-dialog-body");
+    const content = document.createElement("div");
+    content.className = "dialog-scroll";
+    const footer = document.createElement("div");
+    footer.className = "dialog-footer";
+    const append = (child) => {
+      (child.tagName === "BUTTON" || child.classList.contains("dialog-actions") ? footer : content).append(child);
+    };
+    for (const child of [...dialog.children]) {
+      if (child === form) [...form.children].forEach(append);
+      else append(child);
+    }
+    body.replaceChildren(content, footer);
+    dialog.replaceChildren(body);
+  };
+  const scan = () => root.querySelectorAll("dialog").forEach(prepare);
+  scan();
+  const observer = new document.defaultView.MutationObserver((records) => {
+    if (records.some((record) => record.addedNodes.length)) scan();
+  });
+  observer.observe(root, { childList: true, subtree: true });
+  return () => observer.disconnect();
+}
+
+export function installCollectionLayout(document) {
+  const panel = document.getElementById("collectionPanel");
+  const toolbar = panel.querySelector(".playlist-import");
+  toolbar.classList.add("collection-toolbar");
+  const actions = toolbar.querySelector(".playlist-import-actions");
+  const search = panel.querySelector(".collection-search");
+  actions.prepend(search);
+  const manualAlbum = document.getElementById("manualAlbumButton");
+  manualAlbum.textContent = "+ Album";
+  manualAlbum.setAttribute("aria-label", "Aggiungi album alla raccolta");
+  manualAlbum.title = "Aggiungi album alla raccolta";
+  const body = document.createElement("div");
+  body.className = "collection-body";
+  const results = document.createElement("div");
+  results.className = "collection-results";
+  const footer = document.createElement("div");
+  footer.className = "collection-results-footer";
+  const aside = document.createElement("aside");
+  aside.id = "collectionOptions";
+  aside.className = "collection-options";
+  aside.setAttribute("aria-label", "Opzioni della raccolta");
+  const header = document.createElement("div");
+  header.className = "collection-options-heading";
+  const title = document.createElement("strong");
+  const closeButton = document.createElement("button");
+  closeButton.type = "button";
+  closeButton.textContent = "Chiudi";
+  closeButton.setAttribute("aria-label", "Chiudi il pannello della raccolta");
+  header.append(title, closeButton);
+  const scroll = document.createElement("div");
+  scroll.className = "collection-options-scroll";
+  aside.append(header, scroll);
+  body.append(results, aside);
+  panel.append(body);
+  const pages = new Map();
+  let active = null;
+  const show = (key) => {
+    if (!pages.has(key)) throw new Error("Pannello della raccolta non disponibile.");
+    active = key;
+    for (const [name, page] of pages) {
+      page.details.open = name === key;
+      page.details.hidden = name !== key;
+      page.button.setAttribute("aria-expanded", String(name === key));
+    }
+    title.textContent = pages.get(key).title;
+    aside.hidden = false;
+    body.dataset.optionsOpen = key;
+  };
+  const close = (focus = true) => {
+    const page = pages.get(active);
+    const button = page?.returnButton || page?.button;
+    active = null;
+    for (const page of pages.values()) {
+      page.details.open = false;
+      page.details.hidden = true;
+      page.button.setAttribute("aria-expanded", "false");
+    }
+    aside.hidden = true;
+    delete body.dataset.optionsOpen;
+    if (focus) button?.focus();
+  };
+  const addPage = (key, details, caption, mount = actions) => {
+    const button = document.createElement("button");
+    button.id = `collection${key[0].toUpperCase() + key.slice(1)}Toggle`;
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = caption;
+    button.setAttribute("aria-controls", aside.id);
+    button.setAttribute("aria-expanded", "false");
+    button.addEventListener("click", () => {
+      if (active === key) close();
+      else { show(key); closeButton.focus(); }
+    });
+    mount.append(button);
+    details.classList.add("collection-options-page");
+    scroll.append(details);
+    pages.set(key, { details, button, title: caption });
+    details.addEventListener("toggle", () => {
+      if (details.open && active !== key) show(key);
+      else if (!details.open && active === key) close(false);
+    });
+    return button;
+  };
+  const filters = document.getElementById("collectionFilters");
+  const filtersButton = addPage("filters", filters, "Filtri");
+  filtersButton.append(document.getElementById("activeFilterCount"));
+  filters.append(document.getElementById("collectionFilterChips"));
+  const view = document.getElementById("viewMenu");
+  const viewContent = view.querySelector(".view-menu-content");
+  const tools = document.createElement("details");
+  tools.className = "collection-tools";
+  const toolsTitle = document.createElement("summary");
+  toolsTitle.textContent = "Altre azioni";
+  const toolsContent = document.createElement("div");
+  toolsContent.className = "collection-tools-content";
+  tools.append(toolsTitle, toolsContent);
+  for (const child of [...viewContent.children]) {
+    const control = child.matches("label") ? child.querySelector("select, input") : child;
+    if (!["savedCollectionView", "saveCollectionViewButton", "deleteCollectionViewButton",
+      "collectionLayout", "pinnedOnlyInput"].includes(control?.id)) toolsContent.append(child);
+  }
+  viewContent.append(tools);
+  addPage("view", view, "Vista");
+  const imports = document.createElement("details");
+  const importSummary = document.createElement("summary");
+  importSummary.textContent = "Importa album";
+  imports.append(importSummary, document.getElementById("playlistImportButton"), document.getElementById("tidalCollectionMount"));
+  addPage("import", imports, "Importa album", toolsContent);
+  pages.get("import").returnButton = pages.get("view").button;
+  const storage = panel.querySelector(".collection-storage-details");
+  const coverNotice = document.getElementById("coverSyncNotice");
+  storage.append(document.getElementById("unratedSummary"), coverNotice);
+  const stateButton = addPage("state", storage, "Salvataggio", footer);
+  const updateCoverNotice = () => {
+    stateButton.textContent = coverNotice.hidden ? "Stato" : "Stato !";
+    stateButton.title = coverNotice.textContent || "Stato del salvataggio e delle copertine";
+    stateButton.setAttribute("aria-label", `Stato del salvataggio: ${stateButton.title}`);
+  };
+  new document.defaultView.MutationObserver(updateCoverNotice).observe(coverNotice,
+    { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+  updateCoverNotice();
+  const selection = document.getElementById("selectionToolbar");
+  const secondary = selection.querySelector(".selection-secondary");
+  secondary.querySelector(".selection-options").prepend(
+    document.getElementById("bulkEditButton"), document.getElementById("clearSelectionButton"));
+  addPage("selection", secondary, "Azioni", selection.querySelector(".selection-primary"));
+  pages.get("selection").title = "Album selezionati";
+  document.getElementById("bulkGenresButton").textContent = "Generi";
+  document.getElementById("bulkEditButton").textContent = "Modifica";
+  const selectionHelp = panel.querySelector(".selection-help");
+  selection.title = selectionHelp.textContent;
+  selectionHelp.classList.add("sr-only");
+  for (const id of ["manualOrderHint", "albumList", "emptyState"]) {
+    results.append(document.getElementById(id));
+  }
+  stateButton.before(selection);
+  footer.prepend(document.getElementById("collectionSummary"));
+  results.append(footer);
+  const service = document.querySelector(".music-service-picker");
+  const servicePosition = document.createComment("Servizio musicale");
+  service.before(servicePosition);
+  const updateView = () => {
+    if (panel.hidden) servicePosition.after(service);
+    else actions.prepend(service);
+  };
+  new document.defaultView.MutationObserver(() => {
+    if (selection.hidden && active === "selection") close(false);
+  }).observe(selection, { attributes: true, attributeFilter: ["hidden"] });
+  closeButton.addEventListener("click", () => close());
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && active && !document.querySelector("dialog[open]")) {
+      event.preventDefault();
+      close();
+    }
+  });
+  close(false);
+  updateView();
+  return { show, close, updateView };
+}
+
 export function normalizeCollectionPreferences(value) {
   const source = value && typeof value === "object" ? value : {};
   return {
-    layout: LOCAL_LAYOUTS.has(source.layout) ? source.layout : "comfortable",
+    layout: LOCAL_LAYOUTS.has(source.layout) ? source.layout : "compact",
     pinnedIds: [...new Set((Array.isArray(source.pinnedIds) ? source.pinnedIds : [])
       .filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id)))],
   };
@@ -12,6 +260,37 @@ export function normalizeCollectionPreferences(value) {
 export function visibleSelection(selectedIds, albums) {
   const visible = new Set(albums.map((album) => album.id));
   return new Set([...selectedIds].filter((id) => visible.has(id)));
+}
+
+export function selectCollectionAlbum(selectedIds, id, control = false) {
+  const next = control ? new Set(selectedIds) : new Set();
+  if (control && next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+}
+
+export async function runPlatformAccessChecks(checks, report) {
+  for (const check of checks) {
+    let result;
+    try {
+      const identity = check.identity();
+      if (!check.configured()) {
+        result = { state: "Non configurato; verifica non eseguita" };
+      } else {
+        report(check.key, { state: "Verifica in corso" });
+        const guard = () => {
+          if (check.identity() !== identity) throw new Error("Configurazione cambiata: verifica di nuovo l'accesso.");
+        };
+        guard();
+        result = await check.check(guard);
+        guard();
+        result = { ...result, state: "Lettura verificata" };
+      }
+    } catch (error) {
+      result = { state: "Verifica non riuscita", detail: error.message };
+    }
+    report(check.key, { ...result, checked: new Date().toLocaleString() });
+  }
 }
 
 export function prepareAlbumUpdates(albums, selectedIds, changes, validate) {

@@ -2,16 +2,28 @@
 
 ## Stato corrente e gerarchia
 
-Rivisto il 7 novembre 2026. **PWA 1.18.0 locale, non ancora pubblicata**;
-online resta la 1.17.0 su
+Rivisto il 9 novembre 2026. **PWA 1.19.0**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
-Questa consegna comprende completamento dati mirato, spiegazione delle
-esclusioni, ricette, confronto edizioni, recupero player contestuale,
-conflitti per campo e backup verificabili, oltre al fix della ricerca TIDAL.
-Nessuna lettura o scrittura remota aggiunta all'apertura delle superfici.
-Release precedente 1.15.4: `d24975224ec904a85a3e147fbe08c175c26bab79`,
-workflow Pages `42227653246` concluso con successo.
+Gli album occupano lo spazio principale: Filtri, Vista, importazione,
+azioni secondarie della selezione e salvataggio condividono un solo
+pannello non sovrapposto. Su schermi stretti il pannello usa al massimo
+il 30% dell'area della raccolta; gli album restano visibili e scorrevoli.
+La selezione usa una sola riga nel footer, con Generi e Azioni;
+modifica album e deselezione restano nel pannello. Stato e voto
+rapidi sono in Altre azioni del singolo album, senza affollare ogni scheda.
+L'elenco compatto e' il default per preferenze nuove; le viste gia'
+scelte vengono conservate. Titolo, artista, genere e voto restano leggibili.
+Questa release abilita inoltre la modifica generi multipla,
+limita la selezione aggiuntiva a Ctrl+clic e mantiene i comandi dei
+dialoghi fuori dallo scroll, necessario soltanto quando il contenuto
+non entra. I dettagli tecnici restano chiusi dietro Dettagli.
+All'avvio vengono verificati i cinque collegamenti configurati:
+GitHub, Spotify, TIDAL, Qobuz e Last.fm. Solo letture, senza login,
+importazioni o sincronizzazioni aggiuntive; i permessi di scrittura
+non vengono attestati. I dati locali e il servizio scelto restano invariati.
+Release precedente 1.18.0: `b5e0c6329f04f411234457f7cc069d8e91426a2f`,
+workflow Pages `42422045858` concluso con successo.
 
 La PWA e' il client musicale statico; non include Task, Outlook o JIRA.
 La raccolta nel repository privato `accord-music-data`, le credenziali e
@@ -36,10 +48,10 @@ Lo stato corrente prevale sui vecchi annunci. Le release 1.15.0-1.15.3
 sono incluse nella 1.15.4 pubblicata. La revisione della documentazione
 nel workspace non provoca un nuovo deployment.
 
-## Nel workspace · Aggiornamenti e persistenza chiari
+## PWA 1.17.0 · Aggiornamenti e persistenza chiari
 
-QoL 6/7 implementati, non ancora pubblicati; prodotto e cache restano
-1.17.0 fino al bump coordinato. **App attiva v...** indica la versione
+QoL 6/7 inclusi nelle release pubblicate dalla 1.17.0.
+**App attiva v...** indica la versione
 caricata. **Nuova versione pronta** arriva dal lifecycle SW esistente:
 riavvio su conferma, rinvio durante bozze/operazioni e nessun reload
 automatico da controllerchange o attivazione in un'altra scheda.

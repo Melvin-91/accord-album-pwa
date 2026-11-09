@@ -1,8 +1,8 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=9";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=6";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=11";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=8";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=3";
+  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=5";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=4";
 import {
   addPlaylistAlbums,
@@ -73,20 +73,23 @@ import {
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
   appendCollectionHistory, collectionHealthSummary, createCollectionHistoryEntry,
-  prepareCollectionHistoryRestore,
-} from "./ui.mjs?v=15";
-import { createMusicServiceGate, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=9";
+  prepareCollectionHistoryRestore, selectCollectionAlbum,
+  runPlatformAccessChecks,
+  userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout,
+} from "./ui.mjs?v=17";
+import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=9";
+import { createQobuzClient } from "./qobuz.mjs?v=9";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
 } from "./music-qol.mjs?v=2";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=5";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=5";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=24";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=19";
-import { qobuzAlbumId } from "./qobuz.mjs?v=8";
+  from "./music-completion.mjs?v=7";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=7";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=26";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=21";
+import { qobuzAlbumId } from "./qobuz.mjs?v=9";
 
 const musicService = createMusicServiceGate(localStorage);
 
@@ -215,6 +218,7 @@ $("#sortOrder").value = state.sortOrder;
 $("#collectionLayout").value = collectionPreferences.layout;
 $("#albumList").dataset.layout = collectionPreferences.layout;
 const viewTabs = [...document.querySelectorAll(".view-tabs [role='tab']")];
+let collectionLayout = null;
 
 function activateViewTab(selectedTab) {
   for (const tab of viewTabs) {
@@ -224,6 +228,7 @@ function activateViewTab(selectedTab) {
     document.getElementById(tab.getAttribute("aria-controls")).hidden = !selected;
   }
   sessionStorage.setItem(ACTIVE_VIEW_TAB_KEY, selectedTab.id);
+  collectionLayout?.updateView();
   if (selectedTab.id !== "collectionTab") {
     selectedAlbumIds.clear();
     document.querySelectorAll(".album-select").forEach((input) => { input.checked = false; });
@@ -627,6 +632,9 @@ function setSyncState(message) {
 function showMessage(title, message) {
   $("#messageTitle").textContent = title;
   $("#messageBody").textContent = safeDiagnostics(message);
+  $("#messageSummary").textContent = userFacingStatus(safeDiagnostics(message));
+  $("#messageTechnicalDetails").hidden = $("#messageSummary").textContent === $("#messageBody").textContent;
+  $("#messageTechnicalDetails").open = /^Dettagli\b/i.test(title);
   $("#messageDialog .error-actions")?.remove();
   const actions = document.createElement("div");
   actions.className = "qol-actions error-actions";
@@ -662,7 +670,11 @@ function appendErrorActions(container, message, close = () => {}, stage = "messa
       showFeedback("Diagnostica oscurata copiata");
     } catch (error) { showFeedback(`Copia non riuscita: ${error.message}. Il messaggio visualizzato può contenere dati personali: non condividerlo come diagnostica.`, true); }
   });
-  container.append(copy);
+  const technical = document.createElement("details");
+  const technicalToggle = document.createElement("summary");
+  technicalToggle.textContent = "ⓘ Dettagli";
+  technical.append(technicalToggle, copy);
+  container.append(technical);
   if (/configur|autorizza|sessione|credenzial|token|client id|redirect|permess|HTTP (?:401|403)/i.test(message)) {
     const settings = document.createElement("button");
     settings.type = "button";
@@ -893,7 +905,7 @@ function openLocalFacet(field, value) {
   facetReturnViews.push({
     fields: Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value])),
     appliedSearch: appliedCollectionSearch,
-    pinned: $("#pinnedOnlyInput").checked, facet: localFacet, scroll: window.scrollY,
+    pinned: $("#pinnedOnlyInput").checked, facet: localFacet, scroll: $("#albumList").scrollTop,
     selected: [...selectedAlbumIds], filtersOpen: $("#collectionFilters").open,
     localChecks: localCollectionChecks.map((selector) => $(selector).checked),
     selectionOnly: collectionSelectionOnly,
@@ -934,17 +946,25 @@ $("#facetBackButton").addEventListener("click", () => {
   saveState();
   render();
   $("#searchInput").focus({ preventScroll: true });
-  requestAnimationFrame(() => window.scrollTo(0, previous.scroll));
+  requestAnimationFrame(() => { $("#albumList").scrollTop = previous.scroll; });
 });
 
 function updateSelectionToolbar() {
   const count = selectedAlbumIds.size;
   const { hidden } = selectionVisibility(selectedAlbumIds, visibleAlbums);
   $("#selectionToolbar").hidden = !count;
-  $("#selectionCount").textContent = `${count} selezionati, ${hidden} nascosti dai filtri`;
+  $("#selectionCount").textContent = `${count} selezionati` + (hidden ? `, ${hidden} nascosti dai filtri` : "");
   $("#dropHiddenSelectionButton").disabled = !hidden;
   $("#applyBulkStatus").disabled = !count || !$("#bulkStatus").value;
   $("#removeSelectedButton").disabled = !count;
+}
+
+function selectAlbumCard(id, event) {
+  selectedAlbumIds = selectCollectionAlbum(selectedAlbumIds, id, event.ctrlKey);
+  for (const card of $("#albumList").children) {
+    card.querySelector(".album-select").checked = selectedAlbumIds.has(card.dataset.albumId);
+  }
+  updateSelectionToolbar();
 }
 
 $("#showSelectionButton").addEventListener("click", () => {
@@ -1180,7 +1200,7 @@ $("#pinnedOnlyInput").addEventListener("change", render);
 $("#resetFiltersButton").addEventListener("click", resetCollectionFilters);
 $("#emptyActionButton").addEventListener("click", () => {
   if (state.albums.length) resetCollectionFilters();
-  else if (musicService.service === "tidal") $("#tidalAlbumQuery").focus();
+  else if (musicService.service === "tidal") tidalUI.openCatalog();
   else if (musicService.service === "qobuz") qobuzUI.openCatalog();
   else $("#manualAlbumButton").click();
 });
@@ -1219,15 +1239,6 @@ $("#loadCoversButton").addEventListener("click", async () => {
     } catch (error) { showFeedback(error.message, true); }
     finally { button.disabled = false; }
   } else render({ remoteCovers: true });
-});
-document.addEventListener("click", (event) => {
-  if (!$("#viewMenu").contains(event.target)) $("#viewMenu").open = false;
-});
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && $("#viewMenu").open) {
-    $("#viewMenu").open = false;
-    $("#viewMenu summary").focus();
-  }
 });
 
 const localCommands = [
@@ -1481,10 +1492,11 @@ function render(options = {}) {
     const selection = card.querySelector(".album-select");
     selection.checked = selectedAlbumIds.has(album.id);
     selection.setAttribute("aria-label", `Seleziona ${album.name}`);
-    selection.addEventListener("change", () => {
-      if (selection.checked) selectedAlbumIds.add(album.id);
-      else selectedAlbumIds.delete(album.id);
-      updateSelectionToolbar();
+    selection.addEventListener("click", (event) => {
+      selectAlbumCard(album.id, event);
+    });
+    card.addEventListener("click", (event) => {
+      if (!event.target.closest(`${interactiveAlbumTarget}, label, summary`)) selectAlbumCard(album.id, event);
     });
     const pinned = pins.has(album.id);
     card.querySelector(".pinned-indicator").hidden = !pinned;
@@ -1517,7 +1529,7 @@ function render(options = {}) {
     coverImage.referrerPolicy = "no-referrer";
     card.querySelector(".cover-placeholder").textContent = album.cover_sha256
       ? "Premi Sincronizza per scaricare"
-      : musicService.service === "tidal" ? "Copertina TIDAL non caricata · usa Vista e altro"
+      : musicService.service === "tidal" ? "Copertina TIDAL non caricata · usa Vista > Altre azioni"
         : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
     if (!options.remoteCovers && previousCovers.has(album.id) && !removedCoverIds().has(album.id)) {
       card.querySelector(".cover-frame").replaceWith(previousCovers.get(album.id));
@@ -1531,11 +1543,19 @@ function render(options = {}) {
     quick.className = "album-quick-edit";
     quick.setAttribute("role", "group");
     quick.setAttribute("aria-label", `Modifica rapida di ${album.name}`);
-    card.querySelector(".album-main").append(quick);
     quick.append(card.querySelector(".status-field"), card.querySelector(".rating-field"));
-    appendListeningActions(quick, album, {
+    const secondary = document.createElement("details");
+    secondary.className = "album-secondary";
+    const secondaryHeading = document.createElement("summary");
+    secondaryHeading.textContent = "Altre azioni";
+    const secondaryActions = document.createElement("div");
+    secondaryActions.className = "album-secondary-actions";
+    secondary.append(secondaryHeading, secondaryActions);
+    card.querySelector(".album-actions").append(secondary);
+    secondaryActions.append(quick, pinButton, card.querySelector(".manual-order-controls"));
+    appendListeningActions(secondaryActions, album, {
       markListened: (id) => updateAlbum(id, { status: "neutral" }),
-      rate: () => card.querySelector(".rating-input").focus(),
+      rate: () => { secondary.open = true; card.querySelector(".rating-input").focus(); },
     });
     const link = card.querySelector(".album-player-link");
     const tidalAlbum = musicService.service === "tidal", qobuzAlbum = musicService.service === "qobuz";
@@ -1578,14 +1598,14 @@ function render(options = {}) {
       const change = document.createElement("button");
       change.type = "button"; change.className = "secondary";
       change.textContent = associated ? "Cambia edizione associata" : "Associa edizione";
-      change.addEventListener("click", () => chooseCollectionEdition(album)); quick.append(change);
+      change.addEventListener("click", () => chooseCollectionEdition(album)); secondaryActions.append(change);
       if (associated) {
         const forget = document.createElement("button");
         forget.type = "button"; forget.className = "secondary"; forget.textContent = "Rimuovi associazione";
         forget.addEventListener("click", () => {
           try { setEditionLink(localStorage, album, musicService.service); render(); }
           catch (error) { showFeedback(error.message, true); }
-        }); quick.append(forget);
+        }); secondaryActions.append(forget);
       }
     }
     const orderControls = card.querySelector(".manual-order-controls");
@@ -1720,7 +1740,7 @@ async function renderCovers(albums, generation, remoteCovers = false) {
       image.addEventListener("error", () => {
         if (generation !== coverRenderGeneration) return;
         card.querySelector(".cover-placeholder").textContent = musicService.service === "tidal"
-          ? "Copertina TIDAL non caricata · usa Vista e altro" : "Cerco una copertina online…";
+          ? "Copertina TIDAL non caricata · usa Vista > Altre azioni" : "Cerco una copertina online…";
         card.classList.add("cover-error");
         collectionCoverFailures.set(album.id, "La miniatura sincronizzata non è leggibile come immagine.");
         enqueue();
@@ -2326,7 +2346,7 @@ async function fetchSpotifyManualAlbums(filters, accessToken) {
     .filter((album) => albumMatchesManualFilters(album, filters));
 }
 
-async function lastFmRequest(values, guard = () => {}, beforeRead = () => {}) {
+async function lastFmRequest(values, guard = () => {}, beforeRead = () => {}, signal) {
   guard();
   const apiKey = localStorage.getItem(LASTFM_KEY);
   if (!apiKey) {
@@ -2359,7 +2379,7 @@ async function lastFmRequest(values, guard = () => {}, beforeRead = () => {}) {
           guard();
           beforeRead();
           localStorage.setItem(LASTFM_REQUEST_AT_KEY, String(Date.now()));
-          return fetchLastFmResponse(parameters);
+          return fetchLastFmResponse(parameters, signal);
         });
       }
       const cooldownUntil = Number(localStorage.getItem(LASTFM_COOLDOWN_KEY)) || 0;
@@ -2376,7 +2396,7 @@ async function lastFmRequest(values, guard = () => {}, beforeRead = () => {}) {
       }
       beforeRead();
       localStorage.setItem(LASTFM_REQUEST_AT_KEY, String(Date.now()));
-      return fetchLastFmResponse(parameters);
+      return fetchLastFmResponse(parameters, signal);
     });
     lastFmApiRequestQueue = queued.then(() => undefined, () => undefined);
     return queued;
@@ -2394,10 +2414,11 @@ async function lastFmRequest(values, guard = () => {}, beforeRead = () => {}) {
   }
 }
 
-async function fetchLastFmResponse(parameters) {
+async function fetchLastFmResponse(parameters, signal) {
   let response;
   try {
     response = await fetch(`${LASTFM_API}?${parameters}`, {
+      ...(signal ? { signal } : {}),
       headers: { Accept: "application/json" },
       credentials: "omit",
       referrerPolicy: "no-referrer",
@@ -4417,9 +4438,24 @@ function updateLocalSyncSummary() {
   } · ${githubAvailability} · ultimo successo: ${lastSync}${detail}`;
 }
 
-function changesText(changes) {
+function changesText(changes, technical = false) {
+  const labels = { name: "Album", artist: "Artista", url: "Collegamento", year: "Anno",
+    status: "Stato", rating: "Il tuo voto", genres: "Generi", primary_genre: "Genere principale",
+    collections: "Collezioni", tags: "Tag", notes: "Note", genre_source: "Origine dei generi" };
+  const states = { queued: "Da ascoltare", listening: "In ascolto", liked: "Piaciuto",
+    neutral: "Neutro", disliked: "Non piaciuto", manual: "Scelti da te" };
+  const value = (field, input) => input == null || input === "" ? "Non impostato"
+    : Array.isArray(input) ? input.join(", ") || "Nessuno"
+      : ["status", "genre_source"].includes(field) ? states[input] || "Dati del servizio" : String(input);
   return changes.map((change) => {
     const album = change.after || change.before;
+    if (!technical) {
+      const kind = { updated: "Modificato", added: "Aggiunto", removed: "Rimosso" }[change.kind] || "Modificato";
+      return `${kind}: ${album.artist} - ${album.name}` + (change.kind === "updated"
+        ? "\n" + change.fields.filter((field) => labels[field] || field === "cover_sha256").map((field) =>
+          field === "cover_sha256" ? "  Copertina: aggiornata" : `  ${labels[field]}: ${
+            value(field, change.before[field])} → ${value(field, change.after[field])}`).join("\n") : "");
+    }
     const values = change.kind === "updated" ? change.fields.map((field) =>
       `  ${field}: ${JSON.stringify(change.before[field])} -> ${JSON.stringify(change.after[field])}`).join("\n") : "";
     return `${change.kind} | ${album.artist} - ${album.name} | ${change.fields.join(", ")}${values ? `\n${values}` : ""}`;
@@ -4874,13 +4910,13 @@ function composeDurationQueue() {
   dialog.showModal();
 }
 
-function openBulkEditor(initialValues = {}) {
+function openBulkEditor(initialValues = {}, { genresOnly = false } = {}) {
   if (!selectedAlbumIds.size) return;
   const ids = new Set(selectedAlbumIds);
   const genreEditTime = new Date().toISOString();
   const dialog = document.createElement("dialog");
   const heading = document.createElement("h2");
-  heading.textContent = `Modifica ${ids.size} album`;
+  heading.textContent = genresOnly ? `Generi di ${ids.size} album` : `Modifica ${ids.size} album`;
   const hidden = selectionVisibility(ids, visibleAlbums).hidden;
   const notice = document.createElement("p");
   notice.textContent = `${hidden} nascosti dai filtri inclusi. Solo i campi spuntati cambiano. `
@@ -4888,14 +4924,16 @@ function openBulkEditor(initialValues = {}) {
   dialog.setAttribute("aria-label", heading.textContent);
   const form = document.createElement("form");
   const controls = new Map();
-  for (const [key, caption] of [["status", "Stato"], ["rating", "Voto (vuoto = nessun voto)"],
-    ["genres", "Generi"], ["collections", "Collezioni"], ["tags", "Tag"]]) {
+  const fields = genresOnly ? [["genres", "Generi"]] : [["status", "Stato"],
+    ["rating", "Voto (vuoto = nessun voto)"], ["genres", "Generi"], ["collections", "Collezioni"], ["tags", "Tag"]];
+  for (const [key, caption] of fields) {
     const row = document.createElement("label");
     row.className = "qol-bulk-row";
     const captionText = document.createElement("span");
     captionText.textContent = caption;
     const enabled = document.createElement("input");
     enabled.type = "checkbox";
+    enabled.checked = genresOnly;
     enabled.setAttribute("aria-label", `Applica ${caption}`);
     const field = document.createElement(key === "status" ? "select" : "input");
     if (key === "status") for (const [value, label] of Object.entries(labels)) field.add(new Option(label, value));
@@ -4961,6 +4999,11 @@ function appendAlbumReview(form, dialog, buildReview, error) {
   confirm.type = "button";
   confirm.textContent = "Conferma queste modifiche locali";
   confirm.disabled = true;
+  const technicalPreview = document.createElement("pre");
+  const technicalDetails = document.createElement("details");
+  const technicalToggle = document.createElement("summary");
+  technicalToggle.textContent = "ⓘ Dettagli";
+  technicalDetails.append(technicalToggle, technicalPreview);
   const errorActions = document.createElement("div");
   errorActions.className = "qol-actions";
   const showError = (failure) => {
@@ -4972,6 +5015,8 @@ function appendAlbumReview(form, dialog, buildReview, error) {
     review = null;
     confirm.disabled = true;
     preview.textContent = "Selezione o campi cambiati: prepara una nuova anteprima.";
+    technicalPreview.textContent = "";
+    technicalDetails.open = false;
   };
   form.addEventListener("input", invalidate);
   form.addEventListener("change", invalidate);
@@ -4985,6 +5030,7 @@ function appendAlbumReview(form, dialog, buildReview, error) {
       if (editing.length) throw new Error(`${editing.length} album hanno bozze locali. Riprendile o scartale da Bozze locali prima di procedere.`);
       review = proposed;
       draftSnapshot = JSON.stringify(qol.drafts);
+      technicalPreview.textContent = changesText(review.changes, true);
       preview.textContent = `${review.selected} selezionati · ${review.changed} realmente modificati · ${
         review.unchanged} invariati.\nNessuna scrittura eseguita.\n\n${changesText(review.changes) || "Nessuna differenza."}`
         + "\n\nInvariati:\n" + review.next.filter((album) =>
@@ -5019,7 +5065,7 @@ function appendAlbumReview(form, dialog, buildReview, error) {
       showFeedback(`${review.changed} album modificati localmente · ${review.unchanged} invariati`);
     } catch (failure) { showError(failure); }
   });
-  form.append(prepare, preview, confirm, errorActions);
+  form.append(prepare, preview, technicalDetails, confirm, errorActions);
 }
 
 function openLabelNormalization() {
@@ -5250,6 +5296,7 @@ function initializeCollectionQol() {
   $("#completeMusicButton").addEventListener("click", () => completeSelectedMusic());
   $("#resumeMusicCompletionButton").addEventListener("click", () => completeSelectedMusic({ resume: true }));
   $("#bulkEditButton").addEventListener("click", openBulkEditor);
+  $("#bulkGenresButton").addEventListener("click", () => openBulkEditor({}, { genresOnly: true }));
   $("#syncChangesButton").addEventListener("click", () => showMessage("Modifiche locali",
     changesText(albumChanges(musicalRecords(state.base), musicalRecords(state.albums)))
       || "Nessuna differenza musicale dalla base locale. Il remoto non e' stato verificato."));
@@ -5465,7 +5512,7 @@ function updateCollectionCoverNotice() {
   const failures = [...collectionCoverFailures.entries()].filter(([id]) => albums.has(id));
   const messages = [];
   if (missingArchive) {
-    messages.push(`${missingArchive} album senza miniatura sincronizzata. Per cercare le copertine usa “Vista e altro”; sincronizza Accord desktop per archiviarle offline.`);
+    messages.push(`${missingArchive} album senza miniatura sincronizzata. Per cercare le copertine usa “Vista > Altre azioni”; sincronizza Accord desktop per archiviarle offline.`);
   }
   if (streamed) {
     messages.push(`${streamed} copertine sono mostrate online ma non nella cache offline. Premi “Sincronizza” per scaricare le miniature.`);
@@ -7131,7 +7178,7 @@ function renderActivity() {
     return item;
   }), ...current.map((node) => {
     const item = document.createElement("li");
-    item.textContent = safeDiagnostics(node.textContent);
+    item.textContent = userFacingStatus(safeDiagnostics(node.textContent));
     return item;
   }));
   $("#activityHistory").replaceChildren(...activityEntries.map((entry) => {
@@ -7220,7 +7267,7 @@ const updateLifecycle = createUpdateLifecycle({
   },
   prepare: () => {
     const session = { fields: Object.fromEntries(collectionViewSelectors.map((selector) => [selector, $(selector).value])),
-      appliedSearch: appliedCollectionSearch, pinnedOnly: $("#pinnedOnlyInput").checked, scrollY: window.scrollY,
+      appliedSearch: appliedCollectionSearch, pinnedOnly: $("#pinnedOnlyInput").checked, scrollY: $("#albumList").scrollTop,
       playlist: { name: $("#playlistBuilderName").value, artists: $("#playlistArtistCount").value,
         tracks: $("#playlistTracksPerArtist").value, preview: topArtistPlaylistPreview },
       openSpotify: $("#openSpotifyInput").value, selectedIds: [...selectedAlbumIds],
@@ -7267,7 +7314,7 @@ if (updateView) {
     if (typeof saved.openSpotify === "string") $("#openSpotifyInput").value = saved.openSpotify;
     selectedAlbumIds = new Set((Array.isArray(saved.selectedIds) ? saved.selectedIds : [])
       .filter((id) => state.albums.some((album) => album.id === id)));
-    requestAnimationFrame(() => window.scrollTo(0, Number(saved.scrollY) || 0));
+    requestAnimationFrame(() => { $("#albumList").scrollTop = Number(saved.scrollY) || 0; });
     sessionStorage.removeItem("accord-update-view-v1");
   } catch (error) { showFeedback(`Vista precedente non ripristinata: ${error.message}`, true); }
 }
@@ -7292,6 +7339,7 @@ const qobuzUI = initializeQobuzUI({
 const tidalUI = initializeTidalUI({
   gate: musicService,
   selectView: selectMusicView,
+  revealCollection: () => collectionLayout?.show("import"),
   playlistPrepared: (records) => catalogPlaylistUI.prepareRecords(records),
   addAlbum: (album, artwork) => {
     const record = validateAlbum(album);
@@ -7449,6 +7497,109 @@ function updateSpotifyPlaylistPause() {
 setInterval(updateSpotifyPlaylistPause, 1000);
 window.addEventListener("storage", updateSpotifyPlaylistPause);
 updateSpotifyPlaylistPause();
+collectionLayout = installCollectionLayout(document);
+installTechnicalStatusDetails(document.body);
+installDialogLayout(document.body);
+
+function platformAccessChecks() {
+  const local = (key) => localStorage.getItem(key) || "";
+  const session = (key) => sessionStorage.getItem(key) || "";
+  const lock = (name, run) => navigator.locks?.request ? navigator.locks.request(name, run) : run();
+  return [
+    { key: "github", identity: () => JSON.stringify([credentials().owner, credentials().token]),
+      configured: () => Boolean(credentials().owner && credentials().token),
+      check: async (guard) => {
+        const { owner } = credentials(), root = `${API}/repos/${encodeURIComponent(owner)}/${REPOSITORY}`;
+        const read = async (url) => {
+          guard();
+          const value = await githubRequest(url, { signal: AbortSignal.timeout(20_000) });
+          guard(); return value;
+        };
+        const profile = await read(`${API}/user`);
+        if (!profile?.login) throw new Error("Identità GitHub non verificabile.");
+        const repository = await read(root);
+        if (repository?.private !== true) throw new Error("Il repository GitHub deve essere privato.");
+        if (!Array.isArray(await read(`${root}/contents/`))) throw new Error("Lettura Contents non verificabile.");
+        return { account: profile.login, detail: "Identità, repository privato e Contents in lettura verificati; scrittura non attestata. Nessuna sincronizzazione." };
+      } },
+    { key: "spotify", identity: () => JSON.stringify([local("accord-spotify-client-id"), session("accord-spotify-access-token")]),
+      configured: () => Boolean(session("accord-spotify-access-token") || session("accord-spotify-refresh-token")),
+      check: async (guard) => {
+        const token = session("accord-spotify-access-token");
+        const expires = Number(session("accord-spotify-token-expires"));
+        if (!token || !Number.isFinite(expires) || expires <= Date.now()) {
+          throw new Error("Sessione Spotify scaduta: ricollega l'account. Nessun login avviato.");
+        }
+        const transport = createSpotifyTransport({ storage: localStorage, lock, fetch: async (...args) => {
+          guard(); const result = await fetch(...args); guard(); return result;
+        } });
+        const response = await transport.fetch(`${SPOTIFY_API}/me`, {
+          headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(20_000), credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store",
+        }, false);
+        if (!response.ok) throw new Error(`Accesso Spotify rifiutato (HTTP ${response.status}).`);
+        const profile = await response.json();
+        if (!profile?.id) throw new Error("Identità Spotify non verificabile.");
+        return { account: profile.display_name || profile.id, detail: "Identità verificata; nessuna importazione o riproduzione." };
+      } },
+    { key: "tidal", identity: () => JSON.stringify([local("accord-tidal-client-id-v1"), session("accord-tidal-token-v1")]),
+      configured: () => Boolean(session("accord-tidal-token-v1")),
+      check: async (guard) => {
+        const saved = JSON.parse(session("accord-tidal-token-v1"));
+        if (!saved?.access_token || saved.clientId !== local("accord-tidal-client-id-v1")
+            || !Number.isFinite(saved.expires) || saved.expires <= Date.now()) {
+          throw new Error("Sessione TIDAL scaduta o configurazione cambiata: ricollega l'account.");
+        }
+        const transport = createTidalTransport({ storage: localStorage, lock, fetch: async (...args) => {
+          guard(); const result = await fetch(...args); guard(); return result;
+        } });
+        const profile = await transport.request("users/me", saved.access_token, { signal: AbortSignal.timeout(20_000) });
+        if (!profile?.data?.id) throw new Error("Identità TIDAL non verificabile.");
+        return { account: profile.data.attributes?.username || profile.data.id,
+          detail: "Identità verificata; nessuna importazione o riproduzione." };
+      } },
+    { key: "qobuz", identity: () => session("accord-qobuz-session-v1"),
+      configured: () => Boolean(session("accord-qobuz-session-v1")),
+      check: async (guard) => {
+        const saved = JSON.parse(session("accord-qobuz-session-v1"));
+        const client = createQobuzClient({ ...saved, storage: localStorage, lock,
+          signal: AbortSignal.timeout(20_000), fetch: async (...args) => {
+            guard(); const result = await fetch(...args); guard(); return result;
+          } });
+        return client.verifyAccess();
+      } },
+    { key: "lastfm", identity: () => JSON.stringify([local(LASTFM_KEY), local("accord-lastfm-suggestion-user")]),
+      configured: () => Boolean(local(LASTFM_KEY)),
+      check: async (guard) => {
+        const user = local("accord-lastfm-suggestion-user");
+        const profile = await lastFmRequest(user ? { method: "user.getinfo", user }
+          : { method: "tag.getinfo", tag: "rock" }, guard, () => {}, AbortSignal.timeout(20_000));
+        if (user && !profile?.user?.name || !user && !profile?.tag?.name) {
+          throw new Error("Lettura Last.fm non verificabile.");
+        }
+        return { account: user || "Chiave API Last.fm", detail: "Lettura pubblica verificata; nessuna importazione." };
+      } },
+  ];
+}
+
+let checkingPlatformAccess = false;
+async function verifyConfiguredPlatformAccess() {
+  if (checkingPlatformAccess) return;
+  checkingPlatformAccess = true;
+  $("#verifyPlatformAccessButton").disabled = true;
+  try {
+    await runPlatformAccessChecks(platformAccessChecks(), (key, result) => {
+      const cell = document.querySelector(`[data-access-status="${key}"]`);
+      cell.textContent = safeDiagnostics([result.state, result.account, result.detail, result.checked].filter(Boolean).join(" · "));
+    });
+  } finally {
+    checkingPlatformAccess = false;
+    $("#verifyPlatformAccessButton").disabled = false;
+  }
+}
+$("#verifyPlatformAccessButton").addEventListener("click", () => {
+  void verifyConfiguredPlatformAccess().catch((error) => showFeedback(`Verifica accessi non riuscita: ${safeDiagnostics(error.message)}`, true));
+});
 for (const provider of [tidalUI, qobuzUI]) provider.suggestionAPI.prepare = catalogPlaylistUI.prepareRecords;
 render();
 receiveSharedAlbum();
@@ -7456,7 +7607,9 @@ restoreListeningSuggestionsForSpotifyReturn();
 finishSpotifyAuthorization().catch((error) => {
   setSyncState("Autorizzazione Spotify non riuscita");
   showMessage("Errore autorizzazione Spotify", error.message);
-});
+}).finally(() => requestAnimationFrame(() => setTimeout(() => {
+  void verifyConfiguredPlatformAccess().catch((error) => showFeedback(`Verifica accessi non riuscita: ${safeDiagnostics(error.message)}`, true));
+}, 1500)));
 if ("serviceWorker" in navigator && window.isSecureContext) {
   const initialController = navigator.serviceWorker.controller;
   navigator.serviceWorker.register("./sw.js").then((registration) => {

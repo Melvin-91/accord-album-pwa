@@ -3,7 +3,7 @@ import {
 } from "./tidal.mjs?v=9";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=3";
+import { bindPauseNotice } from "./music-continuity.mjs?v=5";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const CLIENT = "accord-tidal-client-id-v1";
@@ -38,7 +38,7 @@ const tidalAlbumArtists = (resources) => {
 };
 
 export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => {}, playlistPrepared = null,
-  requestOptions = {} }) {
+  revealCollection = () => {}, requestOptions = {} }) {
   const epoch = () => gate.epoch;
   const transport = createTidalTransport({
     ...requestOptions,
@@ -724,6 +724,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }
   function openImport() {
     gate.assert("tidal"); selectView("collection");
+    revealCollection();
     importDetails.open = true; moveOutput(); listImportPlaylists.focus();
   }
   let editionSelection = null;
@@ -732,6 +733,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     compareEditionsButton.hidden = !selection;
     compareEditionsButton.disabled = true;
     gate.assert("tidal"); selectView("collection");
+    revealCollection();
     collectionDetails.open = true; query.value = value; moveOutput(); query.focus();
   }
   function useSeed(id, label, kind) {

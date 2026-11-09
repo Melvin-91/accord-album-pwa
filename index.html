@@ -11,18 +11,18 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=37">
-    <title>Accord v1.18.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=39">
+    <title>Accord v1.19.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.18.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.19.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
-        <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Cerca / Ctrl+K</button>
+        <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Comandi</button>
         <button id="syncButton" class="secondary" type="button">Sincronizza</button>
         <button id="activityButton" class="secondary" type="button" aria-controls="activityDialog">Attività</button>
         <button id="settingsButton" class="icon-button" type="button" aria-label="Preferenze e collegamenti" title="Preferenze e collegamenti">⚙</button>
@@ -71,10 +71,16 @@
               <button id="coverStorageButton" type="button">Gestisci copertine offline</button>
               <button id="draftListButton" type="button">Bozze locali</button>
               <button id="normalizeLabelsButton" type="button">Uniforma etichette locali…</button>
-              <button id="backupButton" type="button">Scarica backup locale JSON</button>
+              <form id="openSpotifyForm" class="qol-actions">
+                <label><span id="openMusicAlbumLabel">Apri link album Spotify · prima cerca sul dispositivo</span>
+                  <input id="openSpotifyInput" type="text" maxlength="2000" autocomplete="off" placeholder="Incolla un link album Spotify">
+                </label>
+                <button type="submit">Apri album / prepara ricerca</button>
+              </form>
+              <button id="backupButton" type="button">Scarica backup locale</button>
               <button id="verifyBackupButton" type="button">Verifica file backup…</button>
               <label>File da verificare <input id="verifyBackupInput" type="file" accept=".json,application/json" hidden></label>
-              <label>Ripristina backup JSON <input id="restoreBackupInput" type="file" accept=".json,application/json"></label>
+              <label>Ripristina backup locale <input id="restoreBackupInput" type="file" accept=".json,application/json"></label>
               <p id="backupStatus" class="summary" role="status"></p>
               <label>Viste salvate <select id="savedCollectionView"><option value="">Scegli vista</option></select></label>
               <button id="saveCollectionViewButton" type="button">Salva vista corrente</button>
@@ -96,12 +102,6 @@
         </label>
         <button id="resetFiltersButton" class="secondary" type="button" hidden>Azzera filtri</button>
       </div>
-      <form id="openSpotifyForm" class="qol-actions">
-        <label><span id="openMusicAlbumLabel">Apri link album Spotify · prima cerca sul dispositivo</span>
-          <input id="openSpotifyInput" type="text" maxlength="2000" autocomplete="off" placeholder="Incolla un link album Spotify">
-        </label>
-        <button type="submit">Apri album / prepara ricerca</button>
-      </form>
       <details id="collectionFilters" class="filter-disclosure">
       <summary>Filtri e ordinamento <span id="activeFilterCount"></span></summary>
       <section class="filters" aria-label="Filtri album">
@@ -138,38 +138,50 @@
             <option value="manual">Ordine manuale</option>
           </select>
         </label>
+        <label>Lista intelligente
+          <select id="smartCollectionList">
+            <option value="">Tutti gli album</option>
+            <option value="stale_queue">Da ascoltare fermi da 30+ giorni</option>
+            <option value="unrated">Ascoltati senza voto</option>
+            <option value="recent">Modificati su questo dispositivo negli ultimi 7 giorni</option>
+            <option value="favorites_unrated">Piaciuti senza voto</option>
+          </select>
+        </label>
       </section>
+      <p class="summary">Le date locali non vengono ricostruite per gli album precedenti.</p>
       </details>
       <div id="collectionFilterChips" class="qol-actions" aria-label="Filtri locali attivi"></div>
 
       <p id="collectionSummary" class="summary" aria-live="polite"></p>
       <button id="unratedSummary" type="button" class="secondary"></button>
-      <label>Lista intelligente
-        <select id="smartCollectionList">
-          <option value="">Tutti gli album</option>
-          <option value="stale_queue">Da ascoltare fermi da 30+ giorni</option>
-          <option value="unrated">Ascoltati senza voto</option>
-          <option value="recent">Modificati su questo dispositivo negli ultimi 7 giorni</option>
-          <option value="favorites_unrated">Piaciuti senza voto</option>
-        </select>
-      </label>
-      <p class="summary">Le date locali sono registrate da questa versione, non ricostruite per gli album precedenti.</p>
+      <details class="collection-storage-details"><summary>Salvataggio, sincronizzazione e offline</summary>
       <p id="localSyncSummary" class="summary" role="status"></p>
-      <p id="qolStorageError" class="inline-error" role="alert" hidden></p>
       <p id="offlineSummary" class="summary" role="status"></p>
+      </details>
+      <p id="qolStorageError" class="inline-error" role="alert" hidden></p>
       <section id="selectionToolbar" class="selection-toolbar" aria-label="Azioni album selezionati" hidden>
+        <div class="selection-summary">
         <strong id="selectionCount"></strong>
+        <button id="clearSelectionButton" type="button">Deseleziona</button>
+        </div>
+        <div class="selection-primary">
+        <button id="bulkGenresButton" type="button">Modifica generi</button>
+        <button id="bulkEditButton" type="button">Modifica album...</button>
+        </div>
+        <details class="selection-secondary"><summary>Altre azioni e selezione</summary>
+        <div class="selection-options">
         <button id="showSelectionButton" type="button">Vedi selezione</button>
         <button id="dropHiddenSelectionButton" type="button">Togli nascosti</button>
         <button id="selectVisibleButton" type="button">Seleziona visibili</button>
         <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option></select></label>
         <button id="applyBulkStatus" type="button">Applica stato</button>
-        <button id="bulkEditButton" type="button">Stato, voto e metadati...</button>
         <button id="pinSelectedButton" type="button">Fissa selezionati</button>
         <button id="unpinSelectedButton" type="button">Non fissare</button>
         <button id="removeSelectedButton" class="danger" type="button">Rimuovi selezionati</button>
-        <button id="clearSelectionButton" type="button">Annulla selezione</button>
+        </div>
+        </details>
       </section>
+      <p class="summary selection-help">Clic: seleziona un album. CTRL+clic: aggiungi o togli dalla selezione.</p>
       <p id="manualOrderHint" class="summary manual-order-hint" role="status" hidden></p>
       <p id="coverSyncNotice" class="notice cover-sync-notice" role="status" hidden></p>
       <section id="albumList" class="album-list" aria-label="Album"></section>
@@ -366,6 +378,17 @@
           <label>Contrasto <select id="contrastInput"><option value="standard">Standard</option><option value="high">Alto</option></select></label>
           <label>Densità comandi <select id="densityInput"><option value="touch">Touch · obiettivi ampi</option><option value="compact">Compatta</option></select></label>
           </fieldset>
+          <details class="preference-group"><summary>Accessi alle piattaforme · verifica all'avvio</summary>
+          <p class="notice">Solo letture sui collegamenti configurati, senza login, importazioni o sincronizzazioni aggiuntive. Gli esiti valgono per questa apertura; i permessi di scrittura non sono attestati.</p>
+          <dl>
+          <dt>GitHub</dt><dd><span data-access-status="github">Non ancora verificato</span></dd>
+          <dt>Spotify</dt><dd><span data-access-status="spotify">Non ancora verificato</span></dd>
+          <dt>TIDAL</dt><dd><span data-access-status="tidal">Non ancora verificato</span></dd>
+          <dt>Qobuz</dt><dd><span data-access-status="qobuz">Non ancora verificato</span></dd>
+          <dt>Last.fm</dt><dd><span data-access-status="lastfm">Non ancora verificato</span></dd>
+          </dl>
+          <button type="button" class="secondary" id="verifyPlatformAccessButton">Verifica accessi</button>
+          </details>
           <fieldset class="preference-group"><legend>GitHub · sincronizzazione privata</legend>
           <label>Proprietario GitHub
             <input id="ownerInput" autocomplete="username" required pattern="[A-Za-z0-9\-]{1,39}" placeholder="nome-utente">
@@ -386,14 +409,15 @@
           <div class="dialog-actions settings-actions"><button id="clearLastfmApiKey" class="secondary" type="button">Dimentica chiave</button><button id="saveLastfmApiKey" class="secondary" type="button">Salva chiave</button></div>
           <p class="notice">Accord conserva la chiave solo in questo profilo del browser, separata dalla raccolta, e la invia esclusivamente a Last.fm. Non viene sincronizzata con GitHub. Puoi creare una chiave su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
           </fieldset>
-          <fieldset class="preference-group"><legend>Spotify · accesso con PKCE</legend>
+          <fieldset class="preference-group"><legend>Collegamento Spotify</legend>
           <label>Client ID dell’app Spotify
             <input id="spotifyClientIdInput" autocomplete="off" placeholder="Client ID (32 caratteri)">
           </label>
           <label>Redirect URI registrato nell’app Spotify
             <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
           </label>
-          <p class="notice">Registra questo URI di reindirizzamento, inclusa la barra finale, nelle impostazioni dell’app Spotify. È lo stesso nel browser e nella PWA installata. Accord usa Authorization Code con PKCE, quindi non inserire un client secret. I token Spotify restano nella sessione del browser e non vengono sincronizzati.</p>
+          <p class="notice">Registra questo indirizzo di ritorno, inclusa la barra finale, nelle impostazioni dell’app Spotify. È lo stesso nel browser e nella PWA installata. Non inserire un client secret. I token Spotify restano nella sessione del browser e non vengono sincronizzati.</p>
+          <details><summary>ⓘ Dettagli</summary><p class="notice">Il collegamento usa Authorization Code con PKCE.</p></details>
           </fieldset>
         </div>
         <div class="dialog-footer">
@@ -485,7 +509,9 @@
 
     <dialog id="messageDialog">
       <form method="dialog">
-        <div class="dialog-scroll"><div class="dialog-heading"><h2 id="messageTitle"></h2><button class="icon-button" value="close" aria-label="Chiudi">×</button></div><p id="messageBody"></p></div>
+        <div class="dialog-scroll"><div class="dialog-heading"><h2 id="messageTitle"></h2><button class="icon-button" value="close" aria-label="Chiudi">×</button></div>
+        <p id="messageSummary"></p>
+        <details id="messageTechnicalDetails"><summary>ⓘ Dettagli</summary><p id="messageBody"></p></details></div>
         <div class="dialog-footer"><div class="dialog-actions"><button class="primary" value="close">Chiudi</button></div></div>
       </form>
     </dialog>
@@ -514,7 +540,7 @@
       <div class="dialog-heading"><h2 id="activityTitle">Attività sul dispositivo</h2><button id="closeActivityButton" type="button" aria-label="Chiudi attività">×</button></div>
       <p id="activityCooldown"></p>
       <ul id="activityCurrent"></ul>
-      <h3>Messaggi e scelte recenti</h3><ul id="activityHistory"></ul>
+      <details><summary>ⓘ Dettagli · messaggi recenti</summary><ul id="activityHistory"></ul></details>
       <button id="showUpdateButton" type="button" hidden>Mostra aggiornamento disponibile</button>
     </dialog>
 
@@ -539,6 +565,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=108"></script>
+    <script type="module" src="app.mjs?v=110"></script>
   </body>
 </html>

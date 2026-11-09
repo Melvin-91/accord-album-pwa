@@ -177,6 +177,13 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Pagina Qobuz non valida.");
   }
   return {
+    verifyAccess: async () => {
+      const result = await send("favorite/getUserFavorites", { params: { type: "albums", limit: 1, offset: 0 } });
+      const page = result.albums;
+      if (!page || !Array.isArray(page.items) || page.items.length > 1
+          || !Number.isSafeInteger(page.total) || page.total < 0) throw new Error("Accesso Qobuz non verificabile.");
+      return { account: "Sessione Qobuz", detail: "Lettura autenticata; identità, abbonamento e scrittura non attestati." };
+    },
     favorites: (offset = 0) => page("favorite/getUserFavorites", { type: "albums" }, offset),
     search: (value, offset = 0) => {
       const query = String(value || "").trim();
