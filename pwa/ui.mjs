@@ -541,7 +541,8 @@ export function collectionHealthSummary(albums, {
       continue;
     }
     for (const [provider, record] of Object.entries(providers)) {
-      const validId = provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(record?.id || "")
+      const validId = provider === "spotify" ? /^[A-Za-z0-9]{22}$/.test(record?.id || "")
+        : provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(record?.id || "")
         : provider === "qobuz" && /^qobuz:[A-Za-z0-9]{1,120}$/.test(record?.id || "");
       if (!validId || typeof record?.source !== "string") malformedEditionIds.add(id);
       else if (!album || record.source !== JSON.stringify([id, album.artist, album.name])) incoherentEditionIds.add(id);

@@ -1,5 +1,5 @@
 // Local-only checkpoints: no credentials, signed URLs, callbacks, or write queue.
-import { commitLocalRestore } from "./ui.mjs?v=17";
+import { commitLocalRestore } from "./ui.mjs?v=18";
 
 export async function fingerprint(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
@@ -54,19 +54,22 @@ export function validateCheckpoint(record, identity, criteria) {
 }
 export function clearCheckpoint(storage, provider) { storage.removeItem(checkpointKey(provider)); }
 
-const sourceIdentity = (album) => JSON.stringify([album.id, album.artist, album.name]);
-const validEdition = (provider, id) => provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(id)
-  : provider === "qobuz" && /^qobuz:[A-Za-z0-9]{1,120}$/.test(id);
-export function editionLink(storage, album, provider) {
-  const links = JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}");
+export const sourceIdentity = (album) => JSON.stringify([album.id, album.artist, album.name]);
+export const validEdition = (provider, id) => typeof id === "string" && (provider === "spotify" ? /^[A-Za-z0-9]{22}$/.test(id)
+  : provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(id)
+  : provider === "qobuz" && /^qobuz:[A-Za-z0-9]{1,120}$/.test(id));
+export function editionLink(storage, album, provider,
+  links = JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}")) {
+  if (!links || typeof links !== "object" || Array.isArray(links)) throw new Error("Associazioni locali non leggibili.");
   const record = links[album.id]?.[provider];
   if (!record || record.source !== sourceIdentity(album)) return null;
   if (!validEdition(provider, record.id)) throw new Error("Associazione edizione non valida.");
   return { id: record.id, name: record.name, artist: album.artist,
-    url: `${provider === "tidal" ? "https://tidal.com/browse/album/" : "https://play.qobuz.com/album/"}${record.id.split(":")[1]}` };
+    url: `${{ spotify: "https://open.spotify.com/album/", tidal: "https://tidal.com/browse/album/",
+      qobuz: "https://play.qobuz.com/album/" }[provider]}${record.id.split(":").at(-1)}` };
 }
 export function setEditionLink(storage, album, provider, selected = null) {
-  if (!["tidal", "qobuz"].includes(provider) || selected && !validEdition(provider, selected.id)) {
+  if (!["spotify", "tidal", "qobuz"].includes(provider) || selected && !validEdition(provider, selected.id)) {
     throw new Error("Scegli un album verificato nel catalogo del servizio.");
   }
   const links = JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}");

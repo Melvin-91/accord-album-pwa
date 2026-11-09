@@ -439,6 +439,7 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-options-page .selection-options, .collection-tools-content { display: grid; gap: 10px; }
 .collection-options-page :is(select, input, label) { min-width: 0; max-width: 100%; }
 .collection-options-page .tidal-panel { margin-top: 10px; padding: 10px; }
+.association-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; font: inherit; font-size: .8125rem; }
 .collection-tools > summary { padding-block: 10px; font-size: .8125rem; font-weight: 600; }
 .collection-options-page #collectionFilterChips { margin-top: 10px; display: grid; }
 .collection-results .selection-toolbar { display: flex; flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 6px 10px; margin: 0; padding: 0; border: 0; background: transparent; }

@@ -2,7 +2,25 @@
 
 ## Stato corrente e gerarchia
 
-Rivisto il 9 novembre 2026. **PWA 1.19.0**. Destinazione:
+### PWA 1.20.0 · Associazione massiva dei cataloghi
+
+Nel pannello Filtri, **Associa tutti a Spotify / TIDAL / Qobuz** cerca
+tutta la raccolta nel servizio principale scelto in alto, anche oltre i
+filtri e la selezione. Propone soltanto un'edizione con artista e titolo
+esatti e anno compatibile nei risultati completi. Riepilogo e conferma
+precedono il salvataggio locale unico, annullabile dalla cronologia;
+associazioni gia' presenti e casi dubbi non vengono sostituiti.
+Non modifica preferiti, raccolte remote, album o voti. Apri nell'app e
+il filtro Servizio dell'album usano anche i collegamenti validi; Rimuovi
+associazione consente di eliminarli, anche per Spotify.
+La release aggiorna titolo, badge e cache a 1.20.0; identita' della PWA,
+chiavi di storage, raccolta e credenziali esistenti restano invariate.
+L'aggiornamento dell'app installata richiede la conferma di riavvio
+quando appare Nuova versione pronta, senza ricaricamenti automatici.
+
+### Destinazione e funzionalita' incluse
+
+Rivisto il 9 novembre 2026. **PWA 1.20.0**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Gli album occupano lo spazio principale: Filtri, Vista, importazione,

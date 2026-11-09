@@ -1,8 +1,9 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=11";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=8";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=12";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=9";
+import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=1";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=5";
+  editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=6";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=4";
 import {
   addPlaylistAlbums,
@@ -76,19 +77,19 @@ import {
   prepareCollectionHistoryRestore, selectCollectionAlbum,
   runPlatformAccessChecks,
   userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout,
-} from "./ui.mjs?v=17";
+} from "./ui.mjs?v=18";
 import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=9";
 import { createQobuzClient } from "./qobuz.mjs?v=9";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=2";
+} from "./music-qol.mjs?v=3";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=7";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=7";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=26";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=21";
+  from "./music-completion.mjs?v=8";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=8";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=27";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=22";
 import { qobuzAlbumId } from "./qobuz.mjs?v=9";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -1414,7 +1415,8 @@ function render(options = {}) {
   refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
   refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
   const sortOrder = $("#sortOrder").value;
-  let durations;
+  let durations, editionLinks;
+  const associatedIds = new Set();
   try {
     const queue = JSON.parse(localStorage.getItem(LISTENING_QUEUE_KEY) || '{"durations":{}}');
     const known = JSON.parse(localStorage.getItem(ALBUM_DURATIONS_KEY) || "{}");
@@ -1425,6 +1427,12 @@ function render(options = {}) {
     durations = { ...queue.durations, ...known };
     if (Object.values(durations).some((value) => !Number.isSafeInteger(value) || value <= 0)) {
       throw new Error("Durate locali non valide.");
+    }
+    editionLinks = JSON.parse(localStorage.getItem("accord-music-edition-links-v1") || "{}");
+    if (["spotify", "tidal", "qobuz"].includes($("#serviceFilter").value)) {
+      for (const album of state.albums) {
+        if (editionLink(localStorage, album, $("#serviceFilter").value, editionLinks)) associatedIds.add(album.id);
+      }
     }
   } catch (error) {
     showFeedback(`Impossibile filtrare la raccolta: ${error.message}`, true);
@@ -1443,6 +1451,7 @@ function render(options = {}) {
     && localCollectionMatch(album, {
       unrated: $("#unratedFilter").checked, missingDuration: $("#missingDurationFilter").checked,
       notesPresent: $("#notesPresentFilter").checked, service: $("#serviceFilter").value, durations,
+      associated: associatedIds.has(album.id),
     }));
   const sortedAlbums = sortOrder === "manual"
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
@@ -1560,7 +1569,7 @@ function render(options = {}) {
     const link = card.querySelector(".album-player-link");
     const tidalAlbum = musicService.service === "tidal", qobuzAlbum = musicService.service === "qobuz";
     let associated = null;
-    try { associated = editionLink(localStorage, album, musicService.service); }
+    try {     associated = editionLink(localStorage, album, musicService.service, editionLinks); }
     catch (error) { showFeedback(error.message, true); }
     const playbackAlbum = associated || album;
     const albumLink = musicAlbumLink(playbackAlbum, musicService.service);
@@ -1594,11 +1603,12 @@ function render(options = {}) {
     link.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="${iconPath}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     link.title = `${label}: ${album.artist} · ${album.name}`;
     link.setAttribute("aria-label", link.title);
-    if (tidalAlbum || qobuzAlbum) {
+    if (tidalAlbum || qobuzAlbum || associated) {
       const change = document.createElement("button");
       change.type = "button"; change.className = "secondary";
       change.textContent = associated ? "Cambia edizione associata" : "Associa edizione";
-      change.addEventListener("click", () => chooseCollectionEdition(album)); secondaryActions.append(change);
+      change.addEventListener("click", () => chooseCollectionEdition(album));
+      if (tidalAlbum || qobuzAlbum) secondaryActions.append(change);
       if (associated) {
         const forget = document.createElement("button");
         forget.type = "button"; forget.className = "secondary"; forget.textContent = "Rimuovi associazione";
@@ -3905,6 +3915,65 @@ function chooseCollectionEdition(album) {
     } catch (error) { showFeedback(error.message, true); }
   };
   (provider === "tidal" ? tidalUI : qobuzUI).openCatalog(`${album.artist} ${album.name}`, selected);
+}
+
+let collectionAssociationOpen = false;
+function associateEntireCollection() {
+  if (collectionAssociationOpen) return;
+  const provider = musicService.service, epoch = musicService.epoch;
+  const api = provider === "tidal" ? tidalUI.suggestionAPI : provider === "qobuz" ? qobuzUI.suggestionAPI : null;
+  const accountRevision = api?.revision();
+  const spotifyIdentity = JSON.stringify([spotifySettings().clientId, sessionStorage.getItem("accord-spotify-refresh-token")]);
+  const guard = () => {
+    musicService.assert(provider, epoch);
+    if (api && api.revision() !== accountRevision || provider === "spotify"
+        && JSON.stringify([spotifySettings().clientId, sessionStorage.getItem("accord-spotify-refresh-token")]) !== spotifyIdentity) {
+      throw new Error("Accesso al servizio cambiato: ripeti la ricerca.");
+    }
+  };
+  try {
+    if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
+    if (!state.albums.length) throw new Error("La raccolta e' vuota: nessun album da associare.");
+    const savedSnapshot = localStorage.getItem(STORAGE_KEY);
+    const linkKey = "accord-music-edition-links-v1", linksSnapshot = localStorage.getItem(linkKey);
+    const links = JSON.parse(linksSnapshot || "{}");
+    collectionAssociationOpen = true;
+    openAssociationDialog({
+      albums: state.albums, links, provider, guard,
+      search: async (album) => {
+        guard();
+        if (provider !== "spotify") {
+          const query = `${album.artist} ${album.name}`;
+          if (query.length > (provider === "qobuz" ? 100 : 256)) return { albums: [], complete: false };
+          const result = await api.search(query); guard();
+          return { albums: result.rows.map(row => row.album), complete: result.complete };
+        }
+        const q = [spotifySearchField("album", album.name), spotifySearchField("artist", album.artist)].join(" ");
+        if (q.length > 200) return { albums: [], complete: false };
+        const token = await spotifyAccessToken(); guard();
+        const response = await spotifySearchRequest(new URLSearchParams({ q, type: "album", limit: "10" }), token);
+        guard();
+        if (!Array.isArray(response.albums?.items) || !Number.isInteger(response.albums.total)
+            || response.albums.total < response.albums.items.length) {
+          throw new Error("Risultati Spotify incompleti o non leggibili.");
+        }
+        return { albums: spotifyAlbumSearchRecords(response.albums.items.map(album => ({ item: { type: "track", album } }))),
+          complete: response.albums.total === response.albums.items.length && !response.albums.next };
+      },
+      save: (plan) => {
+        guard();
+        if (localStorage.getItem(STORAGE_KEY) !== savedSnapshot || localStorage.getItem(linkKey) !== linksSnapshot) {
+          throw new Error("Dati locali cambiati in un'altra scheda: ripeti la ricerca.");
+        }
+        const updates = associationUpdates(plan, state.albums, JSON.parse(localStorage.getItem(linkKey) || "{}"));
+        commitLocalRestore(localStorage, STORAGE_KEY, state, state, { [linkKey]: updates },
+          `Associazioni ${provider.toUpperCase()} di tutta la raccolta`);
+        updateLocalSyncSummary(); render();
+      },
+      report: showFeedback,
+      closed: () => { collectionAssociationOpen = false; },
+    });
+  } catch (error) { collectionAssociationOpen = false; showFeedback(error.message, true); }
 }
 
 async function spotifyPlaylistIdentity(budget = null) {
@@ -7498,6 +7567,17 @@ setInterval(updateSpotifyPlaylistPause, 1000);
 window.addEventListener("storage", updateSpotifyPlaylistPause);
 updateSpotifyPlaylistPause();
 collectionLayout = installCollectionLayout(document);
+const associateCollectionButton = document.createElement("button");
+associateCollectionButton.id = "associateCollection";
+associateCollectionButton.type = "button";
+associateCollectionButton.title = "Cerca tutta la raccolta nel servizio musicale scelto in alto, anche se nascosta dai filtri. Solo collegamenti locali.";
+const updateAssociationButton = () => {
+  associateCollectionButton.textContent = `Associa tutti a ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[musicService.service]}`;
+};
+$("#serviceFilter").parentElement.after(associateCollectionButton);
+associateCollectionButton.addEventListener("click", associateEntireCollection);
+$("#musicService").addEventListener("change", updateAssociationButton);
+updateAssociationButton();
 installTechnicalStatusDetails(document.body);
 installDialogLayout(document.body);
 

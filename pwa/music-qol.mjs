@@ -8,14 +8,14 @@ export function listeningStep(album) {
 }
 
 export function localCollectionMatch(album, {
-  unrated = false, missingDuration = false, notesPresent = false, service = "", durations = {},
+  unrated = false, missingDuration = false, notesPresent = false, service = "", durations = {}, associated = false,
 } = {}) {
   const provider = album.id.startsWith("tidal:") ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz"
     : album.url?.includes("open.spotify.com/album/") ? "spotify" : "other";
   return (!unrated || album.rating === null || album.rating === undefined)
     && (!missingDuration || !Object.hasOwn(durations, album.id))
     && (!notesPresent || Boolean(album.notes?.trim()))
-    && (!service || provider === service);
+    && (!service || provider === service || associated);
 }
 
 export function selectionVisibility(selected, albums) {

@@ -2,7 +2,7 @@ import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } fro
 import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=8";
 import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=5";
+import { bindPauseNotice } from "./music-continuity.mjs?v=6";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
