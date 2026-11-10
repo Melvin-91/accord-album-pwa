@@ -12,13 +12,13 @@
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css?v=40">
-    <title>Accord v1.21.0 · La mia raccolta</title>
+    <title>Accord v1.22.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.21.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.22.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -58,6 +58,7 @@
             <div class="view-menu-content">
               <button id="loadCoversButton" class="secondary" type="button">Carica copertine mancanti online</button>
               <button id="pickAlbumButton" type="button">Cosa ascolto adesso?</button>
+              <button id="musicChoicesButton" type="button">Associazioni, disponibilita' e rinvii...</button>
               <button id="durationQueueButton" type="button">Coda per tempo disponibile…</button>
               <button id="completeDurationsButton" type="button">Completa durate degli album selezionati…</button>
               <button id="completeMusicButton" type="button">Completa solo questi album…</button>
@@ -87,6 +88,7 @@
               <button id="deleteCollectionViewButton" type="button">Elimina vista scelta</button>
               <label>Visualizzazione <select id="collectionLayout"><option value="comfortable">Schede comode</option><option value="compact">Elenco compatto</option></select></label>
               <label class="check"><input id="pinnedOnlyInput" type="checkbox"> Solo album fissati</label>
+              <label class="check"><input id="groupEditionsInput" type="checkbox">Raggruppa possibili edizioni</label>
               <p class="summary">Vista e album fissati restano su questo dispositivo.</p>
             </div>
           </details>
@@ -128,6 +130,9 @@
         <label class="check"><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
         <label class="check"><input id="notesPresentFilter" type="checkbox">Note presenti</label>
         <label class="check" title="Senza un collegamento valido al servizio musicale scelto in alto; gli album nativi sono esclusi."><input id="missingAssociationFilter" type="checkbox">Associazione mancante</label>
+        <label class="check"><input id="unavailableOnlyFilter" type="checkbox">Non disponibili (manuale)</label>
+        <label class="check"><input id="deferredOnlyFilter" type="checkbox">Rimandati</label>
+        <button id="reviewMusicAssociations" type="button">Rivedi associazioni irrisolte...</button>
         <label>Ordina per
           <select id="sortOrder">
             <option value="artist">Artista</option><option value="name">Album</option>
@@ -525,7 +530,8 @@
         <div class="dialog-scroll">
           <div class="dialog-heading"><div><p class="eyebrow">DETTAGLI ALBUM</p><h2 id="albumDetailsTitle"></h2><p id="albumDetailsMeta" class="summary"></p></div><button class="icon-button" value="cancel" formnovalidate aria-label="Chiudi dettagli">×</button></div>
           <div id="albumDetailsFields" class="album-detail-fields"></div>
-          <nav class="qol-actions" aria-label="Navigazione album nella vista corrente"><button id="previousAlbumButton" type="button">← Precedente</button><button id="nextAlbumButton" type="button">Successivo →</button></nav>
+          <nav class="qol-actions" aria-label="Navigazione album nella vista corrente"><button id="previousAlbumButton" type="button">← Precedente</button><span id="albumDetailsPosition"></span><button id="nextAlbumButton" type="button">Successivo →</button></nav>
+          <button id="albumDetailsChoices" type="button">Associazione, disponibilita' e rinvio...</button>
           <p id="albumDetailsError" class="inline-error" role="alert" hidden></p>
         </div>
         <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel" formnovalidate>Annulla</button><button class="primary" value="save">Salva modifiche</button></div></div>
@@ -569,6 +575,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=117"></script>
+    <script type="module" src="app.mjs?v=118"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
-import { COMPLETION_KEY, COMPLETION_CATEGORIES, createCompletionPlan, continueCompletion, runCompletion } from "./music-completion.mjs?v=9";
-import { pauseRemaining } from "./music-continuity.mjs?v=7";
+import { COMPLETION_KEY, COMPLETION_CATEGORIES, createCompletionPlan, continueCompletion, runCompletion } from "./music-completion.mjs?v=10";
+import { pauseRemaining } from "./music-continuity.mjs?v=8";
 
 const openPlans = new WeakMap();
 

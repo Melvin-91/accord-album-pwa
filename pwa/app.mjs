@@ -1,11 +1,14 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=15";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=16";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=2";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=10";
+import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
+  changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
+  libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=1";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=11";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=6";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=7";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=7";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=8";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=4";
 import {
   addPlaylistAlbums,
@@ -79,19 +82,19 @@ import {
   prepareCollectionHistoryRestore, selectCollectionAlbum,
   runPlatformAccessChecks,
   userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout,
-} from "./ui.mjs?v=19";
+} from "./ui.mjs?v=20";
 import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=10";
 import { createQobuzClient } from "./qobuz.mjs?v=10";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=5";
+} from "./music-qol.mjs?v=6";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=9";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=9";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=31";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=25";
+  from "./music-completion.mjs?v=10";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=10";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=32";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=26";
 import { qobuzAlbumId } from "./qobuz.mjs?v=10";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -887,7 +890,8 @@ function collectionHasFilters() {
     || collectionSelectionOnly || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value) || Boolean(localFacet);
 }
 
-const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"];
+const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter",
+  "#unavailableOnlyFilter", "#deferredOnlyFilter"];
 
 function resetCollectionFilters({ refresh = true } = {}) {
   collectionSelectionOnly = false;
@@ -1012,7 +1016,8 @@ function renderCollectionFilterChips() {
   }
   for (const [selector, text] of [["#unratedFilter", "Senza voto"],
     ["#missingDurationFilter", "Durata mancante"], ["#notesPresentFilter", "Note presenti"],
-    ["#missingAssociationFilter", "Associazione mancante"]]) {
+    ["#missingAssociationFilter", "Associazione mancante"], ["#unavailableOnlyFilter", "Non disponibili (manuale)"],
+    ["#deferredOnlyFilter", "Rimandati"]]) {
     if ($(selector).checked) append(text, () => { $(selector).checked = false; });
   }
   if ($("#pinnedOnlyInput").checked) append("In evidenza", () => { $("#pinnedOnlyInput").checked = false; });
@@ -1073,6 +1078,13 @@ function openAlbumDetails(id, returnFocus = document.activeElement) {
   detailsReturnFocus = returnFocus;
   $("#albumDetailsTitle").textContent = album.name;
   $("#albumDetailsMeta").textContent = `${album.artist} · ${album.year || "Anno sconosciuto"}`;
+  const editions = duplicateAlbumGroups(state.albums).find(group => group.some(row => row.id === id));
+  if (editions) $("#albumDetailsMeta").textContent += ` · ${editions.length} possibili edizioni gia' in raccolta`;
+  try {
+    const values = readLibraryChoices(localStorage);
+    $("#albumDetailsMeta").textContent += ` · ${musicService.service.toUpperCase()}: ${associationCaptions[albumAssociationState(album, values)]}`;
+    if (albumDeferred(values, album)) $("#albumDetailsMeta").textContent += ` · Rimandato fino al ${libraryChoice(values, album).snoozed_until}`;
+  } catch (error) { showFeedback(error.message, true); }
   $("#albumDetailsDialog .album-facets")?.remove();
   const facets = document.createElement("div");
   facets.className = "qol-actions album-facets";
@@ -1125,6 +1137,8 @@ function openAlbumDetails(id, returnFocus = document.activeElement) {
   });
   restoreDetailsDraft(id);
   const adjacent = adjacentAlbumIds(visibleAlbums, id);
+  $("#albumDetailsPosition").textContent = visibleAlbums.some(row => row.id === id)
+    ? `${visibleAlbums.findIndex(row => row.id === id) + 1} / ${visibleAlbums.length}` : "Fuori dai filtri correnti";
   $("#previousAlbumButton").disabled = !adjacent.previous;
   $("#nextAlbumButton").disabled = !adjacent.next;
   if (!$("#albumDetailsDialog").open) $("#albumDetailsDialog").showModal();
@@ -1425,7 +1439,7 @@ function render(options = {}) {
   refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
   refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
   const sortOrder = $("#sortOrder").value;
-  let durations, editionLinks;
+  let durations, editionLinks, libraryChoices;
   const associatedIds = new Set();
   try {
     const queue = JSON.parse(localStorage.getItem(LISTENING_QUEUE_KEY) || '{"durations":{}}');
@@ -1439,6 +1453,7 @@ function render(options = {}) {
       throw new Error("Durate locali non valide.");
     }
     editionLinks = JSON.parse(localStorage.getItem("accord-music-edition-links-v1") || "{}");
+    libraryChoices = readLibraryChoices(localStorage);
     if ($("#missingAssociationFilter").checked) {
       for (const album of state.albums) {
         if (editionLink(localStorage, album, musicService.service, editionLinks)) associatedIds.add(album.id);
@@ -1456,7 +1471,9 @@ function render(options = {}) {
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
     order: sortOrder,
-  }).filter((album) => smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
+  }).filter((album) => (!$("#unavailableOnlyFilter").checked || manuallyUnavailable(libraryChoices, album, musicService.service))
+    && (!$("#deferredOnlyFilter").checked || albumDeferred(libraryChoices, album))
+    && smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
     && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
     && localCollectionMatch(album, {
       unrated: $("#unratedFilter").checked, missingDuration: $("#missingDurationFilter").checked,
@@ -1470,7 +1487,8 @@ function render(options = {}) {
   const pins = new Set(collectionPreferences.pinnedIds);
   const pinnedAlbums = $("#pinnedOnlyInput").checked
     ? sortedAlbums.filter((album) => pins.has(album.id)) : sortedAlbums;
-  const albums = pinnedAlbums.filter((album) => exactAlbumFacet(album, localFacet));
+  let albums = pinnedAlbums.filter((album) => exactAlbumFacet(album, localFacet));
+  if ($("#groupEditionsInput").checked) albums = groupEditionRows(albums, duplicateAlbumGroups(albums));
   $("#facetBackButton").hidden = !facetReturnViews.length;
   $("#facetSummary").hidden = !localFacet;
   $("#facetSummary").textContent = localFacet ? `Filtro locale esatto · ${localFacet.field}: ${localFacet.value}` : "";
@@ -1485,6 +1503,7 @@ function render(options = {}) {
     + Number($("#pinnedOnlyInput").checked) + Number(collectionSelectionOnly);
   $("#activeFilterCount").textContent = filterCount ? `· ${filterCount} attivi` : "";
   const manualSorting = sortOrder === "manual";
+  const editionGroups = new Map(duplicateAlbumGroups(albums).flatMap(group => group.map(row => [row.id, group])));
   $("#manualOrderHint").hidden = !manualSorting;
   if (manualSorting) {
     $("#manualOrderHint").textContent =
@@ -1533,6 +1552,14 @@ function render(options = {}) {
     card.querySelector(".album-details-button").addEventListener("click", (event) => openAlbumDetails(album.id, event.currentTarget));
     if (manualSorting) card.classList.add("manual-sortable");
     card.querySelector(".album-title").textContent = album.name;
+    if ($("#groupEditionsInput").checked) {
+      const group = editionGroups.get(album.id);
+      if (group) {
+        const badge = document.createElement("span"); badge.className = "suggestion-detail";
+        badge.textContent = `Possibili edizioni · ${group.length} gia' in raccolta`;
+        card.querySelector(".album-heading").append(badge);
+      }
+    }
     const draftBadge = document.createElement("span");
     draftBadge.className = "draft-indicator";
     draftBadge.textContent = "Bozza locale";
@@ -1573,6 +1600,10 @@ function render(options = {}) {
     secondary.append(secondaryHeading, secondaryActions);
     card.querySelector(".album-actions").append(secondary);
     secondaryActions.append(quick, pinButton, card.querySelector(".manual-order-controls"));
+    const choicesButton = document.createElement("button"); choicesButton.type = "button";
+    choicesButton.textContent = "Associazione, disponibilita' e rinvio...";
+    choicesButton.addEventListener("click", () => openMusicChoices({ album }));
+    secondaryActions.append(choicesButton);
     appendListeningActions(secondaryActions, album, {
       markListened: (id) => updateAlbum(id, { status: "neutral" }),
       rate: () => { secondary.open = true; card.querySelector(".rating-input").focus(); },
@@ -1583,7 +1614,8 @@ function render(options = {}) {
     try {     associated = editionLink(localStorage, album, musicService.service, editionLinks); }
     catch (error) { showFeedback(error.message, true); }
     const playbackAlbum = associated || album;
-    if (!associated && !validEdition(musicService.service, album.id)) {
+    if (manuallyUnavailable(libraryChoices, album, musicService.service)
+        || !associated && !validEdition(musicService.service, album.id)) {
       const play = document.createElement("button");
       play.type = "button"; play.textContent = "Riproduci";
       play.title = "Scegli un altro servizio per questo album";
@@ -3932,7 +3964,7 @@ async function loadTopArtistPlaylistPreview(request, accessToken) {
   return preview;
 }
 
-function chooseCollectionEdition(album) {
+function chooseCollectionEdition(album, { searchNow = false, focusLink = false } = {}) {
   const provider = musicService.service, epoch = musicService.epoch;
   const selected = (edition) => {
     openEditionAssociationDialog({
@@ -3960,7 +3992,11 @@ function chooseCollectionEdition(album) {
     if (api && api.revision() !== revision) throw new Error("Accesso al servizio cambiato: ripeti la lettura.");
   };
   openEditionChooser({
-    provider, selected, query: `${album.artist} ${album.name}`,
+    provider, selected, query: `${album.artist} ${album.name}`, sourceAlbum: album, searchNow, focusLink,
+    observed: outcome => {
+      guard();
+      saveMusicChoice(album, { provider, state: outcome });
+    },
     load: async id => {
       guard();
       let record;
@@ -4011,9 +4047,26 @@ function associateFilteredCollection() {
     const savedSnapshot = localStorage.getItem(STORAGE_KEY);
     const linkKey = "accord-music-edition-links-v1", linksSnapshot = localStorage.getItem(linkKey);
     const links = JSON.parse(linksSnapshot || "{}");
+    let choicesSnapshot = localStorage.getItem(LIBRARY_CHOICES_KEY);
+    const choices = readLibraryChoices(localStorage);
+    const guardChoices = () => {
+      guard();
+      if (localStorage.getItem(LIBRARY_CHOICES_KEY) !== choicesSnapshot) throw new Error("Scelte locali cambiate: ripeti la ricerca.");
+    };
     collectionAssociationOpen = true;
     openAssociationDialog({
-      albums: state.albums, links, provider, guard, targetIds,
+      albums: state.albums, links, provider, guard: guardChoices, targetIds,
+      unavailableIds: state.albums.filter(album => manuallyUnavailable(choices, album, provider)).map(album => album.id),
+      observed: plan => {
+        guardChoices();
+        if (localStorage.getItem(STORAGE_KEY) !== savedSnapshot) throw new Error("Raccolta cambiata: esiti non salvati.");
+        let updated = readLibraryChoices(localStorage);
+        for (const row of plan.rows) if (!["native", "linked", "unavailable"].includes(row.state)) {
+          updated = changeLibraryChoice(updated, row.album, { provider, state: row.state });
+        }
+        localStorage.setItem(LIBRARY_CHOICES_KEY, JSON.stringify(updated));
+        choicesSnapshot = localStorage.getItem(LIBRARY_CHOICES_KEY);
+      },
       search: async (album) => {
         guard();
         if (provider !== "spotify") {
@@ -4035,7 +4088,7 @@ function associateFilteredCollection() {
           complete: response.albums.total === response.albums.items.length && !response.albums.next };
       },
       save: (plan) => {
-        guard();
+        guardChoices();
         if (localStorage.getItem(STORAGE_KEY) !== savedSnapshot || localStorage.getItem(linkKey) !== linksSnapshot) {
           throw new Error("Dati locali cambiati in un'altra scheda: ripeti la ricerca.");
         }
@@ -4045,7 +4098,7 @@ function associateFilteredCollection() {
         updateLocalSyncSummary(); render();
       },
       report: showFeedback,
-      closed: () => { collectionAssociationOpen = false; },
+      closed: () => { collectionAssociationOpen = false; render(); },
     });
   } catch (error) { collectionAssociationOpen = false; showFeedback(error.message, true); }
 }
@@ -4720,9 +4773,11 @@ function openDraftList() {
 }
 
 function suggestionNotSnoozed(album) {
-  return !(Number(qol.snoozes[suggestionIdentity(album)]) > Date.now());
+  return !(Number(qol.snoozes[suggestionIdentity(album)]) > Date.now())
+    && !deferredSuggestion(readLibraryChoices(localStorage), album);
 }
 suggestionNotSnoozed.reason = (album) => Number(qol.snoozes[suggestionIdentity(album)]) > Date.now()
+  || deferredSuggestion(readLibraryChoices(localStorage), album)
   ? "Rinviato" : "";
 
 let replayingSuggestions = false;
@@ -4772,30 +4827,120 @@ function refreshSavedCollectionViews() {
   for (const name of Object.keys(qol.views).sort()) select.add(new Option(name, name));
 }
 
+function albumAssociationState(album, choices = readLibraryChoices(localStorage)) {
+  const provider = musicService.service;
+  const links = JSON.parse(localStorage.getItem("accord-music-edition-links-v1") || "{}");
+  return libraryAssociationState(choices, album, provider, {
+    native: validEdition(provider, album.id),
+    linked: !!editionLink(localStorage, album, provider, links),
+    stale: !!links[album.id]?.[provider],
+  });
+}
+
+function saveMusicChoice(album, changes) {
+  const current = state.albums.find(row => row.id === album.id);
+  const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  const disk = saved?.albums?.find(row => row.id === album.id);
+  if (!current || JSON.stringify(choiceSource(current)) !== JSON.stringify(choiceSource(album))
+      || saved && (!disk || JSON.stringify(choiceSource(disk)) !== JSON.stringify(choiceSource(album)))) {
+    throw new Error("Album locale cambiato: riapri le azioni dell'album.");
+  }
+  const values = changeLibraryChoice(readLibraryChoices(localStorage), album, changes);
+  localStorage.setItem(LIBRARY_CHOICES_KEY, JSON.stringify(values));
+}
+
+function openMusicChoices({ album = null, unresolvedOnly = false } = {}) {
+  const provider = musicService.service, epoch = musicService.epoch;
+  const dialog = document.createElement("dialog"); dialog.setAttribute("aria-label", "Associazioni, disponibilita' e rinvii");
+  const title = document.createElement("h2"); title.textContent = `Scelte locali · ${provider.toUpperCase()}`;
+  const notice = document.createElement("p");
+  notice.textContent = "Solo scelte di questo dispositivo, non verifiche del catalogo. Gli album segnati non disponibili "
+    + "sono saltati da Associa tutti; Riprova li cerca esplicitamente. I rinvii escludono le proposte fino alla data scelta, senza cambiare stato o voto.";
+  const select = document.createElement("select"); select.size = 10;
+  select.setAttribute("aria-label", "Album nei filtri attivi e relativo esito");
+  const status = document.createElement("p"); status.setAttribute("role", "status");
+  const actions = document.createElement("div"); actions.className = "qol-actions";
+  const deadlineLabel = document.createElement("label"); deadlineLabel.textContent = "Rimanda fino al";
+  const deadline = document.createElement("input"); deadline.type = "date";
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const nextMonth = new Date(); nextMonth.setDate(nextMonth.getDate() + 30);
+  deadline.min = localDay(tomorrow); deadline.value = localDay(nextMonth); deadlineLabel.append(deadline);
+  const refresh = () => {
+    const previous = select.value, values = readLibraryChoices(localStorage);
+    const records = (album ? state.albums.filter(row => row.id === album.id) : visibleAlbums)
+      .filter(row => !unresolvedOnly || !["native", "linked"].includes(albumAssociationState(row, values)));
+    select.replaceChildren();
+    for (const row of records) {
+      const entry = libraryChoice(values, row);
+      select.add(new Option(`${row.artist} · ${row.name} · ${associationCaptions[albumAssociationState(row, values)]}`
+        + (entry.snoozed_until ? ` · Rimandato fino al ${entry.snoozed_until}` : ""), row.id));
+    }
+    if (records.some(row => row.id === previous)) select.value = previous;
+    else if (records.length) select.value = records[0].id;
+    status.textContent = `${records.length} album nei filtri attivi. Scegli un album per agire.`;
+  };
+  const target = () => {
+    musicService.assert(provider, epoch);
+    const selected = state.albums.find(row => row.id === select.value);
+    if (!selected) throw new Error("Seleziona un album ancora presente nella raccolta.");
+    return selected;
+  };
+  const button = (text, action) => {
+    const control = document.createElement("button"); control.type = "button"; control.textContent = text;
+    control.addEventListener("click", () => {
+      try { action(); }
+      catch (error) { status.textContent = error.message; showFeedback(error.message, true); }
+    });
+    actions.append(control);
+  };
+  const change = changes => {
+    const row = target(); saveMusicChoice(row, changes); render(); refresh();
+    showFeedback("Scelta salvata solo su questo dispositivo. Stato, voto e servizi remoti invariati.");
+  };
+  const choose = options => { const row = target(); dialog.close(); chooseCollectionEdition(row, options); };
+  button("Riprova", () => choose({ searchNow: true }));
+  button("Scegli edizione", () => choose({}));
+  button("Incolla link", () => choose({ focusLink: true }));
+  button("Segna non disponibile", () => change({ provider, unavailable: true }));
+  button("Rimuovi indicazione non disponibile", () => change({ provider, unavailable: false }));
+  button("Rimanda album", () => change({ snoozedUntil: deadline.value }));
+  button("Rimuovi rinvio", () => change({ snoozedUntil: "" }));
+  const close = document.createElement("button"); close.type = "button"; close.textContent = "Chiudi";
+  close.addEventListener("click", () => dialog.close());
+  dialog.append(title, notice, select, status, deadlineLabel, actions, close);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  try { refresh(); document.body.append(dialog); dialog.showModal(); }
+  catch (error) { showFeedback(error.message, true); dialog.remove(); }
+}
+
 function pickLocalAlbum() {
   const dialog = document.createElement("dialog");
   const heading = document.createElement("h2");
   heading.textContent = "Cosa ascolto adesso?";
-  const status = document.createElement("select");
-  status.setAttribute("aria-label", "Stato da cui estrarre");
-  for (const [value, label] of [["queued", "Da ascoltare"], ["neutral", "Neutri da rivalutare"], ["", "Tutti"]]) {
-    status.add(new Option(label, value));
-  }
-  const genre = document.createElement("select");
-  genre.setAttribute("aria-label", "Genere da cui estrarre");
-  genre.add(new Option("Tutti i generi", ""));
-  for (const value of [...new Set(state.albums.flatMap((album) => album.genres))].sort()) genre.add(new Option(value, value));
+  const notice = document.createElement("p");
+  notice.textContent = "Estrazione dai risultati dei filtri attivi, esclusi i rimandati. Nessun autoplay.";
   const result = document.createElement("p");
   const pick = document.createElement("button");
   pick.textContent = "Estrai album locale";
   pick.addEventListener("click", () => {
-    const candidates = state.albums.filter((album) => (!status.value || album.status === status.value)
-      && (!genre.value || album.genres.includes(genre.value)));
+    open.hidden = true;
+    let candidates;
+    try {
+      const choices = readLibraryChoices(localStorage);
+      candidates = visibleAlbums.filter(album => !albumDeferred(choices, album));
+    }
+    catch (error) { result.textContent = error.message; return; }
     if (!candidates.length) { result.textContent = "Nessun album corrisponde alla scelta."; return; }
     const album = candidates[Math.floor(Math.random() * candidates.length)];
     result.textContent = `${album.artist} - ${album.name} · ${labels[album.status]}`;
     open.hidden = false;
-    open.onclick = () => { dialog.close(); openAlbumDetails(album.id); };
+    open.onclick = () => {
+      try {
+        if (!visibleAlbums.some(row => row.id === album.id)
+            || albumDeferred(readLibraryChoices(localStorage), album)) throw new Error("Album non piu' nei risultati disponibili: ripeti l'estrazione.");
+        dialog.close(); openAlbumDetails(album.id);
+      } catch (error) { result.textContent = error.message; }
+    };
   });
   const open = document.createElement("button");
   open.textContent = "Apri dettagli";
@@ -4803,7 +4948,7 @@ function pickLocalAlbum() {
   const close = document.createElement("button");
   close.textContent = "Chiudi";
   close.addEventListener("click", () => dialog.close());
-  dialog.append(heading, status, genre, pick, result, open, close);
+  dialog.append(heading, notice, pick, result, open, close);
   document.body.append(dialog);
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
   dialog.showModal();
@@ -4941,7 +5086,9 @@ function composeDurationQueue() {
     try {
       snapshot = readSnapshot();
       const currentQueue = snapshot.queue;
+      const choices = readLibraryChoices(localStorage);
       const candidates = snapshot.albums.filter((album) => album.status !== "disliked"
+        && !albumDeferred(choices, album)
         && (mode.value !== "add" || !currentQueue.ids.includes(album.id)));
       const proposed = suggestDurationQueue(candidates, snapshot.durations, Number(budget.value) * 60_000,
         mode.value === "add" ? currentQueue.ids : []);
@@ -5435,6 +5582,17 @@ function initializeCollectionQol() {
   });
   $("#smartCollectionList").addEventListener("change", render);
   $("#pickAlbumButton").addEventListener("click", pickLocalAlbum);
+  $("#musicChoicesButton").addEventListener("click", () => openMusicChoices());
+  $("#reviewMusicAssociations").addEventListener("click", () => openMusicChoices({ unresolvedOnly: true }));
+  $("#albumDetailsChoices").addEventListener("click", () => {
+    if (persistDetailsDraft()) openMusicChoices({ album: state.albums.find(row => row.id === detailsAlbumId) });
+  });
+  try { $("#groupEditionsInput").checked = localStorage.getItem("accord-group-editions-v1") === "true"; }
+  catch (error) { showFeedback(`Preferenza raggruppamento non leggibile: ${error.message}`, true); }
+  $("#groupEditionsInput").addEventListener("change", () => {
+    try { localStorage.setItem("accord-group-editions-v1", JSON.stringify($("#groupEditionsInput").checked)); render(); }
+    catch (error) { $("#groupEditionsInput").checked = !$("#groupEditionsInput").checked; showFeedback(error.message, true); }
+  });
   $("#durationQueueButton").addEventListener("click", composeDurationQueue);
   $("#completeDurationsButton").addEventListener("click", () => completeSelectedMusic({ durationsOnly: true }));
   $("#completeMusicButton").addEventListener("click", () => completeSelectedMusic());
@@ -5555,6 +5713,7 @@ function initializeCollectionQol() {
     view.pinnedOnly = $("#pinnedOnlyInput").checked;
     view.facet = localFacet;
     view.localChecks = localCollectionChecks.map((selector) => $(selector).checked);
+    view.groupEditions = $("#groupEditionsInput").checked;
     if (saveCollectionQol({ ...qol, views: { ...qol.views, [name.trim()]: view } })) refreshSavedCollectionViews();
   });
   $("#deleteCollectionViewButton").addEventListener("click", () => {
@@ -5574,12 +5733,15 @@ function initializeCollectionQol() {
       if (selector === "#primaryGenreFilter") refreshGenreFilters();
     }
     localCollectionChecks.forEach((selector, index) => { $(selector).checked = view.localChecks?.[index] === true; });
+    $("#groupEditionsInput").checked = view.groupEditions === true;
     collectionSelectionOnly = false;
     appliedCollectionSearch = view.appliedSearch ?? view["#searchInput"] ?? "";
     $("#pinnedOnlyInput").checked = Boolean(view.pinnedOnly);
     saveCollectionPreferences({ ...collectionPreferences, layout: $("#collectionLayout").value });
     state.sortOrder = $("#sortOrder").value;
     saveState();
+    try { localStorage.setItem("accord-group-editions-v1", JSON.stringify($("#groupEditionsInput").checked)); }
+    catch (error) { showFeedback(`Preferenza raggruppamento non salvata: ${error.message}`, true); }
     render();
     $("#viewMenu").open = false;
   });

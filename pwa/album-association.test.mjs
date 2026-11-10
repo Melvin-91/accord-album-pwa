@@ -9,6 +9,7 @@ import { associationUpdates, openAssociationDialog, openEditionAssociationDialog
   associationLinkId, prepareAssociations } from "./album-association.mjs";
 import { editionLink, setEditionLink, sourceIdentity } from "./music-continuity.mjs";
 import { localCollectionMatch } from "./music-qol.mjs";
+import { LIBRARY_CHOICES_KEY, readLibraryChoices, manuallyUnavailable } from "./music-library-choices.mjs";
 import { collectionHealthSummary, commitLocalRestore, prepareCollectionHistoryRestore } from "./ui.mjs";
 
 const source = { id: "A".repeat(22), artist: "Band", name: "Album", year: "2024",
@@ -259,6 +260,7 @@ test("the app freezes the actual filtered list at click and refuses zero results
       musicService: { service: "tidal", epoch: 1, assert() {} },
       tidalUI: { suggestionAPI: { revision: () => 1 } }, spotifySettings: () => ({ clientId: "" }),
       sessionStorage: storage(), localStorage: storage(), STORAGE_KEY: key,
+      LIBRARY_CHOICES_KEY, readLibraryChoices, manuallyUnavailable,
       openAssociationDialog: options => dialogs.push(options),
       showFeedback: message => errors.push(message),
     };
@@ -382,7 +384,13 @@ test("library or links changed while searching reject all local writes", async (
 });
 
 test("API errors and cancellation stop the batch before local writes", async () => {
-  await assert.rejects(prepareAssociations([source], {}, "tidal", () => { throw new Error("HTTP 429"); }), /429/);
+  let calls = 0;
+  const plan = await prepareAssociations([source, { ...source, id: "B".repeat(22) }], {}, "tidal", () => {
+    calls++; throw new Error("HTTP 429");
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(plan.rows.map(row => row.state), ["error"]);
+  assert.equal(plan.rows[0].selected, null);
   let cancelled = false;
   await assert.rejects(prepareAssociations([source], {}, "tidal", async () => { cancelled = true; return page(); },
     () => { if (cancelled) throw new Error("Cancelled"); }), /Cancelled/);

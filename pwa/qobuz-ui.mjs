@@ -1,8 +1,9 @@
 import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=10";
 import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=9";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=2";
+import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=1";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
-import { bindPauseNotice } from "./music-continuity.mjs?v=7";
+import { bindPauseNotice } from "./music-continuity.mjs?v=8";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
@@ -268,7 +269,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     suggestionResults.replaceChildren();
     const excluded = excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "");
     for (const row of records) {
-      if (artistIsExcluded(row.album.artist, excluded)) continue;
+      if (artistIsExcluded(row.album.artist, excluded) || deferredSuggestion(readLibraryChoices(localStorage), row.album)) continue;
       const item = element("article", "", { class: "suggestion-album tidal-album-result" });
       const wrapper = element("label", "", { class: "tidal-album-choice" });
       const check = element("input", "", { type: "checkbox", "aria-label": `Seleziona ${row.album.name}` });

@@ -1728,15 +1728,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=117", "style.css?v=40"]) {
+  for (const file of ["app.mjs?v=118", "style.css?v=40"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=48", "ui.mjs?v=19", "tidal.mjs?v=10", "tidal-ui.mjs?v=31", "qobuz-ui.mjs?v=25",
-    "qobuz.mjs?v=10", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=15",
-    "music-qol.mjs?v=5", "playlist-ui.mjs?v=10",
-    "music-app-links.mjs?v=2", "music-continuity.mjs?v=7", "album-association.mjs?v=6",
-    "music-completion.mjs?v=9", "music-completion-ui.mjs?v=9"]) {
+  for (const file of ["core.mjs?v=48", "ui.mjs?v=20", "tidal.mjs?v=10", "tidal-ui.mjs?v=32", "qobuz-ui.mjs?v=26",
+    "qobuz.mjs?v=10", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=16",
+    "music-qol.mjs?v=6", "playlist-ui.mjs?v=11",
+    "music-app-links.mjs?v=2", "music-continuity.mjs?v=8", "album-association.mjs?v=7",
+    "music-completion.mjs?v=10", "music-completion-ui.mjs?v=10"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

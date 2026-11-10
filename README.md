@@ -2,6 +2,34 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.22.0 · Scelte musicali e nuovi QoL
+
+**Associazioni, disponibilita' e rinvii** negli strumenti della raccolta
+e nelle azioni/dettagli dell'album mostra gli esiti per servizio:
+mai cercato, nessun risultato compatibile, ambiguo, parziale o errore.
+Riprova, Scegli edizione e Incolla link condividono la ricerca esistente.
+Gli esiti restano anche annullando i nuovi collegamenti; un errore interrompe
+le letture massive e gli album successivi restano non cercati.
+
+L'indicazione manuale **Non disponibile** e' distinta da un'associazione
+mancante, evita ricerche massive ripetute e si rimuove esplicitamente.
+Play propone gli altri servizi noti, con l'ultima alternativa dell'album
+per prima, senza cambiare il principale. **Rimanda album** sceglie una
+data locale futura: l'album torna proponibile il giorno scelto, senza
+cambiare stato/voto. Filtri dedicati permettono di ritrovare entrambe le
+indicazioni. Nessuna consultazione remota all'apertura o al cambio filtro.
+
+L'estrazione casuale usa solo i risultati filtrati non rimandati e non
+avvia l'audio. **Raggruppa possibili edizioni** affianca standard/deluxe/
+ristampe nei risultati senza fondere dati. I dettagli mantengono bozze
+separate e navigano con Precedente/Successivo e posizione/totale.
+
+Le scelte in `accord-music-library-choices-v1` sono solo di questo
+browser/dispositivo, escluse da sincronizzazione, export e backup portabili.
+Il rinvio di un album salvato e il precedente rinvio suggerimenti di
+30 giorni sono separati. Le preferenze di raggruppamento e le viste sono
+anch'esse locali.
+
 ### PWA 1.21.0 · Ricerca album, selezione e associazioni
 
 **Aggiungi album** cerca solo album nel catalogo TIDAL, senza il selettore
@@ -76,7 +104,7 @@ quando appare Nuova versione pronta, senza ricaricamenti automatici.
 
 ### Destinazione e funzionalita' incluse
 
-Rivisto il 10 novembre 2026. **PWA 1.21.0**. Destinazione:
+Rivisto il 10 novembre 2026. **PWA 1.22.0**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Gli album occupano lo spazio principale: Filtri, Vista, importazione,

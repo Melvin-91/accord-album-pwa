@@ -3,7 +3,8 @@ import {
 } from "./tidal.mjs?v=10";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=2";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
-import { bindPauseNotice } from "./music-continuity.mjs?v=7";
+import { bindPauseNotice } from "./music-continuity.mjs?v=8";
+import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=1";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const CLIENT = "accord-tidal-client-id-v1";
@@ -581,8 +582,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       }
       const excluded = action === "suggestions"
         ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
-      const visibleAlbums = albumRows.filter((row) => ![row.album.artist, ...(albumArtists.get(row.album.id.slice(6)) || [])]
-        .some((name) => artistIsExcluded(name, excluded)));
+      const choices = readLibraryChoices(localStorage);
+      const visibleAlbums = albumRows.filter((row) => !(action === "suggestions" && deferredSuggestion(choices, row.album))
+        && ![row.album.artist, ...(albumArtists.get(row.album.id.slice(6)) || [])].some((name) => artistIsExcluded(name, excluded)));
       const typeNames = { tracks: "Brano", videos: "Video", playlists: "Playlist", artists: "Artista" };
       let otherRows = all.filter((item) => ["tracks", "videos", "playlists", "artists"].includes(item.type)
         && (item.attributes?.title || item.attributes?.name)).map((resource) => ({
@@ -670,8 +672,10 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       const excluded = suggestionResultsActive
         ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
       const albumArtists = tidalAlbumArtists(tidalResources(page.documents));
+      const choices = readLibraryChoices(localStorage);
       for (const album of tidalAlbumRecords(page.documents).filter((record) =>
-        ![record.artist, ...(albumArtists.get(record.id.slice(6)) || [])].some((name) => artistIsExcluded(name, excluded)))) {
+        !(suggestionResultsActive && deferredSuggestion(choices, record))
+        && ![record.artist, ...(albumArtists.get(record.id.slice(6)) || [])].some((name) => artistIsExcluded(name, excluded)))) {
         const row = { album, coverUrl: artwork.get(album.id), resource: { type: "albums", id: album.id.slice(6) } };
         results.append(renderAlbumResult(row)); rows.push(row);
       }

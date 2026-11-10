@@ -187,7 +187,7 @@ export function installCollectionLayout(document) {
   for (const child of [...viewContent.children]) {
     const control = child.matches("label") ? child.querySelector("select, input") : child;
     if (!["savedCollectionView", "saveCollectionViewButton", "deleteCollectionViewButton",
-      "collectionLayout", "pinnedOnlyInput"].includes(control?.id)) toolsContent.append(child);
+      "collectionLayout", "pinnedOnlyInput", "groupEditionsInput"].includes(control?.id)) toolsContent.append(child);
   }
   viewContent.append(tools);
   addPage("view", view, "Vista");
