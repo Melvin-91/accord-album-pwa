@@ -236,12 +236,29 @@ test("plain selection replaces hidden or visible members; only control-click tog
   assert.deepEqual([...selectCollectionAlbum(selected, "a")], ["a"]);
   const checkbox = new Element("input");
   const card = { dataset: { albumId: "b" }, querySelector: () => checkbox };
-  const context = { selectedAlbumIds: new Set(["hidden"]), selectCollectionAlbum,
+  const context = { selectedAlbumIds: new Set(["hidden"]), collectionSelectionAnchor: null,
+    visibleAlbums: [{ id: "a" }, { id: "b" }, { id: "c" }], selectCollectionAlbum,
     $: () => ({ children: [card] }), updateSelectionToolbar: () => {} };
   runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
     + '\nselectAlbumCard("b", { ctrlKey: false })', context);
   assert.deepEqual([...context.selectedAlbumIds], ["b"]);
   assert.equal(checkbox.checked, true);
+  runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
+    + '\nselectAlbumCard("c", { shiftKey: true });', context);
+  assert.deepEqual([...context.selectedAlbumIds], ["b", "c"]);
+  runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
+    + '\nselectAlbumCard("a", { shiftKey: true, ctrlKey: true });', context);
+  assert.deepEqual(new Set(context.selectedAlbumIds), new Set(["a", "b", "c"]));
+  context.visibleAlbums = [{ id: "c" }, { id: "a" }, { id: "b" }];
+  runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
+    + '\nselectAlbumCard("a", { shiftKey: true });', context);
+  assert.deepEqual([...context.selectedAlbumIds], ["a", "b"]);
+  context.visibleAlbums = [{ id: "c" }, { id: "a" }];
+  runInNewContext(appSection("function selectAlbumCard(", "\n$(\"#showSelectionButton\")")
+    + '\nselectAlbumCard("c", { shiftKey: true });', context);
+  assert.deepEqual([...context.selectedAlbumIds], ["c"]);
+  assert.equal(context.collectionSelectionAnchor, "c");
+  assert.deepEqual([...selectCollectionAlbum(new Set(["hidden"]), "c", false, ["a", "b", "c"])], ["a", "b", "c"]);
 });
 
 test("dedicated multiple genre editor uses the existing guarded preview without changing other fields", () => {

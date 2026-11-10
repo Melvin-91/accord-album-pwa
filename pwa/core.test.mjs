@@ -911,6 +911,7 @@ test("manual Spotify additions stay local until explicit GitHub synchronization"
   });
   const context = {
     state: { albums: [] }, spotifyAlbumMetadata: new Map(), suggestedMatchAlbumId: null,
+    manualAlbumSearchMatch: () => true,
     suggestedSourceAlbums: new Map(), document: { createElement: node },
     $: (id) => {
       if (!nodes.has(id)) nodes.set(id, node());
@@ -937,6 +938,7 @@ test("unambiguous external album matches do not request automatic GitHub synchro
   const nodes = new Map();
   const context = {
     state: { albums: [] }, suggestedSourceAlbums: new Map(), suggestedMatchAlbumId: null,
+    manualAlbumSearchMatch: () => true,
     $: (id) => {
       if (!nodes.has(id)) nodes.set(id, { replaceChildren() {} });
       return nodes.get(id);
@@ -1726,30 +1728,30 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=113", "style.css?v=40"]) {
+  for (const file of ["app.mjs?v=117", "style.css?v=40"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=48", "ui.mjs?v=18", "tidal.mjs?v=9", "tidal-ui.mjs?v=28", "qobuz-ui.mjs?v=22",
-    "qobuz.mjs?v=9", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=13",
-    "music-qol.mjs?v=4", "playlist-ui.mjs?v=9",
-    "music-app-links.mjs?v=1", "music-continuity.mjs?v=6", "album-association.mjs?v=2",
-    "music-completion.mjs?v=8", "music-completion-ui.mjs?v=8"]) {
+  for (const file of ["core.mjs?v=48", "ui.mjs?v=19", "tidal.mjs?v=10", "tidal-ui.mjs?v=31", "qobuz-ui.mjs?v=25",
+    "qobuz.mjs?v=10", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=15",
+    "music-qol.mjs?v=5", "playlist-ui.mjs?v=10",
+    "music-app-links.mjs?v=2", "music-continuity.mjs?v=7", "album-association.mjs?v=6",
+    "music-completion.mjs?v=9", "music-completion-ui.mjs?v=9"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
   assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=4"));
   assert.ok(sw.includes("catalog-playlist.mjs?v=4"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
-    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=1"));
+    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=2"));
   }
-  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=8"));
+  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=9"));
   assert.ok(readFileSync(new URL("./suggestions-ui.mjs", import.meta.url), "utf8")
     .includes("music-suggestion-recipes.mjs?v=1"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
     assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("edition-comparison.mjs?v=1"));
   }
-  assert.ok(sw.includes("music-suggestion-filters.mjs?v=1"));
+  assert.ok(sw.includes("music-suggestion-filters.mjs?v=2"));
   assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
   assert.match(html, /id="selectionToolbar"[^>]+hidden/);
   assert.match(css, /#albumDetailsDialog[^}]+92dvh/);

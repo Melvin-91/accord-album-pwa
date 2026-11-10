@@ -1,5 +1,5 @@
 // Local-only checkpoints: no credentials, signed URLs, callbacks, or write queue.
-import { commitLocalRestore } from "./ui.mjs?v=18";
+import { commitLocalRestore } from "./ui.mjs?v=19";
 
 export async function fingerprint(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));

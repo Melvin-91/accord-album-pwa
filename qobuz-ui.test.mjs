@@ -35,6 +35,57 @@ const storage = () => {
 };
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
+test("Qobuz album filters reapply locally and leave favorites visible", async () => {
+  const root = new Node("main"), local = storage(), session = storage(), calls = [];
+  const albums = [
+    { id: "1", title: "Studio", release_type: "album" },
+    { id: "2", title: "Live at Home", release_type: "album" },
+    { id: "3", title: "Short", release_type: "ep" },
+    { id: "4", title: "Single", release_type: "single" },
+  ].map(row => ({ ...row, artist: { name: "Artist" } }));
+  const overrides = {
+    document: { createElement: tag => new Node(tag), getElementById: () => root, querySelector: () => root },
+    localStorage: local, sessionStorage: session,
+    fetch: async url => {
+      calls.push(url);
+      return new Response(JSON.stringify({ albums: { items: albums, total: albums.length, offset: 0 } }));
+    },
+  };
+  const originals = new Map(Object.keys(overrides).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(overrides)) Object.defineProperty(globalThis, key, { configurable: true, value });
+  try {
+    const gate = createMusicServiceGate(local); gate.select("qobuz");
+    initializeQobuzUI({ gate, addAlbum: () => true });
+    const all = (node = root) => [node, ...node.children.flatMap(all)];
+    const find = text => all().find(node => node.text === text);
+    const shown = () => all().filter(node => node.attributes["aria-label"]?.startsWith("Seleziona ")).length;
+    find("X-App-Id della sessione web").children[0].value = "app";
+    find("X-User-Auth-Token (non password)").children[0].value = "synthetic";
+    await find("Collega Qobuz").click();
+    find("Ricerca album Qobuz").children[0].value = "Artist";
+    await find("Cerca").click(); await tick();
+    assert.equal(shown(), 4);
+    const before = calls.length;
+    const live = find("Live").children[0], short = find("Singoli / EP").children[0];
+    live.checked = false; live.listeners.change();
+    assert.equal(shown(), 3);
+    short.checked = false; short.listeners.change();
+    assert.equal(shown(), 1);
+    live.checked = true; live.listeners.change();
+    short.checked = true; short.listeners.change();
+    assert.equal(shown(), 4);
+    assert.equal(calls.length, before);
+    live.checked = false; short.checked = false;
+    await find("Leggi preferiti").click(); await tick();
+    assert.equal(shown(), 4);
+  } finally {
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  }
+});
+
 test("Qobuz UI imports locally and blocks retries after an uncertain remote write", async () => {
   const root = new Node("main"), local = storage(), session = storage(), calls = [], imported = [];
   const source = { id: "00123", title: "Test", artist: { name: "Artist" } };
@@ -68,9 +119,13 @@ test("Qobuz UI imports locally and blocks retries after an uncertain remote writ
     assert.equal(calls.length, 1);
     assert.equal(local.getItem("accord-qobuz-session-v1"), null);
     assert.ok(session.getItem("accord-qobuz-session-v1"));
+    const linkedAlbum = await ui.suggestionAPI.album("qobuz:00123");
+    assert.equal(linkedAlbum.id, "qobuz:00123");
+    assert.equal(new URL(calls.at(-1).url).pathname.endsWith("/album/get"), true);
+    assert.equal(imported.length, 0);
     await find("Leggi preferiti").click();
     await tick();
-    const checkbox = all().find((node) => node.attributes.type === "checkbox");
+    const checkbox = all().find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_"));
     assert.ok(checkbox); checkbox.checked = true;
     const before = calls.length;
     await find("Importa selezionati in Accord").click();
@@ -143,7 +198,7 @@ test("verification in another tab cannot clear an in-flight write's guard", asyn
     };
     await find(first, "Leggi preferiti").click();
     await tick();
-    all(first).find((node) => node.attributes.type === "checkbox").checked = true;
+    all(first).find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     await find(first, "Aggiungi preferito Qobuz").click();
     await tick();
     assert.equal(local.getItem("accord-qobuz-write-uncertain-v1"), "1");
@@ -190,7 +245,7 @@ test("switching service discards a late Qobuz read even after switching back", a
     ], total: 1, offset: 0 } })));
     await tick();
     await tick();
-    assert.equal(all().filter((node) => node.attributes.type === "checkbox").length, 0);
+    assert.equal(all().filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
     assert.match(root.textContent, /Servizio musicale cambiato/);
   } finally {
     for (const [key, descriptor] of originals) {
@@ -226,7 +281,7 @@ test("a Qobuz write waiting for the lock is not sent after changing service", as
     const all = (node = root) => [node, ...node.children.flatMap(all)];
     await all().find((node) => node.text === "Leggi preferiti").click();
     await tick();
-    all().find((node) => node.attributes.type === "checkbox").checked = true;
+    all().find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     await all().find((node) => node.text === "Aggiungi preferito Qobuz").click();
     await tick();
     gate.select("spotify"); ui.setActive();
@@ -265,7 +320,7 @@ test("in-flight Qobuz writes retain an uncertain guard unless their response con
       const all = (node = root) => [node, ...node.children.flatMap(all)];
       await all().find((node) => node.text === "Leggi preferiti").click();
       await tick();
-      all().find((node) => node.attributes.type === "checkbox").checked = true;
+      all().find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
       await all().find((node) => node.text === "Aggiungi preferito Qobuz").click();
       await tick();
       assert.equal(local.getItem("accord-qobuz-write-uncertain-v1"), "1");
@@ -323,25 +378,25 @@ test("Qobuz suggestions and playlists are explicit, paginated and use the shared
     const playlistPanel = all().find((node) => node.attributes["data-qobuz-panel"] === "playlistBuilderPanel");
     find("ID / link album Qobuz", suggestionPanel).children[0].value = "00123";
     await find("Leggi suggerimenti · anteprima", suggestionPanel).click(); await tick();
-    all(suggestionPanel).find((node) => node.attributes.type === "checkbox").checked = true;
+    all(suggestionPanel).find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     await find("Importa album selezionati", suggestionPanel).click(); await tick();
     assert.equal(imported[0].id, "qobuz:00123");
     const excluded = find("Artisti da escludere", suggestionPanel).children[0];
     excluded.value = "  artist ; Other, Artist ";
     await find("Salva filtri", suggestionPanel).click(); await tick();
     assert.equal(local.getItem("accord-qobuz-suggestion-excluded-artists-v1"), excluded.value);
-    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox").length, 0);
+    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
     await find("Leggi suggerimenti · anteprima", suggestionPanel).click(); await tick();
-    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox").length, 0);
+    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
     excluded.value = "Different Artist";
     await find("Salva filtri", suggestionPanel).click(); await tick();
     await find("Leggi suggerimenti · anteprima", suggestionPanel).click(); await tick();
-    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox").length, 1);
+    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 1);
     await find("Elenca le mie playlist", playlistPanel).click(); await tick();
     await find("Scegli playlist", playlistPanel).click();
     assert.equal(find("ID / link playlist Qobuz", playlistPanel).children[0].value, "123");
     await find("Leggi playlist · anteprima", playlistPanel).click(); await tick();
-    const choices = all(playlistPanel).filter((node) => node.attributes.type === "checkbox");
+    const choices = all(playlistPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_"));
     assert.equal(choices.length, 2); choices.forEach((node) => { node.checked = true; });
     await find("Importa album selezionati", playlistPanel).click(); await tick();
     assert.equal(imported.length, 2, "two tracks from the same album import one album");
@@ -361,11 +416,11 @@ test("Qobuz suggestions and playlists are explicit, paginated and use the shared
     assert.equal(calls.at(-1).options.body.get("insert_before"), "0");
     assert.equal(local.getItem("accord-qobuz-write-uncertain-v1"), null);
     await find("Leggi playlist · anteprima", playlistPanel).click(); await tick();
-    all(playlistPanel).filter((node) => node.attributes.type === "checkbox").forEach((node) => { node.checked = true; });
+    all(playlistPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).forEach((node) => { node.checked = true; });
     await find("Sposta in fondo", playlistPanel).click(); await tick();
     assert.equal(calls.at(-1).options.body.get("insert_before"), "3");
     await find("Leggi playlist · anteprima", playlistPanel).click(); await tick();
-    all(playlistPanel).filter((node) => node.attributes.type === "checkbox").forEach((node) => { node.checked = true; });
+    all(playlistPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).forEach((node) => { node.checked = true; });
     failWrite = true;
     await find("Sposta all'inizio", playlistPanel).click(); await tick();
     assert.equal(local.getItem("accord-qobuz-write-uncertain-v1"), "1");
@@ -383,8 +438,8 @@ test("Qobuz suggestions and playlists are explicit, paginated and use the shared
     await find("Aggiungi brani selezionati", playlistPanel).click(); await tick();
     assert.equal(calls.length, count, "uncertain playlist write blocks subsequent writes");
     gate.select("tidal"); ui.setActive(); gate.select("qobuz"); ui.setActive();
-    assert.equal(all(playlistPanel).filter((node) => node.attributes.type === "checkbox").length, 0);
-    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox").length, 0);
+    assert.equal(all(playlistPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
+    assert.equal(all(suggestionPanel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
   } finally {
     for (const [key, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
@@ -420,7 +475,7 @@ test("Qobuz reorder does not write when the service changes during the fresh rea
     const find = (label) => { const node = all(panel).find((item) => item.text === label); assert.ok(node, label); return node; };
     find("ID / link playlist Qobuz").children[0].value = "123";
     await find("Leggi playlist · anteprima").click(); await tick();
-    all(panel).find((node) => node.attributes.type === "checkbox").checked = true;
+    all(panel).find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     await find("Sposta all'inizio").click(); await tick();
     assert.equal(reads, 2);
     gate.select("tidal"); ui.setActive();
@@ -476,17 +531,17 @@ test("Qobuz prepares tracks from suggested albums and keeps them when choosing a
     const playlists = all().find((node) => node.attributes["data-qobuz-panel"] === "playlistBuilderPanel");
     find("ID / link album Qobuz", suggestions).children[0].value = "00123";
     await find("Leggi suggerimenti · anteprima", suggestions).click(); await tick();
-    all(suggestions).filter((node) => node.attributes.type === "checkbox").forEach((check) => { check.checked = true; });
+    all(suggestions).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).forEach((check) => { check.checked = true; });
     await find("Prepara playlist dagli album selezionati", suggestions).click(); await tick();
     assert.equal(views.at(-1), "playlists");
     assert.match(playlists.textContent, /Risultato parziale/);
-    const checks = all(playlists).filter((node) => node.attributes.type === "checkbox");
+    const checks = all(playlists).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_"));
     assert.equal(checks.length, 101);
     checks[0].checked = true;
     await find("Elenca le mie playlist", playlists).click(); await tick();
     await find("Scegli playlist", playlists).click();
     assert.equal(checks[0].checked, true);
-    assert.equal(all(playlists).filter((node) => node.attributes.type === "checkbox").length, 101);
+    assert.equal(all(playlists).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 101);
     assert.equal(calls.filter((call) => call.options.method === "POST").length, 0);
     checks.forEach((check) => { check.checked = true; });
     await find("Aggiungi brani selezionati", playlists).click(); await tick();
@@ -644,13 +699,13 @@ test("Qobuz suggestions from favorites are bounded, deduplicated and stop on pro
     assert.equal(seeds.length, 0);
     await action.click(); await tick(); await tick();
     assert.deepEqual(seeds, ["001", "002", "003", "004", "005"]);
-    assert.equal(all(panel).filter((node) => node.attributes.type === "checkbox").length, 1);
+    assert.equal(all(panel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 1);
     assert.match(panel.textContent, /primi 7 letti su 12; non sono cronologia/);
     switchDuringRead = true;
     await action.click(); await tick(); await tick();
     assert.equal(seeds.length, 6);
     ui.setActive();
-    assert.equal(all(panel).filter((node) => node.attributes.type === "checkbox").length, 0);
+    assert.equal(all(panel).filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).length, 0);
   } finally {
     for (const [key, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key];
@@ -730,7 +785,7 @@ test("Qobuz audio uses a local bundle and stops when the service changes", async
     file.listeners.change(); await tick();
     find("ID / link playlist Qobuz").children[0].value = "123";
     await find("Leggi playlist · anteprima").click(); await tick();
-    all().find((node) => node.attributes.type === "checkbox").checked = true;
+    all().find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     await find("Riproduci selezionati").click(); await tick();
     const audio = all().find((node) => node.tag === "audio");
     assert.match(audio.src, /^https:\/\/streaming-qobuz-std/);
@@ -745,7 +800,7 @@ test("Qobuz audio uses a local bundle and stops when the service changes", async
     file.listeners.change(); await tick();
     find("ID / link playlist Qobuz").children[0].value = "123";
     await find("Leggi playlist · anteprima").click(); await tick();
-    all().find((node) => node.attributes.type === "checkbox").checked = true;
+    all().find((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).checked = true;
     delayStream = true;
     await find("Riproduci selezionati").click(); await tick();
     assert.ok(streamSignal && !streamSignal.aborted);
@@ -803,7 +858,7 @@ test("Qobuz plays selected occurrences in order and advances locally", async () 
     file.listeners.change(); await tick();
     find("ID / link playlist Qobuz").children[0].value = "123";
     await find("Leggi playlist · anteprima").click(); await tick();
-    const choices = all().filter((node) => node.attributes.type === "checkbox");
+    const choices = all().filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_"));
     choices[2].checked = true; choices[0].checked = true;
     await find("Riproduci selezionati").click(); await tick();
     const audio = all().find((node) => node.tag === "audio");
@@ -863,7 +918,7 @@ test("Qobuz shuffle and repeat affect the local queue without changing the curre
     file.listeners.change(); await tick();
     find("ID / link playlist Qobuz").children[0].value = "123";
     await find("Leggi playlist · anteprima").click(); await tick();
-    all().filter((node) => node.attributes.type === "checkbox").forEach((choice) => { choice.checked = true; });
+    all().filter((node) => node.attributes.type === "checkbox" && !node.id?.includes("AlbumSearch_")).forEach((choice) => { choice.checked = true; });
     await find("Riproduci selezionati").click(); await tick();
     const audio = all().find((node) => node.tag === "audio");
     const queue = all().find((node) => node.attributes["aria-label"] === "Brani preparati per il player Qobuz");

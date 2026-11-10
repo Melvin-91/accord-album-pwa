@@ -1,5 +1,5 @@
 import { CatalogPlaylist, createCatalogPlaylist } from "./catalog-playlist.mjs?v=4";
-import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=6";
+import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint, pauseRemaining } from "./music-continuity.mjs?v=7";
 
 export function initializeCatalogPlaylistUI({ gate, providers, discoveryUI, render, clearSpotifyPreview, selectView,
   spotifyPreview = () => null }) {

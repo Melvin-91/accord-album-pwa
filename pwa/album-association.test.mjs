@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { associationUpdates, openAssociationDialog, prepareAssociations } from "./album-association.mjs";
+import { nativeMusicLink } from "./music-app-links.mjs";
+import { tidalAlbumId } from "./tidal.mjs";
+import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
+  playbackEditions, openPlaybackServiceDialog,
+  associationLinkId, prepareAssociations } from "./album-association.mjs";
 import { editionLink, setEditionLink, sourceIdentity } from "./music-continuity.mjs";
 import { localCollectionMatch } from "./music-qol.mjs";
 import { collectionHealthSummary, commitLocalRestore, prepareCollectionHistoryRestore } from "./ui.mjs";
@@ -17,6 +21,230 @@ const storage = () => {
     removeItem: key => values.delete(key) };
 };
 const key = "accord-album-pwa-v1", linkKey = "accord-music-edition-links-v1";
+
+test("alternate playback uses only known native/current editions and never switches the main service", () => {
+  const saved = storage();
+  saved.setItem("accord-music-service-v1", "qobuz");
+  saved.setItem(linkKey, JSON.stringify({ [source.id]: {
+    tidal: { id: candidate.id, name: candidate.name, source: sourceIdentity(source) },
+    qobuz: { id: "qobuz:old", name: source.name, source: "obsolete" },
+  } }));
+  assert.deepEqual(playbackEditions(saved, source).map(row => row.provider), ["spotify", "tidal"]);
+  assert.deepEqual(playbackEditions(storage(), { ...source, id: "qobuz:native",
+    url: "https://play.qobuz.com/album/native" }).map(row => row.provider), ["qobuz"]);
+  const invalid = storage();
+  invalid.setItem(linkKey, JSON.stringify({ [source.id]: {
+    tidal: { id: "spotify:wrong", name: source.name, source: sourceIdentity(source) },
+  } }));
+  assert.throws(() => playbackEditions(invalid, source), /non valida/);
+  const previous = globalThis.document;
+  class Node {
+    constructor() { this.children = []; this.events = {}; }
+    setAttribute() {}
+    append(...nodes) { this.children.push(...nodes); }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.events.close?.(); }
+    remove() {}
+  }
+  globalThis.document = { createElement: () => new Node(), body: new Node() };
+  try {
+    const dialog = openPlaybackServiceDialog({ storage: saved, album: source, provider: "qobuz", report() {} });
+    const spotify = dialog.children[2].children[0], tidal = dialog.children[3].children[0];
+    assert.equal(spotify.href, `spotify:album:${source.id}`);
+    assert.equal(tidal.href, "tidal://album/123");
+    assert.equal(saved.getItem("accord-music-service-v1"), "qobuz");
+    const links = JSON.parse(saved.getItem(linkKey)); delete links[source.id].tidal;
+    saved.setItem(linkKey, JSON.stringify(links));
+    let prevented = false;
+    tidal.events.click({ preventDefault() { prevented = true; }, stopImmediatePropagation() {} });
+    assert.equal(prevented, true);
+    assert.equal(dialog.open, true);
+    dialog.children.at(-1).events.click();
+    assert.equal(dialog.open, false);
+    assert.equal(saved.getItem("accord-music-service-v1"), "qobuz");
+    const empty = openPlaybackServiceDialog({ storage: storage(), album: source, provider: "spotify", report() {} });
+    assert.match(empty.children[2].textContent, /Non ci sono altri servizi/);
+    assert.equal(empty.children.some(node => node.href), false);
+    empty.children.at(-1).events.click();
+    assert.equal(empty.open, false);
+  } finally { globalThis.document = previous; }
+});
+
+test("the reported TIDAL shared link is canonicalized for catalog reading and native opening", () => {
+  for (const value of ["https://tidal.com/album/490869886/u",
+    "https://tidal.com/browse/album/490869886/u/", "https://listen.tidal.com/album/490869886/u?shared=1"]) {
+    assert.equal(tidalAlbumId(value), "490869886");
+    assert.equal(nativeMusicLink(value), "tidal://album/490869886");
+  }
+  for (const value of ["https://tidal.com/album/490869886/u/extra",
+    "https://tidal.com.evil.test/album/490869886/u", "https://evil@tidal.com/album/490869886/u",
+    "https://tidal.com/track/490869886/u"]) assert.throws(() => tidalAlbumId(value));
+});
+
+test("album links must belong to the selected service, never tracks, playlists or lookalike hosts", () => {
+  for (const [provider, value, id] of [
+    ["spotify", `https://open.spotify.com/album/${source.id}?si=shared`, source.id],
+    ["tidal", "https://listen.tidal.com/album/123?u=shared", "tidal:123"],
+    ["tidal", "https://tidal.com/album/490869886/u", "tidal:490869886"],
+    ["qobuz", "https://open.qobuz.com/album/demo", "qobuz:demo"],
+  ]) {
+    assert.equal(associationLinkId(provider, value), id);
+    for (const other of ["spotify", "tidal", "qobuz"].filter(item => item !== provider)) {
+      assert.throws(() => associationLinkId(other, value));
+    }
+  }
+  for (const value of ["https://tidal.com/track/123", "https://tidal.com/playlist/123",
+    "https://evil.test/album/123", "https://evil@tidal.com/album/123",
+    "https://tidal.com/album/123/unknown", "https://tidal.com.evil.test/album/123/u"]) {
+    assert.throws(() => associationLinkId("tidal", value));
+  }
+});
+
+test("link chooser reads exact album metadata before confirmation and ignores cancelled reads", async () => {
+  const previous = globalThis.document;
+  class Node {
+    constructor() { this.children = []; this.events = {}; }
+    setAttribute() {}
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.events.close?.(); }
+    remove() {}
+  }
+  globalThis.document = { createElement: () => new Node(), body: new Node() };
+  try {
+    for (const [provider, id, url] of [["spotify", source.id, source.url],
+      ["tidal", candidate.id, candidate.url], ["qobuz", "qobuz:demo", "https://play.qobuz.com/album/demo"]]) {
+      let reads = 0, selected = 0;
+      const dialog = openEditionChooser({ provider,
+        load: async value => { reads++; assert.equal(value, id); return { ...source, id }; },
+        selected: record => { selected++; assert.equal(record.id, id); } });
+      dialog.children[4].children[0].value = url;
+      const read = dialog.children[4].children[1];
+      assert.equal(reads, 0); assert.equal(selected, 0);
+      await read.events.click();
+      assert.equal(reads, 1); assert.equal(selected, 0); assert.equal(dialog.open, true);
+      dialog.children[6].children[0].children[1].events.click();
+      assert.equal(selected, 1); assert.equal(dialog.open, false);
+    }
+    let release, selected = 0;
+    const dialog = openEditionChooser({ provider: "tidal",
+      load: () => new Promise(resolve => { release = resolve; }), selected: () => { selected++; } });
+    const [input, read] = dialog.children[4].children, [compare, cancel] = dialog.children.at(-1).children;
+    input.value = source.url;
+    await read.events.click();
+    assert.match(dialog.children[5].textContent, /servizio scelto/);
+    input.value = candidate.url;
+    const pending = read.events.click();
+    cancel.events.click(); release(candidate); await pending;
+    assert.equal(selected, 0);
+  } finally { globalThis.document = previous; }
+});
+
+test("manual association saves without opening by default and opens only with explicit consent", () => {
+  const previous = globalThis.document;
+  class Node {
+    constructor() { this.children = []; this.events = {}; }
+    setAttribute() {}
+    append(...nodes) { this.children.push(...nodes); }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.events.close?.(); }
+    remove() {}
+  }
+  globalThis.document = { createElement: () => new Node(), body: new Node() };
+  try {
+    for (const provider of ["tidal", "qobuz"]) for (const action of ["save", "open", "cancel", "failed"]) {
+      const calls = [], errors = [];
+      const dialog = openEditionAssociationDialog({
+        album: source, edition: candidate, provider,
+        save() { if (action === "failed") throw new Error("Storage full"); calls.push("save"); },
+        open() { calls.push("open"); }, report(message, error) { if (error) errors.push(message); },
+      });
+      const check = dialog.children[2].children[0];
+      assert.equal(check.checked, false);
+      check.checked = action !== "save";
+      const [confirm, cancel] = dialog.children.at(-1).children;
+      if (action === "cancel") cancel.events.click();
+      else { confirm.events.click(); if (action !== "failed") confirm.events.click(); }
+      assert.deepEqual(calls, action === "open" ? ["save", "open"] : action === "save" ? ["save"] : []);
+      assert.equal(dialog.open, action === "failed");
+      assert.equal(errors.length, action === "failed" ? 1 : 0);
+    }
+  } finally { globalThis.document = previous; }
+});
+
+test("one chooser keeps catalog search and shared album links together for all three services", async () => {
+  const previous = globalThis.document;
+  class Node {
+    constructor() { this.children = []; this.events = {}; }
+    setAttribute() {}
+    append(...nodes) { this.children.push(...nodes); }
+    replaceChildren(...nodes) { this.children = [...nodes]; }
+    addEventListener(name, callback) { this.events[name] = callback; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.events.close?.(); }
+    remove() {}
+  }
+  globalThis.document = { createElement: () => new Node(), body: new Node() };
+  try {
+    for (const [provider, id, url] of [["spotify", source.id, source.url],
+      ["tidal", "tidal:490869886", "https://tidal.com/album/490869886/u"],
+      ["qobuz", "qobuz:demo", "https://open.qobuz.com/album/demo"]]) {
+      let searches = 0, reads = 0, selected = 0;
+      const album = { ...source, id };
+      const dialog = openEditionChooser({ provider, query: "Band Album",
+        search: async query => {
+          assert.equal(query, "Band Album"); searches++; return { albums: [album], complete: false };
+        },
+        load: async value => { reads++; assert.equal(value, id); return album; },
+        selected: record => { selected++; assert.equal(record.id, id); } });
+      assert.equal(dialog.children[2].children[0].value, "Band Album");
+      assert.equal(dialog.children[4].children[0].type, "text");
+      await dialog.children[3].events.click();
+      assert.equal(searches, 1); assert.equal(dialog.open, true); assert.equal(selected, 0);
+      assert.match(dialog.children[5].textContent, /parziali/);
+      assert.equal(dialog.children[6].children.length, 1);
+      dialog.children[4].children[0].value = url;
+      await dialog.children[4].children[1].events.click();
+      assert.equal(reads, 1); assert.equal(dialog.open, true); assert.equal(selected, 0);
+      assert.equal(dialog.children[6].children.length, 1);
+      dialog.children[6].children[0].children[1].events.click();
+      assert.equal(selected, 1); assert.equal(dialog.open, false);
+    }
+    assert.equal(globalThis.document.body.children.length, 3);
+  } finally { globalThis.document = previous; }
+});
+
+test("manual association app callback revalidates the service at confirmation and uses native opening", () => {
+  const code = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const start = code.indexOf("function chooseCollectionEdition(");
+  const end = code.indexOf("\nlet collectionAssociationOpen", start);
+  let options, linkOptions, saved = 0, opened = 0, changed = false;
+  const context = {
+    musicService: { service: "tidal", epoch: 1, assert() { if (changed) throw new Error("Servizio cambiato"); } },
+    state: { albums: [source] }, localStorage: storage(),
+    tidalUI: { suggestionAPI: { revision: () => 1 } },
+    openEditionChooser(value) { linkOptions = value; },
+    openEditionAssociationDialog(value) { options = value; }, showFeedback() {},
+    setEditionLink() { saved += 1; }, selectMusicView() {}, render() {},
+    editionLink() { return candidate; },
+    document: { createElement: () => ({ click() { opened += 1; } }) },
+    configureMusicAppLink(link, url) { assert.equal(url, candidate.url); return link; },
+  };
+  runInNewContext(`${code.slice(start, end)}\nchooseCollectionEdition(state.albums[0]);`, context);
+  linkOptions.selected(candidate);
+  assert.equal(saved, 0); assert.equal(opened, 0);
+  options.save(); assert.equal(saved, 1); assert.equal(opened, 0);
+  options.open(); assert.equal(opened, 1);
+  changed = true;
+  assert.throws(() => options.save(), /Servizio cambiato/);
+  assert.equal(saved, 1);
+  assert.throws(() => options.open(), /Servizio cambiato/);
+  assert.equal(opened, 1);
+});
 
 test("the app freezes the actual filtered list at click and refuses zero results", () => {
   const sourceCode = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
@@ -46,6 +274,45 @@ test("the app freezes the actual filtered list at click and refuses zero results
       assert.equal(dialogs[0].albums.length, 2);
       assert.deepEqual(errors, []);
     }
+  }
+});
+
+test("the app reads link metadata from the selected provider only, without saving before confirmation", async () => {
+  const code = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const start = code.indexOf("function chooseCollectionEdition(");
+  const end = code.indexOf("\nlet collectionAssociationOpen", start);
+  for (const [provider, id] of [["spotify", source.id], ["tidal", candidate.id], ["qobuz", "qobuz:demo"]]) {
+    let options, confirmation, reads = [], saves = 0;
+    const record = { ...source, id };
+    const api = name => ({ revision: () => 1,
+      album: async value => { reads.push(name); assert.equal(value, id); return record; },
+      search: async query => { reads.push(name); assert.equal(query, "Band Album"); return { rows: [{ album: record }], complete: true }; } });
+    const context = {
+      state: { albums: [source] }, localStorage: storage(),
+      musicService: { service: provider, epoch: 1, assert() {} },
+      tidalUI: { suggestionAPI: api("tidal") }, qobuzUI: { suggestionAPI: api("qobuz") },
+      spotifyAccessToken: async () => "synthetic",
+      spotifyRequest: async path => { reads.push("spotify"); assert.equal(path, `albums/${id}`); return record; },
+      spotifyAlbumSearchRecords: values => [values[0].item.album],
+      URLSearchParams,
+      spotifySearchRequest: async parameters => {
+        reads.push("spotify"); assert.equal(parameters.get("q"), "Band Album");
+        return { albums: { items: [record], total: 1 } };
+      },
+      openEditionChooser: value => { options = value; },
+      openEditionAssociationDialog: value => { confirmation = value; },
+      setEditionLink() { saves++; }, selectMusicView() {}, render() {}, showFeedback() {},
+    };
+    runInNewContext(`${code.slice(start, end)}\nchooseCollectionEdition(state.albums[0]);`, context);
+    const loaded = await options.load(id);
+    options.selected(loaded);
+    assert.deepEqual(reads, [provider]); assert.equal(saves, 0);
+    const results = await options.search("Band Album");
+    assert.equal(results.albums[0].id, id);
+    assert.deepEqual(reads, [provider, provider]); assert.equal(saves, 0);
+    assert.equal(confirmation.edition.id, id);
+    confirmation.save();
+    assert.equal(saves, 1);
   }
 });
 

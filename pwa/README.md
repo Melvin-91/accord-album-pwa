@@ -2,6 +2,44 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.21.0 · Ricerca album, selezione e associazioni
+
+**Aggiungi album** cerca solo album nel catalogo TIDAL, senza il selettore
+Artisti/Brani/Playlist. Le caselle **Live** e **Singoli / EP**, anche per
+Qobuz e ricerca manuale, sono inizialmente selezionate: permettono di
+escludere categorie dai risultati gia' letti, senza altre richieste.
+Classificazione per tipo dichiarato e titolo, non per numero di brani;
+tipi sconosciuti visibili. Singoli ed EP sono raggruppati per i metadati
+Spotify. Le fonti esterne non restituiscono necessariamente tutte le
+categorie: MusicBrainz continua a cercare release-group Album.
+Preferiti e importazione playlist restano separati.
+
+Nella raccolta **Ctrl+clic** aggiunge/toglie un album, **Maiusc+clic**
+seleziona l'intervallo nell'ordine filtrato e **Ctrl+Maiusc+clic** lo aggiunge
+alla selezione esistente. Su macOS vale anche Cmd al posto di Ctrl.
+Il clic semplice sostituisce la selezione, compresi gli album nascosti.
+
+**Riproduci** compare anche quando manca l'edizione nel servizio corrente:
+apre una finestra con gli altri servizi in cui l'album e' nativo o gia'
+associato. La scelta vale solo per quell'album e apre l'app del servizio,
+senza cambiare il servizio principale o avviare automaticamente l'audio.
+Non viene verificata in tempo reale la disponibilita' nel catalogo.
+Se non ci sono alternative note, occorre associare prima un'edizione.
+
+**Associa edizione** permette di incollare il link album del servizio
+musicale scelto: Spotify, TIDAL o Qobuz. **Leggi album dal link** verifica
+i metadati nel relativo catalogo prima della conferma; link di altri
+servizi, brani e playlist non sono accettati. Ricerca per artista/titolo e
+lettura del link sono nella **stessa finestra**, con un unico elenco di
+risultati da scegliere prima della conferma. Supportati anche i link
+TIDAL condivisi come `https://tidal.com/album/490869886/u`.
+Per TIDAL e Qobuz resta disponibile il confronto tra due e quattro edizioni.
+
+La conferma dell'associazione singola include **Apri anche l'album nell'app**,
+disattivato inizialmente. Senza la spunta salva solo il collegamento locale.
+L'apertura o la copia della ricerca Qobuz avvengono soltanto dopo consenso e
+salvataggio riuscito. L'associazione massiva resta invariata.
+
 ### PWA 1.20.1 · Servizio unico e associazioni filtrate
 
 Un solo **Servizio musicale** per ascolto, associazioni e nuovo filtro
@@ -38,7 +76,7 @@ quando appare Nuova versione pronta, senza ricaricamenti automatici.
 
 ### Destinazione e funzionalita' incluse
 
-Rivisto il 10 novembre 2026. **PWA 1.20.1**. Destinazione:
+Rivisto il 10 novembre 2026. **PWA 1.21.0**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Gli album occupano lo spazio principale: Filtri, Vista, importazione,
@@ -379,7 +417,7 @@ sito nel browser, crea un backup.
   Con TIDAL sono bloccate anche le richieste Spotify già accodate e le risposte
   tardive, comprese ricerca e copertine automatiche. Un ID TIDAL non viene mai
   inviato a Spotify.
-- Ricerca pubblica TIDAL di album, artisti, brani e playlist; album da link/ID,
+- Ricerca pubblica TIDAL di album, con filtri Live e Singoli / EP; album da link/ID,
   catalogo di un artista, lettura/importazione selettiva dei preferiti e degli
   album delle playlist. I preferiti remoti sono distinti da stato/voto locali.
   Aggiunta/rimozione preferiti, elenco/lettura/creazione/modifica/eliminazione

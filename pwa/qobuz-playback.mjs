@@ -1,4 +1,4 @@
-import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=9";
+import { QOBUZ_API, qobuzCredentials, qobuzNumericId } from "./qobuz.mjs?v=10";
 import { createServiceRequests } from "./service-requests.mjs?v=2";
 
 const AUDIO_HOSTS = new Set(["streaming-qobuz-sec.akamaized.net", "streaming-qobuz-std.akamaized.net"]);

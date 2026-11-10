@@ -1,8 +1,8 @@
-import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=9";
-import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=8";
-import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
-import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=6";
+import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } from "./qobuz.mjs?v=10";
+import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=9";
+import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=2";
+import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
+import { bindPauseNotice } from "./music-continuity.mjs?v=7";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const SESSION = "accord-qobuz-session-v1";
@@ -96,6 +96,9 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   const reads = element("div", "", { class: "tidal-controls" });
   const label = element("label", "Ricerca album Qobuz");
   label.append(query); reads.append(label);
+  let searchPage = null;
+  const searchOptions = albumSearchControls(reads, { prefix: "qobuzAlbumSearch",
+    changed: () => { if (searchPage) show(searchPage); } });
   button(reads, "Cerca", () => {
     mode = "search"; currentQuery = query.value.trim();
     if (/^(?:qobuz:|https:\/\/play\.qobuz\.com\/)/.test(currentQuery)) {
@@ -117,9 +120,11 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   button(albumLinkDetails, "Leggi ID / link album", () => void readAlbum());
   section.append(reads, albumLinkDetails, results);
   function show(page) {
+    searchPage = page;
     offset = page.offset; next = page.next; rows = [];
     results.replaceChildren();
     for (const row of page.rows) {
+      if (mode !== "favorites" && !albumSearchMatch({ ...row.album, ...row.edition }, searchOptions())) continue;
       const item = element("article", "", { class: "suggestion-album tidal-album-result" });
       const choice = element("label", "", { class: "tidal-album-choice" });
       const check = element("input", "", { type: "checkbox", "aria-label": `Seleziona ${row.album.name}` });
@@ -150,7 +155,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       }, false);
       results.append(item); rows.push({ ...row, check, compareCheck });
     }
-    status.textContent = `Qobuz: ${rows.length} risultati da ${offset + 1}, totale ${page.total}. `
+    status.textContent = `Qobuz: ${rows.length} mostrati su ${page.rows.length} risultati da ${offset + 1}, totale ${page.total}. `
       + "Seleziona gli album; le altre pagine restano disponibili.";
   }
   async function read(position) {
@@ -626,7 +631,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   function resetSessionViews() {
     accountRevision += 1;
     stopPlayer(); secrets = []; secretAppId = ""; keyChoice.replaceChildren();
-    rows = []; mode = ""; offset = 0; next = null; results.replaceChildren();
+    rows = []; mode = ""; searchPage = null; offset = 0; next = null; results.replaceChildren();
     suggested = []; suggestionResults.replaceChildren(); suggestionQuery.value = "";
     playlistRows = []; loadedPlaylist = null; loadedPlaylistPage = null; playlistListing.replaceChildren(); playlistResults.replaceChildren();
     playlistMode = ""; playlistNext = null; playlistPrevious = [];
@@ -784,6 +789,12 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   }
   setActive();
   const suggestionAPI = {
+    album: async (id) => {
+      const epoch = gate.epoch; gate.assert("qobuz", epoch);
+      const result = await client().album(id);
+      gate.assert("qobuz", epoch);
+      return result.album;
+    },
     revision: () => accountRevision,
     seed: () => ({ id: suggestionQuery.value, label: suggestionChoice.textContent }),
     search: async (text) => {

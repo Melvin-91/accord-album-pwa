@@ -48,6 +48,7 @@ export function qobuzAlbum(value) {
       status: "queued", rating: null, genres: [], primary_genre: "", collections: [], tags: [], cover_sha256: null },
     coverUrl,
     edition: {
+      ...(typeof value.release_type === "string" ? { album_type: value.release_type.toLowerCase() } : {}),
       ...(Number.isSafeInteger(value.tracks_count) && value.tracks_count >= 0 ? { track_count: value.tracks_count } : {}),
       ...(Number.isSafeInteger(value.duration) && value.duration >= 0 ? { duration_seconds: value.duration } : {}),
     },

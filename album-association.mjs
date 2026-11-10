@@ -1,4 +1,6 @@
-import { validEdition, sourceIdentity } from "./music-continuity.mjs?v=6";
+import { validEdition, sourceIdentity, editionLink } from "./music-continuity.mjs?v=7";
+import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=2";
+import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const normalized = (value) => String(value || "").normalize("NFKC").toLowerCase().trim().replace(/\s+/g, " ");
 const identity = (albums) => JSON.stringify(albums.map(album =>
@@ -7,6 +9,145 @@ const identity = (albums) => JSON.stringify(albums.map(album =>
 const captions = { native: "Gia' nel catalogo", linked: "Gia' associato", stale: "Associazione da verificare",
   found: "Corrispondenza unica", missing: "Non trovato", ambiguous: "Piu' edizioni: verifica manuale",
   incomplete: "Ricerca parziale: verifica manuale" };
+
+export function playbackEditions(storage, album, links = JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}")) {
+  return ["spotify", "tidal", "qobuz"].flatMap(provider => {
+    const record = validEdition(provider, album.id) ? album : editionLink(storage, album, provider, links);
+    return record ? [{ provider, album: record }] : [];
+  });
+}
+
+export function openPlaybackServiceDialog({ storage, album, provider, report }) {
+  const editions = playbackEditions(storage, album).filter(row => row.provider !== provider);
+  const dialog = document.createElement("dialog"); dialog.setAttribute("aria-label", "Scegli dove ascoltare");
+  const heading = document.createElement("h2"); heading.textContent = "Scegli dove ascoltare";
+  const notice = document.createElement("p");
+  notice.textContent = `${album.artist} · ${album.name}. Nessuna edizione collegata al servizio scelto. `
+    + "Scegli un servizio solo per questo album: il servizio principale non cambia. "
+    + "Mostriamo album nativi e associazioni salvate, non una verifica attuale del catalogo. "
+    + "L'apertura nell'app non avvia automaticamente l'audio.";
+  dialog.append(heading, notice);
+  for (const row of editions) {
+    const link = document.createElement("a");
+    link.textContent = `Apri in ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[row.provider]}`;
+    link.addEventListener("click", event => {
+      try {
+        const current = playbackEditions(storage, album).find(item => item.provider === row.provider);
+        if (!current || current.album.id !== row.album.id) throw new Error("Associazione cambiata: riapri la scelta del servizio.");
+      } catch (error) {
+        event.preventDefault(); event.stopImmediatePropagation(); report(error.message, true); return;
+      }
+      dialog.close();
+    });
+    configureMusicAppLink(link, row.album.url, { query: `${album.artist} ${album.name}`, report });
+    const paragraph = document.createElement("p"); paragraph.append(link); dialog.append(paragraph);
+  }
+  if (!editions.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "Non ci sono altri servizi gia' collegati. Associa prima un'edizione dal menu dell'album.";
+    dialog.append(empty);
+  }
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Annulla";
+  cancel.addEventListener("click", () => dialog.close()); dialog.append(cancel);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+  return dialog;
+}
+
+export function associationLinkId(provider, value) {
+  let text = String(value).trim();
+  if (text.startsWith("https://")) text = nativeMusicLink(text, { desktop: true });
+  const prefix = { spotify: "spotify:album:", tidal: "tidal://album/", qobuz: "qobuzapp://album/" }[provider];
+  if (prefix && text.startsWith(prefix)) {
+    const id = text.slice(prefix.length);
+    text = provider === "spotify" ? id : `${provider}:${id}`;
+  }
+  if (!validEdition(provider, text)) throw new Error("Incolla un link album del servizio scelto, non un brano o una playlist.");
+  return text;
+}
+
+export function openEditionChooser({ provider, load, selected, search, query = "" }) {
+  const dialog = document.createElement("dialog"); dialog.setAttribute("aria-label", "Associa edizione");
+  const heading = document.createElement("h2"); heading.textContent = `Associa edizione · ${provider.toUpperCase()}`;
+  const notice = document.createElement("p");
+  notice.textContent = "Cerca nel catalogo oppure incolla il link dell'album, poi scegli l'edizione da associare. Nessuna aggiunta ai preferiti.";
+  const searchLabel = document.createElement("label"); searchLabel.textContent = "Artista o titolo nel catalogo";
+  const searchInput = document.createElement("input"); searchInput.type = "text"; searchInput.value = query;
+  searchLabel.append(searchInput);
+  const catalog = document.createElement("button"); catalog.type = "button"; catalog.textContent = "Cerca nel catalogo";
+  const label = document.createElement("label"); label.textContent = "Link album del servizio scelto";
+  const input = document.createElement("input"); input.type = "text"; input.placeholder = `Link album ${provider.toUpperCase()}`;
+  label.append(input);
+  const status = document.createElement("p"); status.setAttribute("role", "status");
+  const results = document.createElement("div"); results.className = "association-results";
+  const compare = document.createElement("button"); compare.type = "button";
+  compare.textContent = "Confronta edizioni selezionate (2–4)"; compare.disabled = true;
+  compare.hidden = !["tidal", "qobuz"].includes(provider);
+  let compared = [];
+  compare.addEventListener("click", () => {
+    try { showEditionComparison(compared.filter(row => row.check.checked).map(row => row.album), provider); }
+    catch (error) { status.textContent = error.message; }
+  });
+  const actions = document.createElement("div"); actions.className = "dialog-actions";
+  const read = document.createElement("button"); read.type = "button"; read.textContent = "Leggi album dal link";
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Annulla";
+  label.append(read);
+  actions.append(compare, cancel);
+  dialog.append(heading, notice, searchLabel, catalog, label, status, results, actions); document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  cancel.addEventListener("click", () => dialog.close());
+  const readCatalog = async (fromLink) => {
+    if (read.disabled) return;
+    read.disabled = true;
+    catalog.disabled = true;
+    results.replaceChildren(); compared = []; compare.disabled = true;
+    status.textContent = "Lettura del catalogo in corso...";
+    try {
+      let page;
+      if (fromLink) {
+        const id = associationLinkId(provider, input.value);
+        const album = await load(id);
+        if (album?.id !== id) throw new Error("Il catalogo ha restituito un album diverso dal link.");
+        page = { albums: [album], complete: true };
+      } else {
+        const text = searchInput.value.trim();
+        if (!text) throw new Error("Inserisci artista o titolo da cercare.");
+        page = await search(text);
+      }
+      if (!dialog.open) return;
+      if (page.albums.some(album => !validEdition(provider, album.id))) throw new Error("Risposta del catalogo con identita' album non valida.");
+      for (const album of page.albums) {
+        const row = document.createElement("article");
+        const title = document.createElement("p");
+        title.textContent = `${album.artist} · ${album.name} · ${album.year || "Anno sconosciuto"}`;
+        const choose = document.createElement("button"); choose.type = "button"; choose.textContent = "Associa questa edizione";
+        choose.addEventListener("click", () => { if (dialog.open) { dialog.close(); selected(album); } });
+        row.append(title, choose);
+        if (!compare.hidden) {
+          const label = document.createElement("label"); label.className = "check";
+          const check = document.createElement("input"); check.type = "checkbox"; check.checked = false;
+          const caption = document.createElement("span"); caption.textContent = "Confronta";
+          check.addEventListener("change", () => {
+            const count = compared.filter(row => row.check.checked).length;
+            compare.disabled = count < 2 || count > 4;
+          });
+          label.append(check, caption); row.append(label); compared.push({ album, check });
+        }
+        results.append(row);
+      }
+      status.textContent = `${page.albums.length} album trovati. Scegli un'edizione da associare.`
+        + (page.complete ? "" : " Risultati parziali: affina la ricerca se necessario.");
+    } catch (error) {
+      if (dialog.open) status.textContent = error.message;
+    } finally { read.disabled = false; catalog.disabled = false; }
+  };
+  read.addEventListener("click", () => readCatalog(true));
+  catalog.addEventListener("click", () => readCatalog(false));
+  input.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); void readCatalog(true); } });
+  searchInput.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); void readCatalog(false); } });
+  dialog.showModal();
+  return dialog;
+}
 
 export async function prepareAssociations(albums, links, provider, search, guard = () => {}, progress = () => {}, targetIds = null) {
   if (!["spotify", "tidal", "qobuz"].includes(provider)) throw new Error("Scegli Spotify, TIDAL o Qobuz.");
@@ -58,6 +199,45 @@ export function associationUpdates(plan, albums, links) {
     updated[album.id][plan.provider] = { id: selected.id, name: selected.name, source: sourceIdentity(album) };
   }
   return updated;
+}
+
+export function openEditionAssociationDialog({ album, edition, provider, save, open, report }) {
+  const dialog = document.createElement("dialog");
+  dialog.setAttribute("aria-label", "Associa edizione");
+  const heading = document.createElement("h2"); heading.textContent = "Associa edizione";
+  const notice = document.createElement("p");
+  notice.textContent = `Associare ${album.artist} · ${album.name} a ${edition.artist} · ${edition.name}? `
+    + "Collegamento locale. Nessun album unito, nessun voto trasferito.";
+  const label = document.createElement("label"); label.className = "check";
+  const check = document.createElement("input"); check.type = "checkbox"; check.checked = false;
+  const caption = document.createElement("span");
+  caption.textContent = `Apri anche l'album nell'app ${provider === "tidal" ? "TIDAL" : provider === "qobuz" ? "Qobuz" : "Spotify"}`;
+  label.append(check, caption);
+  const status = document.createElement("p"); status.setAttribute("role", "status");
+  const actions = document.createElement("div"); actions.className = "dialog-actions";
+  const confirm = document.createElement("button"); confirm.type = "button"; confirm.textContent = "Associa";
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Annulla";
+  actions.append(confirm, cancel); dialog.append(heading, notice, label, status, actions);
+  document.body.append(dialog);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  cancel.addEventListener("click", () => dialog.close());
+  confirm.addEventListener("click", () => {
+    if (confirm.disabled) return;
+    confirm.disabled = true;
+    try { save(); }
+    catch (error) {
+      status.textContent = error.message; report(error.message, true); confirm.disabled = false;
+      return;
+    }
+    dialog.close();
+    report("Edizione associata sul dispositivo. Album e voti invariati.");
+    if (check.checked) {
+      try { open(); }
+      catch (error) { report(`Associazione salvata; apertura non riuscita: ${error.message}`, true); }
+    }
+  });
+  dialog.showModal();
+  return dialog;
 }
 
 export function openAssociationDialog({ albums, links, provider, search, guard, save, report, closed, targetIds = null }) {

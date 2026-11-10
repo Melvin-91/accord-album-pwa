@@ -1,9 +1,9 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=9";
-import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=1";
-import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
-import { bindPauseNotice } from "./music-continuity.mjs?v=6";
+} from "./tidal.mjs?v=10";
+import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=2";
+import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
+import { bindPauseNotice } from "./music-continuity.mjs?v=7";
 import { showEditionComparison } from "./edition-comparison.mjs?v=1";
 
 const CLIENT = "accord-tidal-client-id-v1";
@@ -88,6 +88,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const saveClient = button(configuration, "Salva Client ID", () => {
     if (client.value.trim() !== localStorage.getItem(CLIENT)) {
       accountRevision += 1; auth.disconnect(); clearDestination();
+      searchAlbumRows = null;
     }
     localStorage.setItem(CLIENT, client.value.trim());
     authStatus.textContent = "Client ID salvato sul dispositivo. Nessun token o secret salvato nel repository.";
@@ -101,6 +102,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const disconnect = button(configuration, "Scollega TIDAL", () => {
     accountRevision += 1; auth.disconnect(); clearDestination(); clearPreview();
     results.replaceChildren(); rows = []; lastPlaylist = null; refreshSelectionControls();
+    searchAlbumRows = null;
     status.textContent = "Sessione TIDAL rimossa.";
   });
   disconnect.id = "tidalDisconnectButton";
@@ -128,9 +130,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const country = input(catalogOptions, "Paese del catalogo (ISO, es. IT)", "IT", { maxlength: "2", pattern: "[A-Za-z]{2}" });
   const query = input(collectionControls, "Titolo, artista o link album TIDAL", "", { maxlength: "300" });
   query.id = "tidalAlbumQuery";
-  const kind = selection(collectionControls, "Ricerca pubblica", [
-    ["albums", "Album"], ["artists", "Artisti"], ["tracks", "Brani"], ["playlists", "Playlist"],
-  ]);
+  let searchAlbumRows = null;
+  const searchOptions = albumSearchControls(collectionControls, { prefix: "tidalAlbumSearch",
+    changed: () => { if (searchAlbumRows) showAlbumSearch(); } });
   button(collectionControls, "Cerca · anteprima", () => read("search"), "primary");
   button(collectionControls, "Leggi album dal link / ID", () => read("album"));
   collectionDetails.append(collectionControls, catalogOptions,
@@ -294,7 +296,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     gate.assert("tidal", operation.epoch);
     const response = await transport.request(operation.path, token, operation.options);
     gate.assert("tidal", operation.epoch);
-    results.replaceChildren(); rows = [];
+    results.replaceChildren(); rows = []; searchAlbumRows = null;
     if (operation.path === "playlists" && operation.options.method === "POST" && response.data?.id) {
       playlist.value = tidalPlaylistId(response.data.id);
       playlistDestination.value = "";
@@ -433,6 +435,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }
   function showPreparedResources(resources) {
     clearPreview();
+    searchAlbumRows = null;
     results.replaceChildren(); rows = []; lastPlaylist = null; suggestionResultsActive = false;
     for (const resource of resources) {
       const row = { resource, label: `Brano · ${resource.attributes.title}` };
@@ -508,13 +511,12 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       if (action === "search") {
         const text = query.value.trim();
         if (!text || text.length > 100) throw new Error("Ricerca TIDAL: usa da 1 a 100 caratteri.");
-        path = await transport.searchPath(text, kind.value, token, {
+        path = await transport.searchPath(text, "albums", token, {
           countryCode: country.value.toUpperCase(),
-          include: kind.value === "albums" ? "albums.artists,albums.coverArt" : kind.value === "tracks"
-            ? "tracks.albums.artists,tracks.albums.coverArt" : kind.value,
+          include: "albums.artists,albums.coverArt",
         });
         gate.assert("tidal", current);
-        label = `Ricerca pubblica TIDAL · ${kind.selectedOptions[0].textContent}`;
+        label = "Ricerca album TIDAL";
       } else if (action === "album") {
         path = catalogPath(`albums/${tidalAlbumId(query.value)}`, "artists,coverArt");
         label = "Album TIDAL dal link";
@@ -571,6 +573,12 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       const albumMap = new Map(albums.map((album) => [album.id.slice(6), album]));
       const albumRows = albums.map((album) => ({ album, coverUrl: artwork.get(album.id),
         resource: all.find((item) => item.type === "albums" && `tidal:${item.id}` === album.id), label: `${album.name} · ${album.artist}` }));
+      searchAlbumRows = ["search", "album"].includes(action) ? albumRows : null;
+      if (searchAlbumRows) {
+        showAlbumSearch();
+        if (!page.complete) status.textContent += " Risultato parziale: raggiunto il limite di ricerca.";
+        return;
+      }
       const excluded = action === "suggestions"
         ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
       const visibleAlbums = albumRows.filter((row) => ![row.album.artist, ...(albumArtists.get(row.album.id.slice(6)) || [])]
@@ -637,6 +645,19 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       refreshSelectionControls();
     });
   }
+  function showAlbumSearch() {
+    clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
+    suggestionResultsActive = false;
+    for (const row of searchAlbumRows.filter(row => albumSearchMatch({
+      ...row.album, album_type: row.resource?.attributes?.albumType,
+    }, searchOptions())).slice(0, 250)) {
+      results.append(renderAlbumResult(row)); rows.push(row);
+    }
+    status.textContent = `${rows.length} album mostrati su ${searchAlbumRows.length} risultati letti. `
+      + "Modifica le caselle per includere live o singoli / EP; nessuna nuova ricerca automatica.";
+    if (!rows.length) results.append(element("p", "Nessun album corrisponde ai filtri.", { class: "summary" }));
+    refreshSelectionControls();
+  }
   async function readArtist(id) {
     seed.value = id;
     return run(async () => {
@@ -644,6 +665,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       const page = await transport.pages(catalogPath(`artists/${id}/relationships/albums`, "albums.artists,albums.coverArt"), token);
       gate.assert("tidal", current);
       clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
+      searchAlbumRows = null;
       const artwork = tidalAlbumArtwork(page.documents);
       const excluded = suggestionResultsActive
         ? excludedArtistNames(localStorage.getItem(EXCLUDED_ARTISTS) || "") : new Set();
@@ -777,6 +799,16 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     })), complete: page.complete };
   }
   const suggestionAPI = {
+    album: async (id) => {
+      const current = epoch(); gate.assert("tidal", current);
+      const identifier = tidalAlbumId(id);
+      const token = await auth.access(client.value.trim()); gate.assert("tidal", current);
+      const document = await transport.request(catalogPath(`albums/${identifier}`, "artists,coverArt"), token);
+      gate.assert("tidal", current);
+      const row = tidalAlbumRecords([document]).find(row => row.id === `tidal:${identifier}`);
+      if (!row) throw new Error("Album TIDAL non disponibile nel catalogo.");
+      return row;
+    },
     revision: () => accountRevision,
     seed: () => ({ id: seed.value, label: seedChoice.textContent }),
     search: async (text) => {

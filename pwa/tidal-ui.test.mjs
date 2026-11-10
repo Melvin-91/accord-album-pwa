@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { initializeTidalUI as initialize } from "./tidal-ui.mjs";
 import { createMusicServiceGate } from "./tidal.mjs";
-import { artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs";
+import { albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs";
 
 let time = Date.now();
 const initializeTidalUI = (options) => initialize({ ...options, requestOptions: {
@@ -15,6 +15,47 @@ test("artist exclusions match normalized whole names without splitting commas", 
   assert.equal(artistIsExcluded("other artist", excluded), true);
   assert.equal(artistIsExcluded("Other", excluded), false);
   assert.equal(artistIsExcluded("", excluded), false);
+});
+
+test("album search filters use declared types and live titles, never guess from track count", () => {
+  for (const album of [{ name: "Studio" }, { name: "Live and Let Die" }, { name: "Unknown", total_tracks: 2 }]) {
+    assert.equal(albumSearchMatch(album, { includeLive: false, includeShort: false }), true);
+  }
+  for (const album of [{ name: "Live at Home" }, { name: "Album (Live)" }, { name: "Album", album_type: "live" }]) {
+    assert.equal(albumSearchMatch(album, { includeLive: false }), false);
+  }
+  for (const album of [{ name: "Album", album_type: "single" }, { name: "Album", release_type: "EP" },
+    { name: "Name - EP" }, { name: "Name (Single)" }]) {
+    assert.equal(albumSearchMatch(album, { includeShort: false }), false);
+    assert.equal(albumSearchMatch(album), true);
+  }
+});
+
+test("add album searches albums only and toggles cached live and short results without reads", async () => {
+  const document = { data: [], included: [
+    { type: "artists", id: "9", attributes: { name: "Artist" } },
+    ...[["Studio", "ALBUM"], ["Live at Home", "ALBUM"], ["Short", "EP"], ["Single", "SINGLE"]].map(
+      ([title, albumType], index) => ({ type: "albums", id: String(index + 1), attributes: { title, albumType },
+        relationships: { artists: { data: [{ type: "artists", id: "9" }] } } })),
+  ] };
+  await uiFixture(async f => {
+    f.gate.select("tidal"); f.field("Titolo, artista o link album TIDAL").value = "Artist";
+    await f.find("Cerca · anteprima").dispatch("click");
+    const calls = f.calls.length;
+    assert.ok(f.calls.some(call => new URL(call.url).pathname.endsWith("/relationships/albums")));
+    assert.ok(!f.walk().some(node => node._text === "Ricerca pubblica"));
+    const shown = () => f.walk().filter(node => node.attributes.class?.split(" ").includes("tidal-album-result")).length;
+    assert.equal(shown(), 4);
+    f.field("Live").checked = false; await f.field("Live").dispatch("change");
+    assert.equal(shown(), 3);
+    f.field("Singoli / EP").checked = false; await f.field("Singoli / EP").dispatch("change");
+    assert.equal(shown(), 1);
+    f.field("Live").checked = true; await f.field("Live").dispatch("change");
+    f.field("Singoli / EP").checked = true; await f.field("Singoli / EP").dispatch("change");
+    assert.equal(shown(), 4);
+    assert.equal(f.calls.length, calls);
+    assert.deepEqual(f.imported, []);
+  }, document);
 });
 
 class Node {
@@ -73,6 +114,18 @@ const playlistDocument = {
     { type: "tracks", id: "456", attributes: { title: "Test Track" },
       relationships: { albums: { data: [{ type: "albums", id: "123" }] } } }],
 };
+
+test("association link metadata reads the exact TIDAL album without imports or searches", async () => {
+  await uiFixture(async f => {
+    f.gate.select("tidal");
+    const album = await f.ui.suggestionAPI.album("tidal:123");
+    assert.equal(album.id, "tidal:123");
+    assert.equal(album.name, "Test Album");
+    assert.equal(f.calls.length, 1);
+    assert.equal(new URL(f.calls[0].url).pathname, "/v2/albums/123");
+    assert.deepEqual(f.imported, []);
+  });
+});
 
 async function uiFixture(run, albumResponse = albumDocument) {
   const root = new Node("main"), tabs = new Node("nav"), existing = new Map();
@@ -300,6 +353,10 @@ test("TIDAL prepares selected album tracks for playlists without writing remotel
     assert.equal(f.calls.every((call) => call.method === "GET"), true);
     assert.ok(f.find("Brano · Test Track"));
     assert.ok(f.find("Brano · Another Track"));
+    f.field("Live").checked = false;
+    await f.field("Live").dispatch("change");
+    assert.ok(f.find("Brano · Test Track"));
+    assert.ok(f.find("Brano · Another Track"));
     assert.equal(f.walk().filter((node) => node.getAttribute("aria-label") === "Seleziona Brano · Test Track").length, 1);
     const track = f.walk().find((node) => node.getAttribute("aria-label") === "Seleziona Brano · Test Track");
     track.checked = true; await track.dispatch("change");
@@ -513,8 +570,8 @@ test("TIDAL search is manual and empty results have an accessible status", async
     assert.equal(f.calls.length, 0);
     await f.find("Cerca · anteprima").dispatch("click");
     assert.equal(f.calls.length, 2);
-    assert.ok(f.walk().some((node) => node.textContent === "Nessun risultato TIDAL disponibile per questa ricerca."));
-    assert.ok(f.walk().some((node) => node.attributes.id === "tidalStatus" && node.textContent.includes("0 risultati mostrati")));
+    assert.ok(f.walk().some((node) => node.textContent === "Nessun album corrisponde ai filtri."));
+    assert.ok(f.walk().some((node) => node.attributes.id === "tidalStatus" && node.textContent.includes("0 album mostrati")));
   });
 });
 

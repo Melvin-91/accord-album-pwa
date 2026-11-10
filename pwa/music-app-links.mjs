@@ -20,7 +20,7 @@ export function nativeMusicLink(value, { desktop = desktopAppLinks() } = {}) {
     if (path.startsWith("/search/") && path.length > 8) return `spotify:search:${path.slice(8)}`;
   }
   if (["tidal.com", "www.tidal.com", "listen.tidal.com"].includes(url.hostname)) {
-    const match = path.match(/^\/(?:browse\/)?(album|artist|track|playlist|video)\/([A-Za-z0-9-]+)\/?$/);
+    const match = path.match(/^\/(?:browse\/)?(album|artist|track|playlist|video)\/([A-Za-z0-9-]+)(?:\/u)?\/?$/);
     if (match) return `tidal://${match[1]}/${match[2]}`;
   }
   if (["play.qobuz.com", "open.qobuz.com"].includes(url.hostname)) {

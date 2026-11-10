@@ -1,5 +1,5 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
-import { nativeMusicLink } from "./music-app-links.mjs?v=1";
+import { nativeMusicLink } from "./music-app-links.mjs?v=2";
 import { createServiceRequests } from "./service-requests.mjs?v=2";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
@@ -64,8 +64,8 @@ export function tidalAlbumId(value) {
   const text = String(value || "").trim();
   if (/^(?:tidal:)?[1-9][0-9]*$/.test(text)) return text.replace(/^tidal:/, "");
   const url = new URL(text);
-  const match = url.pathname.match(/^\/(?:browse\/)?album\/([1-9][0-9]*)\/?$/);
-  if (url.protocol !== "https:" || !["tidal.com", "www.tidal.com"].includes(url.host)
+  const match = url.pathname.match(/^\/(?:browse\/)?album\/([1-9][0-9]*)(?:\/u)?\/?$/);
+  if (url.protocol !== "https:" || !["tidal.com", "www.tidal.com", "listen.tidal.com"].includes(url.host)
       || url.username || url.password || !match) throw new Error("Link album TIDAL non valido.");
   return match[1];
 }

@@ -262,8 +262,12 @@ export function visibleSelection(selectedIds, albums) {
   return new Set([...selectedIds].filter((id) => visible.has(id)));
 }
 
-export function selectCollectionAlbum(selectedIds, id, control = false) {
+export function selectCollectionAlbum(selectedIds, id, control = false, range = []) {
   const next = control ? new Set(selectedIds) : new Set();
+  if (range.length) {
+    for (const identifier of range) next.add(identifier);
+    return next;
+  }
   if (control && next.has(id)) next.delete(id);
   else next.add(id);
   return next;
