@@ -55,7 +55,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   serviceBox.append(element("p", "SERVIZIO MUSICALE", { class: "eyebrow" }));
   const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"], ["qobuz", "Qobuz"]]);
   provider.id = "musicService"; provider.value = gate.service;
-  serviceBox.append(element("p", "La raccolta locale è unica; il servizio scelto cambia solo le funzioni online.", { class: "summary" }));
+  serviceBox.append(element("p", "Un solo servizio per ascolto, associazioni e filtro Associazione mancante. La raccolta locale resta unica.", { class: "summary" }));
   const spotifyCapabilities = element("p",
     "Spotify · Cerca musica, scopri album, crea playlist e apri Spotify.",
     { class: "summary", id: "spotifyCapabilities" });

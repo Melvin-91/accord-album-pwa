@@ -1,6 +1,6 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=12";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=13";
 import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=9";
-import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=1";
+import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=2";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
   editionLink, setEditionLink, pauseRemaining } from "./music-continuity.mjs?v=6";
@@ -84,11 +84,11 @@ import { configureMusicAppLink } from "./music-app-links.mjs?v=1";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=3";
+} from "./music-qol.mjs?v=4";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
   from "./music-completion.mjs?v=8";
 import { openMusicCompletion } from "./music-completion-ui.mjs?v=8";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=27";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=28";
 import { initializeQobuzUI } from "./qobuz-ui.mjs?v=22";
 import { qobuzAlbumId } from "./qobuz.mjs?v=9";
 
@@ -879,19 +879,19 @@ function setAlbumPins(ids, pinned) {
 
 function collectionHasFilters() {
   return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter", "#serviceFilter"].some((selector) => Boolean($(selector).value.trim()))
+    "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
     || localCollectionChecks.some((selector) => $(selector).checked)
     || collectionSelectionOnly || $("#pinnedOnlyInput").checked || Boolean($("#smartCollectionList").value) || Boolean(localFacet);
 }
 
-const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"];
 
 function resetCollectionFilters({ refresh = true } = {}) {
   collectionSelectionOnly = false;
   localFacet = null;
   appliedCollectionSearch = "";
   for (const selector of ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter"]) $(selector).value = "";
+    "#statusFilter", "#collectionFilter", "#tagFilter"]) $(selector).value = "";
   for (const selector of localCollectionChecks) $(selector).checked = false;
   $("#pinnedOnlyInput").checked = false;
   $("#smartCollectionList").value = "";
@@ -998,12 +998,13 @@ function renderCollectionFilterChips() {
     appliedCollectionSearch = ""; $("#searchInput").value = "";
   });
   for (const selector of ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter", "#serviceFilter", "#smartCollectionList"]) {
+    "#collectionFilter", "#tagFilter", "#smartCollectionList"]) {
     const control = $(selector);
     if (control.value) append(control.selectedOptions[0].textContent, () => { control.value = ""; });
   }
   for (const [selector, text] of [["#unratedFilter", "Senza voto"],
-    ["#missingDurationFilter", "Durata mancante"], ["#notesPresentFilter", "Note presenti"]]) {
+    ["#missingDurationFilter", "Durata mancante"], ["#notesPresentFilter", "Note presenti"],
+    ["#missingAssociationFilter", "Associazione mancante"]]) {
     if ($(selector).checked) append(text, () => { $(selector).checked = false; });
   }
   if ($("#pinnedOnlyInput").checked) append("In evidenza", () => { $("#pinnedOnlyInput").checked = false; });
@@ -1409,6 +1410,7 @@ function refreshGenreFilters() {
 }
 
 function render(options = {}) {
+  updateAssociationButton();
   finishManualDrag(false);
   ensureManualOrder();
   refreshGenreFilters();
@@ -1429,9 +1431,9 @@ function render(options = {}) {
       throw new Error("Durate locali non valide.");
     }
     editionLinks = JSON.parse(localStorage.getItem("accord-music-edition-links-v1") || "{}");
-    if (["spotify", "tidal", "qobuz"].includes($("#serviceFilter").value)) {
+    if ($("#missingAssociationFilter").checked) {
       for (const album of state.albums) {
-        if (editionLink(localStorage, album, $("#serviceFilter").value, editionLinks)) associatedIds.add(album.id);
+        if (editionLink(localStorage, album, musicService.service, editionLinks)) associatedIds.add(album.id);
       }
     }
   } catch (error) {
@@ -1450,7 +1452,8 @@ function render(options = {}) {
     && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
     && localCollectionMatch(album, {
       unrated: $("#unratedFilter").checked, missingDuration: $("#missingDurationFilter").checked,
-      notesPresent: $("#notesPresentFilter").checked, service: $("#serviceFilter").value, durations,
+      notesPresent: $("#notesPresentFilter").checked, durations,
+      missingAssociation: $("#missingAssociationFilter").checked, musicProvider: musicService.service,
       associated: associatedIds.has(album.id),
     }));
   const sortedAlbums = sortOrder === "manual"
@@ -1469,7 +1472,7 @@ function render(options = {}) {
   renderCollectionFilterChips();
   $("#resetFiltersButton").hidden = !collectionHasFilters();
   const filterCount = ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter", "#serviceFilter"].filter((selector) => $(selector).value).length
+    "#collectionFilter", "#tagFilter"].filter((selector) => $(selector).value).length
     + localCollectionChecks.filter((selector) => $(selector).checked).length
     + Number($("#pinnedOnlyInput").checked) + Number(collectionSelectionOnly);
   $("#activeFilterCount").textContent = filterCount ? `· ${filterCount} attivi` : "";
@@ -3918,7 +3921,7 @@ function chooseCollectionEdition(album) {
 }
 
 let collectionAssociationOpen = false;
-function associateEntireCollection() {
+function associateFilteredCollection() {
   if (collectionAssociationOpen) return;
   const provider = musicService.service, epoch = musicService.epoch;
   const api = provider === "tidal" ? tidalUI.suggestionAPI : provider === "qobuz" ? qobuzUI.suggestionAPI : null;
@@ -3933,13 +3936,14 @@ function associateEntireCollection() {
   };
   try {
     if (state.loadError) throw new Error(`Archivio locale non leggibile: ${state.loadError}`);
-    if (!state.albums.length) throw new Error("La raccolta e' vuota: nessun album da associare.");
+    const targetIds = visibleAlbums.map(album => album.id);
+    if (!targetIds.length) throw new Error("Nessun album nei filtri attivi da associare.");
     const savedSnapshot = localStorage.getItem(STORAGE_KEY);
     const linkKey = "accord-music-edition-links-v1", linksSnapshot = localStorage.getItem(linkKey);
     const links = JSON.parse(linksSnapshot || "{}");
     collectionAssociationOpen = true;
     openAssociationDialog({
-      albums: state.albums, links, provider, guard,
+      albums: state.albums, links, provider, guard, targetIds,
       search: async (album) => {
         guard();
         if (provider !== "spotify") {
@@ -3967,7 +3971,7 @@ function associateEntireCollection() {
         }
         const updates = associationUpdates(plan, state.albums, JSON.parse(localStorage.getItem(linkKey) || "{}"));
         commitLocalRestore(localStorage, STORAGE_KEY, state, state, { [linkKey]: updates },
-          `Associazioni ${provider.toUpperCase()} di tutta la raccolta`);
+          `Associazioni ${provider.toUpperCase()} degli album filtrati`);
         updateLocalSyncSummary(); render();
       },
       report: showFeedback,
@@ -4690,7 +4694,7 @@ function appendSuggestionActions(card, album, rerender) {
 }
 
 const collectionViewSelectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-  "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+  "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
 function refreshSavedCollectionViews() {
   const select = $("#savedCollectionView");
   select.replaceChildren(new Option("Scegli vista", ""));
@@ -5496,7 +5500,6 @@ function initializeCollectionQol() {
     catch (error) { showFeedback(`Vista non applicata: ${error.message}`, true); return; }
     for (const selector of collectionViewSelectors) {
       if (typeof view[selector] === "string") $(selector).value = view[selector];
-      else if (selector === "#serviceFilter") $(selector).value = "";
       if (selector === "#primaryGenreFilter") refreshGenreFilters();
     }
     localCollectionChecks.forEach((selector, index) => { $(selector).checked = view.localChecks?.[index] === true; });
@@ -5716,7 +5719,7 @@ $("#searchInput").addEventListener("keydown", (event) => {
   }
 });
 for (const input of [$("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
-  $("#collectionFilter"), $("#tagFilter"), $("#serviceFilter"), ...localCollectionChecks.map($)]) {
+  $("#collectionFilter"), $("#tagFilter"), ...localCollectionChecks.map($)]) {
   input.addEventListener("change", render);
 }
 $("#sortOrder").addEventListener("change", () => {
@@ -7570,13 +7573,13 @@ collectionLayout = installCollectionLayout(document);
 const associateCollectionButton = document.createElement("button");
 associateCollectionButton.id = "associateCollection";
 associateCollectionButton.type = "button";
-associateCollectionButton.title = "Cerca tutta la raccolta nel servizio musicale scelto in alto, anche se nascosta dai filtri. Solo collegamenti locali.";
-const updateAssociationButton = () => {
-  associateCollectionButton.textContent = `Associa tutti a ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[musicService.service]}`;
-};
-$("#serviceFilter").parentElement.after(associateCollectionButton);
-associateCollectionButton.addEventListener("click", associateEntireCollection);
-$("#musicService").addEventListener("change", updateAssociationButton);
+associateCollectionButton.title = "Cerca solo gli album presenti nei filtri attivi, su tutte le pagine, nel servizio musicale scelto in alto. Solo collegamenti locali.";
+function updateAssociationButton() {
+  const button = $("#associateCollection");
+  if (button) button.textContent = `Associa tutti a ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[musicService.service]}`;
+}
+$("#missingAssociationFilter").parentElement.after(associateCollectionButton);
+associateCollectionButton.addEventListener("click", associateFilteredCollection);
 updateAssociationButton();
 installTechnicalStatusDetails(document.body);
 installDialogLayout(document.body);

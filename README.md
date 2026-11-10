@@ -2,6 +2,24 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.20.1 · Servizio unico e associazioni filtrate
+
+Un solo **Servizio musicale** per ascolto, associazioni e nuovo filtro
+**Associazione mancante**, accanto a Senza voto e Durata mancante.
+Il filtro mostra album non nativi del servizio scelto e privi di un
+collegamento locale valido, comprese associazioni obsolete. Nessuna lettura
+remota; si combina con gli altri criteri, viste salvate, etichette e reset.
+Il pulsante **Associa tutti a...** segue lo stesso servizio, anche quando
+la scelta cambia da un'altra scheda. Rimosso il selettore distinto
+Servizio dell'album: le vecchie viste lo ignorano e non cambiano il player.
+Senza il nuovo filtro gli album di tutti i cataloghi restano visibili.
+**Associa tutti a...** cerca solo gli album corrispondenti ai filtri attivi
+al clic, su tutte le pagine e indipendentemente dalla selezione manuale.
+Gli album esclusi non vengono cercati o associati. Senza filtri include
+tutta la raccolta; con zero risultati non avvia richieste. Anteprima,
+conferma, protezione dalle modifiche concorrenti e annullamento invariati.
+Titolo, badge e cache aggiornati a 1.20.1; dati e credenziali restano locali.
+
 ### PWA 1.20.0 · Associazione massiva dei cataloghi
 
 Nel pannello Filtri, **Associa tutti a Spotify / TIDAL / Qobuz** cerca
@@ -10,8 +28,8 @@ filtri e la selezione. Propone soltanto un'edizione con artista e titolo
 esatti e anno compatibile nei risultati completi. Riepilogo e conferma
 precedono il salvataggio locale unico, annullabile dalla cronologia;
 associazioni gia' presenti e casi dubbi non vengono sostituiti.
-Non modifica preferiti, raccolte remote, album o voti. Apri nell'app e
-il filtro Servizio dell'album usano anche i collegamenti validi; Rimuovi
+Non modifica preferiti, raccolte remote, album o voti. Apri nell'app
+usa i collegamenti validi; Rimuovi
 associazione consente di eliminarli, anche per Spotify.
 La release aggiorna titolo, badge e cache a 1.20.0; identita' della PWA,
 chiavi di storage, raccolta e credenziali esistenti restano invariate.
@@ -20,7 +38,7 @@ quando appare Nuova versione pronta, senza ricaricamenti automatici.
 
 ### Destinazione e funzionalita' incluse
 
-Rivisto il 9 novembre 2026. **PWA 1.20.0**. Destinazione:
+Rivisto il 10 novembre 2026. **PWA 1.20.1**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Gli album occupano lo spazio principale: Filtri, Vista, importazione,

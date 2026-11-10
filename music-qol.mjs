@@ -1,3 +1,5 @@
+import { validEdition } from "./music-continuity.mjs?v=6";
+
 const normalized = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 
 export function listeningStep(album) {
@@ -9,12 +11,14 @@ export function listeningStep(album) {
 
 export function localCollectionMatch(album, {
   unrated = false, missingDuration = false, notesPresent = false, service = "", durations = {}, associated = false,
+  missingAssociation = false, musicProvider = "spotify",
 } = {}) {
   const provider = album.id.startsWith("tidal:") ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz"
     : album.url?.includes("open.spotify.com/album/") ? "spotify" : "other";
   return (!unrated || album.rating === null || album.rating === undefined)
     && (!missingDuration || !Object.hasOwn(durations, album.id))
     && (!notesPresent || Boolean(album.notes?.trim()))
+    && (!missingAssociation || !validEdition(musicProvider, album.id) && !associated)
     && (!service || provider === service || associated);
 }
 

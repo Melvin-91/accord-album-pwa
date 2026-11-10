@@ -12,13 +12,13 @@
     <link rel="apple-touch-icon" href="../assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css?v=40">
-    <title>Accord v1.20.0 · La mia raccolta</title>
+    <title>Accord v1.20.1 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="../assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.20.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.20.1</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -127,9 +127,7 @@
         <label class="check"><input id="unratedFilter" type="checkbox">Senza voto</label>
         <label class="check"><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
         <label class="check"><input id="notesPresentFilter" type="checkbox">Note presenti</label>
-        <label>Servizio dell'album
-          <select id="serviceFilter"><option value="">Tutti i servizi</option><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option><option value="other">Altri cataloghi</option></select>
-        </label>
+        <label class="check" title="Senza un collegamento valido al servizio musicale scelto in alto; gli album nativi sono esclusi."><input id="missingAssociationFilter" type="checkbox">Associazione mancante</label>
         <label>Ordina per
           <select id="sortOrder">
             <option value="artist">Artista</option><option value="name">Album</option>
@@ -565,6 +563,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=111"></script>
+    <script type="module" src="app.mjs?v=113"></script>
   </body>
 </html>

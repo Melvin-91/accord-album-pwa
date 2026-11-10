@@ -8,13 +8,15 @@ const captions = { native: "Gia' nel catalogo", linked: "Gia' associato", stale:
   found: "Corrispondenza unica", missing: "Non trovato", ambiguous: "Piu' edizioni: verifica manuale",
   incomplete: "Ricerca parziale: verifica manuale" };
 
-export async function prepareAssociations(albums, links, provider, search, guard = () => {}, progress = () => {}) {
+export async function prepareAssociations(albums, links, provider, search, guard = () => {}, progress = () => {}, targetIds = null) {
   if (!["spotify", "tidal", "qobuz"].includes(provider)) throw new Error("Scegli Spotify, TIDAL o Qobuz.");
   if (!links || typeof links !== "object" || Array.isArray(links)) throw new Error("Associazioni locali non leggibili.");
   albums = structuredClone(albums); links = structuredClone(links);
+  const identifiers = targetIds === null ? null : new Set(targetIds);
+  const targets = identifiers === null ? albums : albums.filter(album => identifiers.has(album.id));
   const rows = [];
-  for (const [index, album] of albums.entries()) {
-    guard(); progress(`Ricerca ${index + 1}/${albums.length}: ${album.artist} · ${album.name}`);
+  for (const [index, album] of targets.entries()) {
+    guard(); progress(`Ricerca ${index + 1}/${targets.length}: ${album.artist} · ${album.name}`);
     const entry = links[album.id];
     if (entry !== undefined && (!entry || typeof entry !== "object" || Array.isArray(entry))) {
       throw new Error("Associazioni locali non leggibili.");
@@ -58,17 +60,18 @@ export function associationUpdates(plan, albums, links) {
   return updated;
 }
 
-export function openAssociationDialog({ albums, links, provider, search, guard, save, report, closed }) {
+export function openAssociationDialog({ albums, links, provider, search, guard, save, report, closed, targetIds = null }) {
+  const count = targetIds === null ? albums.length : albums.filter(album => targetIds.includes(album.id)).length;
   const dialog = document.createElement("dialog");
-  dialog.setAttribute("aria-label", "Associa tutta la raccolta");
+  dialog.setAttribute("aria-label", "Associa gli album filtrati");
   const heading = document.createElement("h2"); heading.textContent = `Associa tutti a ${provider.toUpperCase()}`;
   const notice = document.createElement("p");
-  notice.textContent = `${albums.length} album, inclusi quelli nascosti dai filtri. Solo letture del catalogo e collegamenti locali. `
+  notice.textContent = `${count} album nei filtri attivi, su tutte le pagine. Solo letture del catalogo e collegamenti locali. `
     + "Artista e titolo esatti, anno compatibile e una sola edizione. Associazioni esistenti, album, voti e preferiti non cambiano.";
   const status = document.createElement("p"); status.setAttribute("role", "status");
   const preview = document.createElement("pre"); preview.className = "association-preview";
   const actions = document.createElement("div"); actions.className = "dialog-actions";
-  const start = document.createElement("button"); start.type = "button"; start.textContent = "Cerca in tutta la raccolta";
+  const start = document.createElement("button"); start.type = "button"; start.textContent = "Cerca negli album filtrati";
   const apply = document.createElement("button"); apply.type = "button"; apply.textContent = "Associa corrispondenze"; apply.disabled = true;
   const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Annulla";
   actions.append(start, apply, cancel); dialog.append(heading, notice, status, preview, actions); document.body.append(dialog);
@@ -82,7 +85,7 @@ export function openAssociationDialog({ albums, links, provider, search, guard, 
     if (running) return;
     running = true; start.disabled = true; apply.disabled = true; plan = null;
     try {
-      plan = await prepareAssociations(albums, links, provider, search, check, message => { status.textContent = message; });
+      plan = await prepareAssociations(albums, links, provider, search, check, message => { status.textContent = message; }, targetIds);
       check();
       const found = plan.rows.filter(row => row.state === "found").length;
       status.textContent = `${found} nuove associazioni su ${plan.rows.length} album. I casi dubbi restano da verificare.`;

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { associationUpdates, openAssociationDialog, prepareAssociations } from "./album-association.mjs";
 import { editionLink, setEditionLink, sourceIdentity } from "./music-continuity.mjs";
 import { localCollectionMatch } from "./music-qol.mjs";
@@ -16,6 +18,37 @@ const storage = () => {
 };
 const key = "accord-album-pwa-v1", linkKey = "accord-music-edition-links-v1";
 
+test("the app freezes the actual filtered list at click and refuses zero results", () => {
+  const sourceCode = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const start = sourceCode.indexOf("function associateFilteredCollection()");
+  const end = sourceCode.indexOf("\nasync function spotifyPlaylistIdentity", start);
+  assert.ok(start >= 0 && end > start);
+  for (const empty of [false, true]) {
+    const hidden = { ...source, id: "B".repeat(22), name: "Excluded" };
+    const visible = empty ? [] : [source], dialogs = [], errors = [];
+    const context = {
+      collectionAssociationOpen: false, state: { albums: [source, hidden] }, visibleAlbums: visible,
+      musicService: { service: "tidal", epoch: 1, assert() {} },
+      tidalUI: { suggestionAPI: { revision: () => 1 } }, spotifySettings: () => ({ clientId: "" }),
+      sessionStorage: storage(), localStorage: storage(), STORAGE_KEY: key,
+      openAssociationDialog: options => dialogs.push(options),
+      showFeedback: message => errors.push(message),
+    };
+    runInNewContext(`${sourceCode.slice(start, end)}\nassociateFilteredCollection();`, context);
+    if (empty) {
+      assert.equal(dialogs.length, 0);
+      assert.match(errors[0], /Nessun album nei filtri attivi/);
+    } else {
+      assert.equal(dialogs.length, 1);
+      assert.deepEqual(Array.from(dialogs[0].targetIds), [source.id]);
+      visible.push(hidden);
+      assert.deepEqual(Array.from(dialogs[0].targetIds), [source.id]);
+      assert.equal(dialogs[0].albums.length, 2);
+      assert.deepEqual(errors, []);
+    }
+  }
+});
+
 test("the entire supplied library is searched, without writing or mutating input", async () => {
   const albums = [source, { ...source, id: "B".repeat(22), name: "Hidden by filters" }];
   const before = structuredClone(albums), calls = [];
@@ -31,6 +64,25 @@ test("only unique exact names and compatible years are proposed", async () => {
     const plan = await prepareAssociations([source], {}, "tidal", async () => page([{ ...candidate, ...changes }]));
     assert.equal(plan.rows[0].state, state);
   }
+});
+
+test("filtered targets alone are searched and saved while the complete library stays guarded", async () => {
+  const hidden = { ...source, id: "B".repeat(22), name: "Excluded by filters" };
+  const albums = [source, hidden], calls = [];
+  const links = { [hidden.id]: { tidal: { id: "tidal:456", name: hidden.name, source: sourceIdentity(hidden) } } };
+  const plan = await prepareAssociations(albums, links, "tidal", async album => {
+    calls.push(album.id); return page();
+  }, undefined, undefined, [source.id]);
+  assert.deepEqual(calls, [source.id]);
+  assert.deepEqual(plan.rows.map(row => row.album.id), [source.id]);
+  const updated = associationUpdates(plan, albums, links);
+  assert.deepEqual(updated[hidden.id], links[hidden.id]);
+  assert.equal(updated[source.id].tidal.id, candidate.id);
+  assert.throws(() => associationUpdates(plan, [source, { ...hidden, name: "Changed" }], links), /cambiate/);
+  const empty = await prepareAssociations(albums, links, "tidal",
+    () => assert.fail("Empty filters must not search"), undefined, undefined, []);
+  assert.deepEqual(empty.rows, []);
+  assert.deepEqual(associationUpdates(empty, albums, links), links);
 });
 
 test("ambiguous, empty, incomplete and duplicate catalogue rows are distinct", async () => {
@@ -81,6 +133,24 @@ test("the collection can reuse a single parsed association snapshot for every al
   const links = { [source.id]: { tidal: { id: candidate.id, name: candidate.name, source: sourceIdentity(source) } } };
   const unreadable = { getItem() { assert.fail("Snapshot must not be reread for each album"); } };
   assert.equal(editionLink(unreadable, source, "tidal", links).id, candidate.id);
+});
+
+test("missing association follows the one selected music service, excluding native and current links only", () => {
+  for (const [provider, id] of [["spotify", "B".repeat(22)], ["tidal", "tidal:123"], ["qobuz", "qobuz:demo"]]) {
+    const album = { ...source, id: "external", url: "https://musicbrainz.org/release/external" };
+    const options = { missingAssociation: true, musicProvider: provider };
+    assert.equal(localCollectionMatch(album, options), true);
+    assert.equal(localCollectionMatch({ ...album, id }, options), false);
+    const saved = storage();
+    const links = { [album.id]: { [provider]: { id, name: album.name, source: sourceIdentity(album) } } };
+    const associated = Boolean(editionLink(saved, album, provider, links));
+    assert.equal(localCollectionMatch(album, { ...options, associated }), false);
+    links[album.id][provider].source = "old";
+    assert.equal(localCollectionMatch(album, { ...options,
+      associated: Boolean(editionLink(saved, album, provider, links)) }), true);
+    assert.equal(localCollectionMatch({ ...album, rating: 4 }, { ...options, unrated: true }), false);
+    assert.equal(localCollectionMatch(album, { ...options, missingAssociation: false, associated }), true);
+  }
 });
 
 test("new Spotify and Qobuz associations open native targets and pass the service filter", async () => {
@@ -151,8 +221,16 @@ test("dialog defers writes until explicit apply and waits for an in-flight read 
     release(page()); await task;
     assert.equal(dialog.open, false); assert.equal(closed, 1); assert.equal(writes, 0);
 
-    const next = openAssociationDialog({ albums: [source], links: {}, provider: "tidal", search: async () => page(),
-      guard() {}, save() { writes += 1; }, report() {}, closed() {} });
+    const hidden = { ...source, id: "B".repeat(22), name: "Hidden" };
+    const next = openAssociationDialog({ albums: [source, hidden], targetIds: [source.id],
+      links: {}, provider: "tidal", search: async album => {
+        assert.equal(album.id, source.id); return page();
+      }, guard() {}, save(plan) {
+        assert.deepEqual(plan.rows.map(row => row.album.id), [source.id]);
+        assert.equal(plan.albums.length, 2);
+        writes += 1;
+      }, report() {}, closed() {} });
+    assert.match(next.children[1].textContent, /1 album nei filtri attivi/);
     const [prepare, confirm] = next.children.at(-1).children;
     await prepare.events.click(); assert.equal(writes, 0); assert.equal(confirm.disabled, false);
     confirm.events.click(); confirm.events.click();

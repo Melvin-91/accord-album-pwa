@@ -959,7 +959,7 @@ test("each collection filter gesture has exactly one render listener", () => {
   const controls = new Map();
   let renders = 0;
   const context = { render: () => { renders += 1; }, state: {}, saveState: () => {},
-    localCollectionChecks: ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"],
+    localCollectionChecks: ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"],
     $: (id) => {
       if (!controls.has(id)) controls.set(id, new EventTarget());
       return controls.get(id);
@@ -1015,7 +1015,7 @@ test("exact local facets match whole artists and labels, never substrings or ano
 
 test("detail facet navigation is local and Back restores search, filters, sort, layout, selection and scroll", () => {
   const selectors = ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#sortOrder", "#smartCollectionList", "#collectionLayout"];
   const elements = new Map(selectors.map((selector, index) => [selector, { value: `value${index}`, focus() {} }]));
   const callbacks = {};
   const element = (selector) => {
@@ -1026,7 +1026,7 @@ test("detail facet navigation is local and Back restores search, filters, sort, 
   element("#pinnedOnlyInput").checked = true;
   element("#collectionFilters").open = true;
   element("#albumList").scrollTop = 540;
-  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"];
   for (const selector of localCollectionChecks) element(selector).checked = true;
   const original = Object.fromEntries(selectors.map((selector) => [selector, element(selector).value]));
   let renders = 0;
@@ -1567,8 +1567,8 @@ test("album persistence rolls back the collection on storage failure", () => {
 
 test("reset clears all local filters including pinned-only without changing saved sort or making requests", () => {
   const elements = new Map(["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter",
-    "#statusFilter", "#collectionFilter", "#tagFilter", "#serviceFilter", "#smartCollectionList"].map((id) => [id, { value: "active", focus() {} }]));
-  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+    "#statusFilter", "#collectionFilter", "#tagFilter", "#smartCollectionList"].map((id) => [id, { value: "active", focus() {} }]));
+  const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"];
   for (const selector of localCollectionChecks) elements.set(selector, { checked: true });
   elements.set("#pinnedOnlyInput", { checked: true });
   const state = { sortOrder: "manual", manualOrder: ["b", "a"] };
@@ -1578,11 +1578,28 @@ test("reset clears all local filters including pinned-only without changing save
     localFacet: { field: "artist", value: "Band" },
     fetch: () => assert.fail("filters must not fetch"),
   });
+
   assert.equal(renders, 1);
   assert.equal(elements.get("#pinnedOnlyInput").checked, false);
   assert.ok(localCollectionChecks.every((selector) => !elements.get(selector).checked));
   assert.equal([...elements.values()].some((element) => element.value), false);
   assert.deepEqual(state, { sortOrder: "manual", manualOrder: ["b", "a"] });
+});
+
+test("one music service controls the association button and the missing-association filter", () => {
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  assert.ok(html.includes('id="missingAssociationFilter"'));
+  assert.ok(!html.includes('id="serviceFilter"'));
+  assert.ok(!uiAppSource.includes("#serviceFilter"));
+  const button = {};
+  const musicService = { service: "tidal" };
+  const update = runInNewContext(appFunction("function updateAssociationButton(", "\n$(\"#missingAssociationFilter\")")
+    + "\nupdateAssociationButton", { $: id => id === "#associateCollection" ? button : null, musicService });
+  for (const [provider, name] of [["tidal", "TIDAL"], ["spotify", "Spotify"], ["qobuz", "Qobuz"]]) {
+    musicService.service = provider; update();
+    assert.equal(button.textContent, `Associa tutti a ${name}`);
+  }
+  assert.ok(appFunction("function render(", "\nfunction ").includes("updateAssociationButton();"));
 });
 
 test("contextual selection actions are hidden until an album is selected", () => {
@@ -1709,14 +1726,14 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=111", "style.css?v=40"]) {
+  for (const file of ["app.mjs?v=113", "style.css?v=40"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=48", "ui.mjs?v=18", "tidal.mjs?v=9", "tidal-ui.mjs?v=27", "qobuz-ui.mjs?v=22",
-    "qobuz.mjs?v=9", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=12",
-    "music-qol.mjs?v=3", "playlist-ui.mjs?v=9",
-    "music-app-links.mjs?v=1", "music-continuity.mjs?v=6", "album-association.mjs?v=1",
+  for (const file of ["core.mjs?v=48", "ui.mjs?v=18", "tidal.mjs?v=9", "tidal-ui.mjs?v=28", "qobuz-ui.mjs?v=22",
+    "qobuz.mjs?v=9", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=13",
+    "music-qol.mjs?v=4", "playlist-ui.mjs?v=9",
+    "music-app-links.mjs?v=1", "music-continuity.mjs?v=6", "album-association.mjs?v=2",
     "music-completion.mjs?v=8", "music-completion-ui.mjs?v=8"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));

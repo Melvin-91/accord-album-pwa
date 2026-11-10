@@ -326,7 +326,7 @@ test("selection toolbar keeps hidden IDs, shows counts, reveals selection and re
     return elements.get(id);
   };
   let renders = 0;
-  const localChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter"];
+  const localChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter"];
   const context = { $, document: { createElement: (tag) => new Element(tag) }, selectedAlbumIds: new Set(["a", "b"]),
     visibleAlbums: [{ id: "b" }], visibleSelection, selectionVisibility, collectionSelectionOnly: false,
     localCollectionChecks: localChecks, localFacet: null, appliedCollectionSearch: "Album",
@@ -354,8 +354,7 @@ test("active criteria render removable chips even when the filter disclosure is 
     return nodes.get(id);
   };
   $("#notesPresentFilter").checked = true;
-  $("#serviceFilter").value = "tidal";
-  $("#serviceFilter").selectedOptions = [{ textContent: "TIDAL" }];
+  $("#missingAssociationFilter").checked = true;
   let renders = 0;
   const context = { $, document: { createElement: (tag) => new Element(tag) },
     appliedCollectionSearch: "Moon", localFacet: null, collectionSelectionOnly: true,
@@ -366,7 +365,7 @@ test("active criteria render removable chips even when the filter disclosure is 
   assert.equal(chips.length, 4);
   chips.find((chip) => chip.textContent.startsWith("Note presenti")).events.click();
   assert.equal($("#notesPresentFilter").checked, false);
-  assert.equal($("#serviceFilter").value, "tidal");
+  assert.equal($("#missingAssociationFilter").checked, true);
   chips.find((chip) => chip.textContent.startsWith("Solo selezionati")).events.click();
   assert.equal(context.collectionSelectionOnly, false);
   assert.equal(renders, 2);
