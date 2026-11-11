@@ -70,7 +70,7 @@ label { display: grid; gap: 7px; color: var(--muted); font-size: .75rem; font-we
 .primary:hover { background: #d3c5ff; border-color: #d3c5ff; }
 .icon-button { width: 40px; height: 40px; padding: 0; font-size: 1.25rem; }
 main { width: min(1120px, calc(100% - 40px)); margin: 0 auto 60px; }
-.music-service-picker { display: grid; grid-template-columns: auto minmax(160px, 220px) minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
+.music-service-picker { display: grid; grid-template-columns: auto minmax(160px, 220px) auto minmax(0, 1fr); align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 12px; min-width: 0; }
 .music-service-picker .eyebrow, .music-service-picker .summary { margin: 0; }
 .music-service-picker label { min-width: 0; }
 .music-service-picker select { min-width: 0; }
@@ -191,6 +191,8 @@ button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .album-main > div { min-width: 0; }
 .album-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .pinned-indicator { color: var(--accent); font-size: .6875rem; border: 1px solid #4f436b; border-radius: 4px; padding: 2px 6px; }
+.album-card .favorite-album { min-width: 32px; min-height: 32px; padding: 2px; border: 0; background: transparent; color: var(--muted); font-size: 1.25rem; line-height: 1; }
+.album-card .favorite-album[aria-pressed="true"] { color: #f4c95d; }
 .album-extra { margin: 6px 0 0; color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
 .album-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; }
 .album-secondary { flex-basis: 100%; min-width: 0; }
@@ -412,10 +414,13 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-toolbar .collection-search { flex: 1 1 220px; min-width: 0; margin: 0; gap: 6px; }
 .collection-toolbar .collection-search .search { min-width: 0; font-size: 0; gap: 0; }
 .collection-toolbar .collection-search input { min-width: 0; min-height: 36px; font-size: .875rem; }
-.collection-toolbar .music-service-picker { flex: 0 1 110px; display: block; margin: 0; padding: 0; border: 0; }
+.collection-toolbar .music-service-picker { flex: 0 1 auto; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
 .collection-toolbar .music-service-picker > p { display: none; }
 .collection-toolbar .music-service-picker > label { font-size: 0; gap: 0; }
 .collection-toolbar .music-service-picker select { font-size: .8125rem; min-height: 36px; padding: 6px; }
+.music-service-picker #musicLinkTarget { width: auto; font-size: .8125rem; }
+.music-service-picker > .music-link-error { grid-column: 1 / -1; color: #f3c1ba; font-size: .8125rem; }
+.collection-toolbar .music-service-picker > .music-link-error:not([hidden]) { display: block; flex-basis: 100%; }
 .collection-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; gap: 10px; }
 .collection-body[data-options-open] { grid-template-columns: minmax(0, 1fr) minmax(240px, 30%); }
 .collection-results { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 6px; }
@@ -451,6 +456,15 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .album-card:not(.has-cover) .album-cover { visibility: hidden; }
 .album-card .cover-placeholder { font-size: 0; padding: 0; }
 .album-card .cover-placeholder::before { content: "♫"; font-size: 24px; }
+.album-card { grid-template-columns: 32px 22px 88px minmax(0, 1fr); }
+.album-list[data-layout="compact"] .album-card { grid-template-columns: 32px 22px 52px minmax(0, 1fr); }
+@media (max-width: 760px) {
+  .album-card { grid-template-columns: 32px 20px 64px minmax(0, 1fr); }
+  .album-list[data-layout="compact"] .album-card { grid-template-columns: 32px 20px 44px minmax(0, 1fr); }
+}
+@media (max-width: 400px) {
+  .album-card { grid-template-columns: 32px 20px 48px minmax(0, 1fr); }
+}
 .collection-results .album-list[data-layout="compact"] .album-extra { display: block; }
 .collection-results .album-secondary { flex-basis: auto; }
 .collection-results .album-secondary > summary { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; }

@@ -1,15 +1,15 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=16";
-import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=2";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=17";
+import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
-  libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=1";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=11";
+  libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=2";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=12";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=7";
-import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=1";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=8";
+import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=8";
-import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=4";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=9";
+import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
 import {
   addPlaylistAlbums,
   albumPrimaryGenre,
@@ -63,7 +63,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=48";
+} from "./core.mjs?v=49";
 import {
   localCommandResults,
   collectionAuditSummary,
@@ -82,20 +82,20 @@ import {
   prepareCollectionHistoryRestore, selectCollectionAlbum,
   runPlatformAccessChecks,
   userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout,
-} from "./ui.mjs?v=20";
-import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=10";
-import { createQobuzClient } from "./qobuz.mjs?v=10";
-import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
+} from "./ui.mjs?v=21";
+import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=11";
+import { createQobuzClient } from "./qobuz.mjs?v=11";
+import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=3";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=6";
+} from "./music-qol.mjs?v=7";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=10";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=10";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=32";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=26";
-import { qobuzAlbumId } from "./qobuz.mjs?v=10";
+  from "./music-completion.mjs?v=11";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=11";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=33";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=27";
+import { qobuzAlbumId } from "./qobuz.mjs?v=11";
 
 const musicService = createMusicServiceGate(localStorage);
 
@@ -883,6 +883,18 @@ function setAlbumPins(ids, pinned) {
   showFeedback(pinned ? "Album fissati su questo dispositivo" : "Album non più fissati");
 }
 
+function toggleAlbumFavorite(id) {
+  const favorites = new Set(collectionPreferences.favoriteIds || []);
+  const favorite = !favorites.has(id);
+  if (favorite) favorites.add(id);
+  else favorites.delete(id);
+  if (!saveCollectionPreferences({ ...collectionPreferences, favoriteIds: [...favorites] })) return;
+  render();
+  const card = [...$("#albumList").children].find((item) => item.dataset.albumId === id);
+  (card?.querySelector(".favorite-album") || $("#favoritesOnlyFilter")).focus();
+  showFeedback(favorite ? "Album aggiunto ai preferiti su questo dispositivo" : "Album rimosso dai preferiti");
+}
+
 function collectionHasFilters() {
   return ["#searchInput", "#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
     "#collectionFilter", "#tagFilter"].some((selector) => Boolean($(selector).value.trim()))
@@ -891,7 +903,7 @@ function collectionHasFilters() {
 }
 
 const localCollectionChecks = ["#unratedFilter", "#missingDurationFilter", "#notesPresentFilter", "#missingAssociationFilter",
-  "#unavailableOnlyFilter", "#deferredOnlyFilter"];
+  "#unavailableOnlyFilter", "#deferredOnlyFilter", "#favoritesOnlyFilter"];
 
 function resetCollectionFilters({ refresh = true } = {}) {
   collectionSelectionOnly = false;
@@ -1017,7 +1029,7 @@ function renderCollectionFilterChips() {
   for (const [selector, text] of [["#unratedFilter", "Senza voto"],
     ["#missingDurationFilter", "Durata mancante"], ["#notesPresentFilter", "Note presenti"],
     ["#missingAssociationFilter", "Associazione mancante"], ["#unavailableOnlyFilter", "Non disponibili (manuale)"],
-    ["#deferredOnlyFilter", "Rimandati"]]) {
+    ["#deferredOnlyFilter", "Rimandati"], ["#favoritesOnlyFilter", "Album preferiti"]]) {
     if ($(selector).checked) append(text, () => { $(selector).checked = false; });
   }
   if ($("#pinnedOnlyInput").checked) append("In evidenza", () => { $("#pinnedOnlyInput").checked = false; });
@@ -1472,6 +1484,7 @@ function render(options = {}) {
     tag: $("#tagFilter").value,
     order: sortOrder,
   }).filter((album) => (!$("#unavailableOnlyFilter").checked || manuallyUnavailable(libraryChoices, album, musicService.service))
+    && (!$("#favoritesOnlyFilter").checked || (collectionPreferences.favoriteIds || []).includes(album.id))
     && (!$("#deferredOnlyFilter").checked || albumDeferred(libraryChoices, album))
     && smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
     && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
@@ -1538,6 +1551,14 @@ function render(options = {}) {
       if (!event.target.closest(`${interactiveAlbumTarget}, label, summary`)) selectAlbumCard(album.id, event);
     });
     const pinned = pins.has(album.id);
+    const favorite = (collectionPreferences.favoriteIds || []).includes(album.id);
+    const favoriteButton = card.querySelector(".favorite-album");
+    favoriteButton.textContent = favorite ? "★" : "☆";
+    favoriteButton.setAttribute("aria-pressed", String(favorite));
+    const favoriteLabel = `${favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}: ${album.name}`;
+    favoriteButton.setAttribute("aria-label", favoriteLabel);
+    favoriteButton.title = favoriteLabel;
+    favoriteButton.addEventListener("click", () => toggleAlbumFavorite(album.id));
     card.querySelector(".pinned-indicator").hidden = !pinned;
     const pinButton = card.querySelector(".pin-album");
     pinButton.setAttribute("aria-pressed", String(pinned));
@@ -1634,7 +1655,7 @@ function render(options = {}) {
     const query = `${album.artist} ${album.name}`;
     const sameQobuz = qobuzAlbum && /^qobuz:[A-Za-z0-9]{1,120}$/.test(playbackAlbum.id)
       && playbackAlbum.url === `https://play.qobuz.com/album/${playbackAlbum.id.slice(6)}`;
-    let label = `Apri nell'app ${serviceLabel}`;
+    let label = musicLinkTarget() === "web" ? `Apri nel web player ${serviceLabel}` : `Apri nell'app ${serviceLabel}`;
     if (albumLink || sameQobuz) {
       configureMusicAppLink(link, albumLink || playbackAlbum.url, { query, report: showFeedback });
       if (!albumLink) label = "Copia artista e titolo per cercare nell'app Qobuz";
@@ -5951,6 +5972,11 @@ $("#searchInput").addEventListener("keydown", (event) => {
     applyCollectionSearch();
   }
 });
+for (const event of ["input", "search"]) {
+  $("#searchInput").addEventListener(event, () => {
+    if (!$("#searchInput").value.trim()) applyCollectionSearch();
+  });
+}
 for (const input of [$("#primaryGenreFilter"), $("#secondaryGenreFilter"), $("#statusFilter"),
   $("#collectionFilter"), $("#tagFilter"), ...localCollectionChecks.map($)]) {
   input.addEventListener("change", render);

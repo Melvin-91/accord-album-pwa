@@ -127,7 +127,7 @@ test("association link metadata reads the exact TIDAL album without imports or s
   });
 });
 
-async function uiFixture(run, albumResponse = albumDocument) {
+async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget = "app") {
   const root = new Node("main"), tabs = new Node("nav"), existing = new Map();
   const settingsDialog = new Node("dialog"), settingsScroll = new Node("div");
   settingsDialog.append(settingsScroll);
@@ -154,6 +154,7 @@ async function uiFixture(run, albumResponse = albumDocument) {
   };
   const field = (label) => find(label).children[0];
   const local = store(), session = store(), calls = [], imported = [];
+  local.setItem("accord-music-link-target-v1", initialLinkTarget);
   local.setItem("accord-tidal-client-id-v1", "demo");
   local.setItem("accord-spotify-client-id", "preserved");
   session.setItem("accord-spotify-access-token", "preserved-session");
@@ -166,6 +167,7 @@ async function uiFixture(run, albumResponse = albumDocument) {
       getElementById: (id) => existing.get(id),
       querySelector: (selector) => selector === ".view-tabs" ? tabs
         : selector === "#settingsDialog .dialog-scroll" ? settingsScroll : selectedTab,
+      querySelectorAll: () => walk().filter(node => node.tag === "a" && Object.hasOwn(node.attributes, "data-music-link")),
     },
     navigator: { locks: { request: async (_name, action) => action() } },
     window: { addEventListener() {} }, location: { href: "https://example.test/accord/", pathname: "/accord/", hash: "" },
@@ -211,6 +213,27 @@ async function uiFixture(run, albumResponse = albumDocument) {
     }
   }
 }
+
+test("compact link selector remembers web choice without switching service or reading catalogs", async () => {
+  await uiFixture(async f => {
+    const target = f.field("Apri link album con");
+    assert.equal(target.value, "web");
+    assert.equal(f.gate.service, "spotify");
+    const before = f.calls.length;
+    target.value = "app"; await target.dispatch("change");
+    assert.equal(f.local.getItem("accord-music-link-target-v1"), "app");
+    target.value = "web"; await target.dispatch("change");
+    assert.equal(f.local.getItem("accord-music-link-target-v1"), "web");
+    assert.equal(f.gate.service, "spotify");
+    assert.equal(f.calls.length, before);
+    f.local.setItem = () => { throw new Error("storage full"); };
+    target.value = "app"; await target.dispatch("change");
+    assert.equal(target.value, "web");
+    const error = f.walk().find(node => node.attributes.class === "music-link-error");
+    assert.equal(error.hidden, false);
+    assert.match(error.textContent, /Scelta di apertura non salvata: storage full/);
+  }, albumDocument, "web");
+});
 
 test("targeted completion page adapter performs one explicit catalog read with country and no writes", async () => {
   await uiFixture(async (f) => {

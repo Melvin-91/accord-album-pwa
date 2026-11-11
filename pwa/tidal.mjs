@@ -1,6 +1,6 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
-import { nativeMusicLink } from "./music-app-links.mjs?v=2";
-import { createServiceRequests } from "./service-requests.mjs?v=2";
+import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=3";
+import { createServiceRequests } from "./service-requests.mjs?v=3";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
 
@@ -8,7 +8,7 @@ export function musicAlbumLink(album, service, options) {
   if (!["spotify", "tidal", "qobuz"].includes(service)) throw new Error("Servizio musicale non valido.");
   if (service === "qobuz") return /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
     && album.url === `https://play.qobuz.com/album/${album.id.slice(6)}`
-    ? nativeMusicLink(album.url, options) : null;
+    ? (musicLinkTarget(options?.storage) === "web" ? webMusicLink(album.url) : nativeMusicLink(album.url, options)) : null;
   const query = encodeURIComponent(`${album.artist} ${album.name}`.trim());
   if (service === "tidal") return /^tidal:[1-9][0-9]*$/.test(album.id)
     ? `tidal://album/${tidalAlbumId(album.id)}` : null;

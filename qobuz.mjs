@@ -1,4 +1,4 @@
-import { createServiceRequests } from "./service-requests.mjs?v=2";
+import { createServiceRequests } from "./service-requests.mjs?v=3";
 export const QOBUZ_API = "https://www.qobuz.com/api.json/0.2/";
 export const QOBUZ_PAGE_SIZE = 100;
 

@@ -1,3 +1,9 @@
+const linkUpdates = new WeakMap();
+
+export function refreshMusicAppLinks(root = globalThis.document) {
+  for (const link of root.querySelectorAll("a[data-music-link]")) linkUpdates.get(link)?.();
+}
+
 export function desktopAppLinks(navigator = globalThis.navigator) {
   const agent = navigator?.userAgent || "";
   const ios = /iPhone|iPad|iPod/.test(agent)
@@ -30,20 +36,33 @@ export function nativeMusicLink(value, { desktop = desktopAppLinks() } = {}) {
   throw new Error("Apertura nell'app non disponibile per questo collegamento. Nessun web player aperto.");
 }
 
-export function configureMusicAppLink(link, value, { query = "", report = () => {}, desktop } = {}) {
-  const uri = nativeMusicLink(value, { desktop });
-  link.target = "_self";
+export function configureMusicAppLink(link, value, { query = "", report = () => {}, desktop,
+  storage = globalThis.localStorage } = {}) {
+  const originalText = link.textContent;
+  let copying = false;
+  const update = () => {
+    const web = musicLinkTarget(storage) === "web";
+    const uri = web ? webMusicLink(value) : nativeMusicLink(value, { desktop });
+    link.target = web ? "_blank" : "_self";
+    if (uri) {
+      link.href = uri;
+      link.removeAttribute("role");
+      link.title = web ? "Apri nello streamer web." : "Apri nell'app installata. Nessun ripiego sul web player.";
+      if (copying) link.textContent = originalText;
+    } else {
+      link.removeAttribute("href");
+      link.setAttribute("role", "button");
+      link.tabIndex = 0;
+      link.textContent = "Copia per cercare in Qobuz";
+      link.title = "Apertura diretta Qobuz non verificata su questo dispositivo. Copia artista e titolo, senza aprire il web player.";
+    }
+    copying = !uri;
+    return uri;
+  };
   link.rel = "noopener noreferrer";
-  if (uri) {
-    link.href = uri;
-    link.title = "Apri nell'app installata. Nessun ripiego sul web player.";
-    return link;
-  }
-  link.removeAttribute("href");
-  link.setAttribute("role", "button");
-  link.tabIndex = 0;
-  link.textContent = "Copia per cercare in Qobuz";
-  link.title = "Apertura diretta Qobuz non verificata su questo dispositivo. Copia artista e titolo, senza aprire il web player.";
+  link.setAttribute("data-music-link", "");
+  linkUpdates.set(link, update);
+  update();
   const copy = async (event) => {
     event.preventDefault();
     try {
@@ -54,9 +73,38 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
       report(`Copia non riuscita: ${error.message} Cerca nell'app Qobuz: ${query}`);
     }
   };
-  link.addEventListener("click", copy);
+  link.addEventListener("click", async (event) => {
+    try { if (!update()) await copy(event); }
+    catch (error) { event.preventDefault(); report(error.message); }
+  });
   link.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") void copy(event);
+    if (copying && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      link.click();
+    }
   });
   return link;
+}
+export const MUSIC_LINK_TARGET_KEY = "accord-music-link-target-v1";
+
+export function musicLinkTarget(storage = globalThis.localStorage) {
+  return storage?.getItem(MUSIC_LINK_TARGET_KEY) === "web" ? "web" : "app";
+}
+
+export function webMusicLink(value) {
+  const url = new URL(value);
+  if (url.protocol === "spotify:") {
+    const match = value.match(/^spotify:(album|artist|track|playlist|show|episode|search):(.+)$/);
+    if (match) return `https://open.spotify.com/${match[1]}/${match[2]}`;
+    if (value === "spotify:") return "https://open.spotify.com/";
+  } else if (["tidal:", "qobuzapp:"].includes(url.protocol)) {
+    if (/^(album|artist|track|playlist|video)$/.test(url.hostname) && /^\/[A-Za-z0-9-]+$/.test(url.pathname)
+        && !url.username && !url.password && !url.search && !url.hash) {
+      return `https://${url.protocol === "tidal:" ? "listen.tidal.com" : "play.qobuz.com"}/${url.hostname}${url.pathname}`;
+    }
+  } else {
+    // Validate the same catalogue paths as native links, including mobile Qobuz.
+    return webMusicLink(nativeMusicLink(value, { desktop: true }));
+  }
+  throw new Error("Collegamento musicale non valido.");
 }

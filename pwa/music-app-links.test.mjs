@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { configureMusicAppLink, desktopAppLinks, nativeMusicLink } from "./music-app-links.mjs";
+import { configureMusicAppLink, desktopAppLinks, nativeMusicLink, webMusicLink,
+  musicLinkTarget, MUSIC_LINK_TARGET_KEY, refreshMusicAppLinks } from "./music-app-links.mjs";
 import { musicAlbumLink } from "./tidal.mjs";
 
 test("music content links are native only, including tracks and playlists", () => {
@@ -39,11 +40,45 @@ class Link {
   addEventListener(name, callback) { this.listeners[name] = callback; }
 }
 
-test("native anchors have no new web tab or delayed browser fallback", () => {
+test("native anchors have no new web tab or delayed browser fallback", async () => {
   const link = configureMusicAppLink(new Link(), "https://tidal.com/browse/album/123");
   assert.equal(link.href, "tidal://album/123");
   assert.equal(link.target, "_self");
-  assert.deepEqual(link.listeners, {});
+  await link.listeners.click({ preventDefault() { assert.fail("Native link must navigate"); } });
+  assert.equal(link.href, "tidal://album/123");
+});
+
+test("web mode opens the exact streamer album, including mobile Qobuz, and updates existing links", async () => {
+  const saved = new Map(), storage = { getItem: key => saved.get(key) ?? null };
+  assert.equal(musicLinkTarget(storage), "app");
+  saved.set(MUSIC_LINK_TARGET_KEY, "web");
+  for (const [value, expected] of [
+    ["spotify:album:abc", "https://open.spotify.com/album/abc"],
+    ["spotify:search:A%20B", "https://open.spotify.com/search/A%20B"],
+    ["https://tidal.com/browse/album/123", "https://listen.tidal.com/album/123"],
+    ["tidal://album/123", "https://listen.tidal.com/album/123"],
+    ["qobuzapp://album/00123", "https://play.qobuz.com/album/00123"],
+    ["https://open.qobuz.com/album/00123?share=1", "https://play.qobuz.com/album/00123"],
+  ]) {
+    assert.equal(webMusicLink(value), expected);
+    const link = configureMusicAppLink(new Link(), value, { storage, desktop: false });
+    assert.equal(link.href, expected);
+    assert.equal(link.target, "_blank");
+    await link.listeners.click({ preventDefault() { assert.fail("Web link must navigate"); } });
+  }
+  const link = configureMusicAppLink(new Link(), "https://play.qobuz.com/album/00123", { storage, desktop: false });
+  saved.set(MUSIC_LINK_TARGET_KEY, "app");
+  refreshMusicAppLinks({ querySelectorAll: () => [link] });
+  assert.equal(link.attributes.role, "button");
+  saved.set(MUSIC_LINK_TARGET_KEY, "web");
+  refreshMusicAppLinks({ querySelectorAll: () => [link] });
+  assert.equal(link.href, "https://play.qobuz.com/album/00123");
+  assert.equal(link.attributes.role, undefined);
+  assert.equal(musicAlbumLink({ id: "qobuz:00123", url: "https://play.qobuz.com/album/00123" },
+    "qobuz", { desktop: false, storage }), "https://play.qobuz.com/album/00123");
+  for (const value of ["https://evil.test/album/123", "tidal://album/123?unexpected=1"]) {
+    assert.throws(() => webMusicLink(value));
+  }
 });
 
 test("Qobuz iPhone fallback copies the query on user gesture and exposes copy errors", async () => {

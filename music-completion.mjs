@@ -1,5 +1,5 @@
-import { editionLink } from "./music-continuity.mjs?v=8";
-import { commitLocalRestore } from "./ui.mjs?v=20";
+import { editionLink } from "./music-continuity.mjs?v=9";
+import { commitLocalRestore } from "./ui.mjs?v=21";
 
 export const COMPLETION_KEY = "accord-music-completion-v1";
 export const COMPLETION_EVIDENCE_KEY = "accord-music-completion-evidence-v1";

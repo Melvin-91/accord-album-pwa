@@ -254,6 +254,10 @@ export function normalizeCollectionPreferences(value) {
     layout: LOCAL_LAYOUTS.has(source.layout) ? source.layout : "compact",
     pinnedIds: [...new Set((Array.isArray(source.pinnedIds) ? source.pinnedIds : [])
       .filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id)))],
+    ...(Object.hasOwn(source, "favoriteIds") ? {
+      favoriteIds: [...new Set((Array.isArray(source.favoriteIds) ? source.favoriteIds : [])
+        .filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id)))],
+    } : {}),
   };
 }
 
@@ -901,14 +905,14 @@ export function validateLocalBackup(value, validateDocument) {
         ...(value.version >= 2 ? ["manualOrder", "listeningQueue", "durations"] : []),
         ...(value.version === 3 ? ["suggestionRecipes", "completionProvenance", "completionEvidence"] : [])].includes(key))
       || Object.keys(value.preferences).some((key) =>
-        !["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
+        !["layout", "pinnedIds", "favoriteIds", "textScale", "contrast", "density"].includes(key))) {
     if (value?.format === "accord-local-backup" && [2, 3].includes(value.version)
         && value.preferences && typeof value.preferences === "object" && !Array.isArray(value.preferences)
         && Object.keys(value).every((key) => ["format", "version", "albums", "preferences",
           "manualOrder", "listeningQueue", "durations",
           ...(value.version === 3 ? ["suggestionRecipes", "completionProvenance", "completionEvidence"] : [])].includes(key))
         && Object.keys(value.preferences).every((key) =>
-          ["layout", "pinnedIds", "textScale", "contrast", "density"].includes(key))) {
+          ["layout", "pinnedIds", "favoriteIds", "textScale", "contrast", "density"].includes(key))) {
       return validateVersionTwoBackup(value, validateDocument);
     }
     throw new Error("Backup locale non valido o contenente campi non consentiti.");
@@ -1094,4 +1098,4 @@ export function commitLocalRestore(storage, key, current, next, related = {}, hi
   }
   Object.assign(current, next);
 }
-import { validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=1";
+import { validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=2";

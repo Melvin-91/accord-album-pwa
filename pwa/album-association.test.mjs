@@ -42,10 +42,19 @@ test("alternate playback uses only known native/current editions and never switc
   class Node {
     constructor() { this.children = []; this.events = {}; }
     setAttribute() {}
+    removeAttribute() {}
     append(...nodes) { this.children.push(...nodes); }
-    addEventListener(name, callback) { this.events[name] = callback; }
+    addEventListener(name, callback) { (this.events[name] ||= []).push(callback); }
+    dispatch(name, event = {}) {
+      let stopped = false;
+      event.stopImmediatePropagation = () => { stopped = true; };
+      for (const callback of this.events[name] || []) {
+        callback(event);
+        if (stopped) break;
+      }
+    }
     showModal() { this.open = true; }
-    close() { this.open = false; this.events.close?.(); }
+    close() { this.open = false; this.dispatch("close"); }
     remove() {}
   }
   globalThis.document = { createElement: () => new Node(), body: new Node() };
@@ -58,17 +67,22 @@ test("alternate playback uses only known native/current editions and never switc
     const links = JSON.parse(saved.getItem(linkKey)); delete links[source.id].tidal;
     saved.setItem(linkKey, JSON.stringify(links));
     let prevented = false;
-    tidal.events.click({ preventDefault() { prevented = true; }, stopImmediatePropagation() {} });
+    tidal.dispatch("click", { preventDefault() { prevented = true; } });
     assert.equal(prevented, true);
     assert.equal(dialog.open, true);
-    dialog.children.at(-1).events.click();
+    dialog.children.at(-1).dispatch("click");
     assert.equal(dialog.open, false);
     assert.equal(saved.getItem("accord-music-service-v1"), "qobuz");
     const empty = openPlaybackServiceDialog({ storage: storage(), album: source, provider: "spotify", report() {} });
     assert.match(empty.children[2].textContent, /Non ci sono altri servizi/);
     assert.equal(empty.children.some(node => node.href), false);
-    empty.children.at(-1).events.click();
+    empty.children.at(-1).dispatch("click");
     assert.equal(empty.open, false);
+    saved.setItem("accord-music-link-target-v1", "web");
+    const web = openPlaybackServiceDialog({ storage: saved, album: source, provider: "qobuz", report() {} });
+    assert.equal(web.children[2].children[0].href, source.url);
+    assert.equal(saved.getItem("accord-music-service-v1"), "qobuz");
+    web.close();
   } finally { globalThis.document = previous; }
 });
 

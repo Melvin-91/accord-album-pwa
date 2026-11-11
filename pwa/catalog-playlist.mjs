@@ -1,4 +1,4 @@
-import { normalized } from "./catalog-suggestions.mjs?v=4";
+import { normalized } from "./catalog-suggestions.mjs?v=5";
 
 export class CatalogPlaylist {
   constructor(discovery, tracksPerArtist) {

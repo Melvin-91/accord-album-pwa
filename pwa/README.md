@@ -2,6 +2,37 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.23.0 · Preferiti e apertura App / Web
+
+Album preferiti con stellina all'inizio della riga, filtro dedicato e
+salvataggio locale. La X annulla subito la ricerca mantenendo gli altri
+filtri; il nuovo testo continua a richiedere Invio. Il selettore compatto
+Link: App / Link: Web ricorda dove aprire gli album, anche associati o
+scelti da un servizio alternativo. Nessuna modifica al player integrato
+o alla sincronizzazione GitHub.
+
+### Apertura dei link album
+
+Accanto al servizio musicale, il piccolo selettore **Link: App / Link: Web**
+sceglie tra app installata e streamer web. La scelta resta sul dispositivo,
+vale anche per le edizioni associate e i servizi alternativi, e non cambia
+il servizio principale o il player integrato. Il valore iniziale e' App;
+non ci sono ripieghi automatici sul browser. Web apre il catalogo esatto,
+anche per Qobuz mobile, senza promettere l'avvio automatico dell'audio.
+
+### Album preferiti
+
+La stellina all'inizio della riga aggiunge o rimuove un album dai preferiti:
+vuota per gli altri album, dorata per i preferiti. Il filtro **Album
+preferiti** mostra solo questi album, senza modificare ordinamento, stato
+d'ascolto, voto o album fissati. Il comando e' utilizzabile anche da
+tastiera e dichiara lo stato ai lettori di schermo.
+
+I preferiti restano su questo browser/dispositivo, come gli album fissati.
+Sono conservati al riavvio e inclusi nelle preferenze del backup locale;
+non vengono inviati ai servizi musicali o alla sincronizzazione GitHub.
+La funzionalita' e' inclusa nella release 1.23.0.
+
 ### PWA 1.22.0 · Scelte musicali e nuovi QoL
 
 **Associazioni, disponibilita' e rinvii** negli strumenti della raccolta
@@ -49,7 +80,8 @@ Il clic semplice sostituisce la selezione, compresi gli album nascosti.
 
 **Riproduci** compare anche quando manca l'edizione nel servizio corrente:
 apre una finestra con gli altri servizi in cui l'album e' nativo o gia'
-associato. La scelta vale solo per quell'album e apre l'app del servizio,
+associato. La scelta vale solo per quell'album e apre il link del servizio
+secondo il selettore Link: App / Link: Web,
 senza cambiare il servizio principale o avviare automaticamente l'audio.
 Non viene verificata in tempo reale la disponibilita' nel catalogo.
 Se non ci sono alternative note, occorre associare prima un'edizione.
@@ -63,7 +95,7 @@ risultati da scegliere prima della conferma. Supportati anche i link
 TIDAL condivisi come `https://tidal.com/album/490869886/u`.
 Per TIDAL e Qobuz resta disponibile il confronto tra due e quattro edizioni.
 
-La conferma dell'associazione singola include **Apri anche l'album nell'app**,
+La conferma dell'associazione singola include **Apri anche il link album**,
 disattivato inizialmente. Senza la spunta salva solo il collegamento locale.
 L'apertura o la copia della ricerca Qobuz avvengono soltanto dopo consenso e
 salvataggio riuscito. L'associazione massiva resta invariata.
@@ -104,7 +136,7 @@ quando appare Nuova versione pronta, senza ricaricamenti automatici.
 
 ### Destinazione e funzionalita' incluse
 
-Rivisto il 10 novembre 2026. **PWA 1.22.0**. Destinazione:
+Rivisto l'11 novembre 2026. **PWA 1.23.0**. Destinazione:
 [GitHub Pages](https://melvin-91.github.io/accord-album-pwa/).
 Lo stato effettivo della pubblicazione e' nel workflow GitHub Pages.
 Gli album occupano lo spazio principale: Filtri, Vista, importazione,

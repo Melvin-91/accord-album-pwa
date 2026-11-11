@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServiceRequests, retryMilliseconds } from "./service-requests.mjs?v=2";
+import { createServiceRequests, retryMilliseconds } from "./service-requests.mjs?v=3";
 import { createTidalTransport } from "./tidal.mjs";
 import { createQobuzClient } from "./qobuz.mjs";
 

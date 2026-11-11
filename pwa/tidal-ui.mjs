@@ -1,11 +1,11 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=10";
-import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=2";
-import { configureMusicAppLink } from "./music-app-links.mjs?v=2";
-import { bindPauseNotice } from "./music-continuity.mjs?v=8";
-import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=1";
-import { showEditionComparison } from "./edition-comparison.mjs?v=1";
+} from "./tidal.mjs?v=11";
+import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
+import { configureMusicAppLink, musicLinkTarget, refreshMusicAppLinks, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=3";
+import { bindPauseNotice } from "./music-continuity.mjs?v=9";
+import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
+import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 
 const CLIENT = "accord-tidal-client-id-v1";
 const EXCLUDED_ARTISTS = "accord-tidal-suggestion-excluded-artists-v1";
@@ -56,6 +56,25 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   serviceBox.append(element("p", "SERVIZIO MUSICALE", { class: "eyebrow" }));
   const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"], ["qobuz", "Qobuz"]]);
   provider.id = "musicService"; provider.value = gate.service;
+  const linkTarget = selection(serviceBox, "Apri link album con", [["app", "Link: App"], ["web", "Link: Web"]]);
+  linkTarget.id = "musicLinkTarget"; linkTarget.value = musicLinkTarget(localStorage);
+  linkTarget.setAttribute("aria-label", "Apri link album con");
+  linkTarget.setAttribute("title", "App installata o streamer web. Non cambia il player integrato.");
+  const linkError = element("p", "", { class: "music-link-error", role: "alert", hidden: "" });
+  serviceBox.append(linkError);
+  linkTarget.addEventListener("change", () => {
+    try {
+      localStorage.setItem(MUSIC_LINK_TARGET_KEY, linkTarget.value);
+    } catch (error) {
+      linkTarget.value = musicLinkTarget(localStorage);
+      linkError.textContent = `Scelta di apertura non salvata: ${error.message}`;
+      linkError.hidden = false;
+      return;
+    }
+    linkError.hidden = true;
+    changed();
+    refreshMusicAppLinks();
+  });
   serviceBox.append(element("p", "Un solo servizio per ascolto, associazioni e filtro Associazione mancante. La raccolta locale resta unica.", { class: "summary" }));
   const spotifyCapabilities = element("p",
     "Spotify · Cerca musica, scopri album, crea playlist e apri Spotify.",
@@ -482,6 +501,11 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   }
   provider.addEventListener("change", updateService);
   window.addEventListener("storage", (event) => {
+    if (event.key === MUSIC_LINK_TARGET_KEY || event.key === null) {
+      linkTarget.value = musicLinkTarget(localStorage);
+      changed();
+      refreshMusicAppLinks();
+    }
     if (event.key === "accord-music-service-v1") {
       const saved = localStorage.getItem(event.key);
       provider.value = ["spotify", "tidal", "qobuz"].includes(saved) ? saved : "spotify";

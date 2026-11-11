@@ -1,8 +1,8 @@
-import { validEdition, sourceIdentity, editionLink } from "./music-continuity.mjs?v=8";
-import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=2";
-import { showEditionComparison } from "./edition-comparison.mjs?v=1";
+import { validEdition, sourceIdentity, editionLink } from "./music-continuity.mjs?v=9";
+import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=3";
+import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 import { associationCaptions, libraryChoice, manuallyUnavailable, readLibraryChoices,
-  writeLibraryChoice } from "./music-library-choices.mjs?v=1";
+  writeLibraryChoice } from "./music-library-choices.mjs?v=2";
 
 const normalized = (value) => String(value || "").normalize("NFKC").toLowerCase().trim().replace(/\s+/g, " ");
 const identity = (albums) => JSON.stringify(albums.map(album =>
@@ -27,7 +27,7 @@ export function openPlaybackServiceDialog({ storage, album, provider, report }) 
   notice.textContent = `${album.artist} · ${album.name}. Nessuna edizione collegata al servizio scelto. `
     + "Scegli un servizio solo per questo album: il servizio principale non cambia. "
     + "Mostriamo album nativi e associazioni salvate, non una verifica attuale del catalogo. "
-    + "L'apertura nell'app non avvia automaticamente l'audio.";
+    + "L'apertura del link non avvia automaticamente l'audio.";
   dialog.append(heading, notice);
   for (const row of editions) {
     const link = document.createElement("a");
@@ -43,7 +43,7 @@ export function openPlaybackServiceDialog({ storage, album, provider, report }) 
       }
       dialog.close();
     });
-    configureMusicAppLink(link, row.album.url, { query: `${album.artist} ${album.name}`, report });
+    configureMusicAppLink(link, row.album.url, { query: `${album.artist} ${album.name}`, report, storage });
     if (row.provider === preferred) link.textContent += " (ultima scelta)";
     const paragraph = document.createElement("p"); paragraph.append(link); dialog.append(paragraph);
   }
@@ -235,7 +235,7 @@ export function openEditionAssociationDialog({ album, edition, provider, save, o
   const label = document.createElement("label"); label.className = "check";
   const check = document.createElement("input"); check.type = "checkbox"; check.checked = false;
   const caption = document.createElement("span");
-  caption.textContent = `Apri anche l'album nell'app ${provider === "tidal" ? "TIDAL" : provider === "qobuz" ? "Qobuz" : "Spotify"}`;
+  caption.textContent = `Apri anche il link album ${provider === "tidal" ? "TIDAL" : provider === "qobuz" ? "Qobuz" : "Spotify"}`;
   label.append(check, caption);
   const status = document.createElement("p"); status.setAttribute("role", "status");
   const actions = document.createElement("div"); actions.className = "dialog-actions";

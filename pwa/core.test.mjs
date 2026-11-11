@@ -83,6 +83,47 @@ const qosAlbum = (id, fields = {}) => validateAlbum({ id, name: `Album ${id}`, a
   url: `https://open.spotify.com/album/${id}`, year: "2026", status: "queued", rating: null,
   genres: [], primary_genre: "", tags: [], collections: [], cover_sha256: null, ...fields });
 
+test("favorite flags survive local backup without changing pins or album records", () => {
+  const preferences = portablePreferences({ pinnedIds: ["b"], favoriteIds: ["a", "a", "../bad", "tidal:123", null] });
+  assert.deepEqual(preferences.pinnedIds, ["b"]);
+  assert.deepEqual(preferences.favoriteIds, ["a", "tidal:123"]);
+  const records = [qosAlbum("a"), qosAlbum("b")];
+  const before = JSON.stringify(records);
+  const backup = createLocalBackup(records, { ...preferences, favoriteIds: ["a"] }, validateAlbum);
+  const restored = validateLocalBackup(backup, validateDocument);
+  assert.deepEqual(restored.preferences.favoriteIds, ["a"]);
+  assert.deepEqual(restored.preferences.pinnedIds, ["b"]);
+  assert.equal(JSON.stringify(records), before);
+  assert.throws(() => validateLocalBackup({ ...backup,
+    preferences: { ...backup.preferences, favoriteIds: ["../bad"] } }, validateDocument), /Preferenze/);
+});
+
+test("favorite toggle persists before render, preserves pins and restores keyboard focus", () => {
+  let renders = 0, focused = 0, saves = 0;
+  const original = { pinnedIds: ["b"], favoriteIds: [] };
+  const context = {
+    Set, collectionPreferences: original,
+    saveCollectionPreferences: (value) => { saves++; context.collectionPreferences = value; return true; },
+    render: () => { renders++; },
+    showFeedback: () => {},
+    $: () => ({ children: [{ dataset: { albumId: "a" }, querySelector: () => ({ focus: () => focused++ }) }] }),
+  };
+  runInNewContext(appFunction("function toggleAlbumFavorite(id)", "\nfunction collectionHasFilters"), context);
+  context.toggleAlbumFavorite("a");
+  assert.deepEqual([...context.collectionPreferences.favoriteIds], ["a"]);
+  assert.deepEqual([...context.collectionPreferences.pinnedIds], ["b"]);
+  context.toggleAlbumFavorite("a");
+  assert.deepEqual([...context.collectionPreferences.favoriteIds], []);
+  assert.equal(renders, 2); assert.equal(focused, 2); assert.equal(saves, 2);
+  context.saveCollectionPreferences = () => false;
+  context.toggleAlbumFavorite("a");
+  assert.equal(renders, 2);
+  assert.equal(focused, 2);
+  const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  assert.match(html, /class="album-card">\s*<button class="favorite-album"[^]*aria-pressed="false"/);
+  assert.match(html, /id="favoritesOnlyFilter"/);
+});
+
 test("accessibility and portable preferences allow only local non-secret settings", () => {
   assert.deepEqual(normalizeAccessibility(null), { textScale: "normal", contrast: "standard", density: "touch" });
   assert.deepEqual(normalizeAccessibility({ textScale: "larger", contrast: "high", density: "compact" }),
@@ -993,6 +1034,21 @@ test("collection search applies only when Enter is pressed", () => {
   assert.equal(enter.defaultPrevented, true);
   assert.equal(renders, 1);
   assert.equal(context.appliedCollectionSearch, "Artist");
+  search.value = "";
+  search.dispatchEvent(new Event("input"));
+  assert.equal(context.appliedCollectionSearch, "");
+  assert.equal(renders, 2);
+  search.dispatchEvent(new Event("search"));
+  assert.equal(renders, 2);
+  search.value = "Another artist";
+  search.dispatchEvent(new Event("input"));
+  assert.equal(renders, 2);
+  search.dispatchEvent(enter);
+  assert.equal(renders, 3);
+  search.value = "";
+  search.dispatchEvent(new Event("search"));
+  assert.equal(context.appliedCollectionSearch, "");
+  assert.equal(renders, 4);
   assert.match(appFunction("function render(options = {})", "\nasync function renderCovers"),
     /search: appliedCollectionSearch/);
 });
@@ -1728,30 +1784,30 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=118", "style.css?v=40"]) {
+  for (const file of ["app.mjs?v=119", "style.css?v=41"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=48", "ui.mjs?v=20", "tidal.mjs?v=10", "tidal-ui.mjs?v=32", "qobuz-ui.mjs?v=26",
-    "qobuz.mjs?v=10", "catalog-suggestions.mjs?v=4", "suggestions-ui.mjs?v=16",
-    "music-qol.mjs?v=6", "playlist-ui.mjs?v=11",
-    "music-app-links.mjs?v=2", "music-continuity.mjs?v=8", "album-association.mjs?v=7",
-    "music-completion.mjs?v=10", "music-completion-ui.mjs?v=10"]) {
+  for (const file of ["core.mjs?v=49", "ui.mjs?v=21", "tidal.mjs?v=11", "tidal-ui.mjs?v=33", "qobuz-ui.mjs?v=27",
+    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=17",
+    "music-qol.mjs?v=7", "playlist-ui.mjs?v=12",
+    "music-app-links.mjs?v=3", "music-continuity.mjs?v=9", "album-association.mjs?v=8",
+    "music-completion.mjs?v=11", "music-completion-ui.mjs?v=11"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
-  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=4"));
-  assert.ok(sw.includes("catalog-playlist.mjs?v=4"));
+  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=5"));
+  assert.ok(sw.includes("catalog-playlist.mjs?v=5"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
-    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=2"));
+    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=3"));
   }
-  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=9"));
+  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=10"));
   assert.ok(readFileSync(new URL("./suggestions-ui.mjs", import.meta.url), "utf8")
-    .includes("music-suggestion-recipes.mjs?v=1"));
+    .includes("music-suggestion-recipes.mjs?v=2"));
   for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
-    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("edition-comparison.mjs?v=1"));
+    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("edition-comparison.mjs?v=2"));
   }
-  assert.ok(sw.includes("music-suggestion-filters.mjs?v=2"));
+  assert.ok(sw.includes("music-suggestion-filters.mjs?v=3"));
   assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
   assert.match(html, /id="selectionToolbar"[^>]+hidden/);
   assert.match(css, /#albumDetailsDialog[^}]+92dvh/);
