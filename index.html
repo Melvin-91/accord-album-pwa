@@ -2,7 +2,7 @@
 <html lang="it">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="theme-color" content="#090909">
     <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
     <meta name="referrer" content="no-referrer">
@@ -11,21 +11,22 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=42">
-    <title>Accord v1.24.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=43">
+    <title>Accord v1.25.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.24.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.25.0</span></p><h1>La mia raccolta</h1><span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span></div>
       </div>
       <div class="header-actions">
-        <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
-        <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Comandi</button>
         <button id="syncButton" class="secondary" type="button">Sincronizza</button>
-        <button id="activityButton" class="secondary" type="button" aria-controls="activityDialog">Attività</button>
-        <button id="settingsButton" class="icon-button" type="button" aria-label="Preferenze e collegamenti" title="Preferenze e collegamenti">⚙</button>
+        <details class="app-menu"><summary>Menu</summary><div class="app-menu-content">
+          <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Cerca un comando</button>
+          <button id="activityButton" class="secondary" type="button" aria-controls="activityDialog">Attività</button>
+          <button id="settingsButton" class="secondary" type="button" aria-label="Preferenze e collegamenti" title="Preferenze e collegamenti">Impostazioni</button>
+        </div></details>
       </div>
     </header>
 
@@ -465,6 +466,15 @@
       <form id="manualAlbumSearchForm" method="dialog">
         <div class="dialog-scroll">
           <div class="dialog-heading"><div><p class="eyebrow">RICERCA AVANZATA</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
+          <div class="manual-search-fields">
+            <label>Album
+              <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo album">
+            </label>
+            <label>Artista
+              <input id="manualAlbumArtist" maxlength="200" autocomplete="off" placeholder="Nome artista">
+            </label>
+          </div>
+          <details class="manual-search-options"><summary>Filtri e fonte della ricerca</summary>
           <label>Fonte album
             <select id="manualAlbumSource">
               <option value="lastfm">Last.fm · predefinito</option>
@@ -473,12 +483,6 @@
             </select>
           </label>
           <div class="manual-search-fields">
-            <label>Album
-              <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo album">
-            </label>
-            <label>Artista
-              <input id="manualAlbumArtist" maxlength="200" autocomplete="off" placeholder="Nome artista">
-            </label>
             <label>Genere
               <input id="manualAlbumGenre" maxlength="80" autocomplete="off" placeholder="Es. jazz">
             </label>
@@ -493,6 +497,7 @@
             <label class="check"><input id="manualAlbumIncludeShort" type="checkbox" checked> Singoli / EP</label>
             <p class="summary">Filtri sui risultati letti, per tipo dichiarato e titolo. Singoli ed EP sono raggruppati; i tipi non riconosciuti restano visibili.</p>
           </fieldset>
+          </details>
           <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
           <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca album"></section>
         </div>
@@ -563,10 +568,9 @@
 
     <template id="albumTemplate">
       <article class="album-card">
-        <button class="favorite-album" type="button" aria-pressed="false" aria-label="Aggiungi ai preferiti">☆</button>
         <label class="album-selection"><input class="album-select" type="checkbox"><span class="sr-only">Seleziona album</span></label>
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="album-sync-indicator" hidden>Da sincronizzare</span><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
+        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="album-sync-indicator" hidden>Da sincronizzare</span><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="favorite-album" type="button" aria-pressed="false" aria-label="Aggiungi ai preferiti">☆ Preferiti</button><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
         <div class="album-fields" hidden>
         <label class="status-field">Stato
           <select class="status-input">
@@ -583,6 +587,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=120"></script>
+    <script type="module" src="app.mjs?v=121"></script>
   </body>
 </html>

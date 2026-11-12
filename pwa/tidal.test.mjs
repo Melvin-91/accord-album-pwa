@@ -42,6 +42,59 @@ const fixture = (respond, options = {}) => {
   return { transport, calls, local, advance: (ms) => { time += ms; } };
 };
 
+test("playlist album import reads all pages beyond search limits and deduplicates in playlist order", async () => {
+  const playlist = "4e17b836-f114-46e2-a2cf-70ec1b0e4c43";
+  const progress = [];
+  const f = fixture((url) => {
+    const page = Number(new URL(url).searchParams.get("page") || 1);
+    const tracks = Array.from({length: 25}, (_, index) => {
+      const id = String((page - 1) * 25 + index + 1);
+      return {type: "tracks", id, relationships: {albums: {data: [{type: "albums", id}]}}};
+    });
+    const albums = tracks.map(track => ({type: "albums", id: track.id,
+      attributes: {title: `Album ${track.id}`, releaseDate: "2026-01-01"},
+      relationships: {artists: {data: [{type: "artists", id: "artist"}]}}}));
+    return json({data: [...tracks, tracks[0]], included: [...albums,
+      {type: "artists", id: "artist", attributes: {name: "Artist"}}],
+      links: {next: page < 15 ? `?page=${page + 1}` : null}});
+  });
+  const result = await f.transport.playlistAlbums(playlist, "token",
+    {progress: (items, albums) => progress.push([items, albums])});
+  assert.equal(result.albums.length, 375);
+  assert.deepEqual(result.albums.slice(0, 3).map(album => album.id), ["tidal:1", "tidal:2", "tidal:3"]);
+  assert.equal(result.albums.at(-1).id, "tidal:375");
+  assert.deepEqual(progress.at(-1), [390, 375]);
+  assert.equal(f.calls.length, 15);
+  assert.ok(f.calls.every(call => call.method === "GET"));
+});
+
+test("playlist album import hydrates every missing album in batches and preserves verified partial results", async () => {
+  const playlist = "4e17b836-f114-46e2-a2cf-70ec1b0e4c43";
+  for (const failNext of [false, true]) {
+    const f = fixture((url) => {
+      const parsed = new URL(url);
+      if (parsed.searchParams.get("page") === "2") return json({}, {status: 403});
+      if (parsed.pathname === "/v2/albums") {
+        return json({data: parsed.searchParams.get("filter[id]").split(",").map(id => ({
+          type: "albums", id, attributes: {title: `Album ${id}`},
+          relationships: {artists: {data: [{type: "artists", id: "artist"}]}}
+        })), included: [{type: "artists", id: "artist", attributes: {name: "Artist"}}]});
+      }
+      return json({data: Array.from({length: 31}, (_, index) => ({type: "tracks", id: String(index + 1),
+        relationships: {albums: {data: [{type: "albums", id: String(index + 1)}]}}})),
+        links: {next: failNext ? "?page=2" : null}});
+    });
+    if (failNext) await assert.rejects(f.transport.playlistAlbums(playlist, "token"), error => {
+      assert.equal(error.partialResults.length, 31);
+      assert.match(error.message, /403/);
+      return true;
+    });
+    else assert.equal((await f.transport.playlistAlbums(playlist, "token")).albums.length, 31);
+    const batches = f.calls.filter(call => new URL(call.url).pathname === "/v2/albums");
+    assert.deepEqual(batches.map(call => new URL(call.url).searchParams.get("filter[id]").split(",").length), [20, 11]);
+  }
+});
+
 test("search resolves the opaque API identifier before reading album relationships", async () => {
   const f = fixture((url) => new URL(url).pathname === "/v2/searchResults"
     ? json({ data: [{ type: "searchResults", id: "opaque/id+not-the-query" }] })
@@ -448,24 +501,24 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.24\.0/); assert.match(sw, /v1\.24\.0/);
+  assert.match(html, /v1\.25\.0/); assert.match(sw, /v1\.25\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=120/); assert.match(sw, /style\.css\?v=42/);
-  assert.match(sw, /tidal\.mjs\?v=11/); assert.match(sw, /tidal-ui\.mjs\?v=34/);
+  assert.match(sw, /app\.mjs\?v=121/); assert.match(sw, /style\.css\?v=43/);
+  assert.match(sw, /tidal\.mjs\?v=12/); assert.match(sw, /tidal-ui\.mjs\?v=35/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v1\.24\.0/); assert.match(mirrorWorker, /v1\.24\.0/);
+    assert.match(mirrorHtml, /v1\.25\.0/); assert.match(mirrorWorker, /v1\.25\.0/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}malt_metal.ico"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=120", "style.css?v=42", "tidal-ui.mjs?v=34", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=28",
-      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=18", "music-suggestion-recipes.mjs?v=2",
-      "edition-comparison.mjs?v=2", "music-qol.mjs?v=8", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=13",
+    for (const file of ["app.mjs?v=121", "style.css?v=43", "tidal-ui.mjs?v=35", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=29",
+      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=19", "music-suggestion-recipes.mjs?v=2",
+      "edition-comparison.mjs?v=2", "music-qol.mjs?v=9", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=14",
       "music-app-links.mjs?v=3", "qobuz-playback.mjs?v=10", "music-suggestion-filters.mjs?v=3", "service-requests.mjs?v=3",
-      "music-continuity.mjs?v=10", "album-association.mjs?v=9",
-      "music-completion.mjs?v=12", "music-completion-ui.mjs?v=12", "runtime-status.mjs?v=2"]) {
+      "music-continuity.mjs?v=11", "album-association.mjs?v=10",
+      "music-completion.mjs?v=13", "music-completion-ui.mjs?v=13", "runtime-status.mjs?v=2"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

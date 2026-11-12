@@ -24,6 +24,8 @@ class Node {
   addEventListener(name, callback) { this.listeners[name] = callback; }
   async click() { await this.listeners.click?.(); }
   focus() { this.focused = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   pause() { this.paused = true; }
   load() {}
   async play() { this.paused = false; }

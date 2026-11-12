@@ -1,5 +1,34 @@
 const LOCAL_LAYOUTS = new Set(["comfortable", "compact"]);
 
+export function installSelectWheelGuard(document) {
+  const wheel = (event) => {
+    const select = event.target.closest?.("select");
+    if (!select || select.multiple || select.size > 1 || document.activeElement === select
+        || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+    event.preventDefault();
+    const view = document.defaultView;
+    const factor = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? view.innerHeight : 1;
+    let dx = event.deltaX * factor, dy = event.deltaY * factor;
+    if (event.shiftKey && !dx) { dx = dy; dy = 0; }
+    for (let node = select.parentElement; node && (dx || dy); node = node.parentElement) {
+      const style = view.getComputedStyle(node);
+      if (/(auto|scroll|overlay)/.test(style.overflowX) && node.scrollWidth > node.clientWidth) {
+        const before = node.scrollLeft;
+        node.scrollLeft += dx;
+        dx -= node.scrollLeft - before;
+      }
+      if (/(auto|scroll|overlay)/.test(style.overflowY) && node.scrollHeight > node.clientHeight) {
+        const before = node.scrollTop;
+        node.scrollTop += dy;
+        dy -= node.scrollTop - before;
+      }
+    }
+    if (dx || dy) view.scrollBy(dx, dy);
+  };
+  document.addEventListener("wheel", wheel, { passive: false });
+  return () => document.removeEventListener("wheel", wheel);
+}
+
 export function controlHelp(label) {
   const key = label.trim().replace(/[.\u2026]+$/, "").toLocaleLowerCase();
   const descriptions = {
@@ -237,6 +266,14 @@ export function installDialogLayout(root) {
   return () => observer.disconnect();
 }
 
+export function reconcileAlbumCards(list, cards) {
+  const retained = new Set(cards);
+  for (const card of [...list.children]) if (!retained.has(card)) card.remove();
+  for (const [index, card] of cards.entries()) {
+    if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
+  }
+}
+
 export function installCollectionLayout(document) {
   const panel = document.getElementById("collectionPanel");
   const toolbar = panel.querySelector(".playlist-import");
@@ -246,18 +283,32 @@ export function installCollectionLayout(document) {
   actions.prepend(search);
   toolbar.append(document.getElementById("quickCollectionFilters"));
   const manualAlbum = document.getElementById("manualAlbumButton");
-  manualAlbum.textContent = "+ Album";
+  manualAlbum.textContent = "Cerca album...";
   manualAlbum.setAttribute("aria-label", "Aggiungi album alla raccolta");
   manualAlbum.title = "Aggiungi album alla raccolta";
+  const addMenu = document.createElement("details");
+  addMenu.className = "collection-add-menu";
+  const addSummary = document.createElement("summary");
+  addSummary.textContent = "Aggiungi";
+  addSummary.title = "Cerca album o importa gli album di una playlist.";
+  const addContent = document.createElement("div");
+  addContent.className = "collection-add-content";
+  addContent.append(manualAlbum, document.getElementById("playlistImportButton"));
+  addMenu.append(addSummary, addContent);
+  addMenu.addEventListener("click", (event) => {
+    if (event.target.closest("button")) addMenu.open = false;
+  });
+  actions.append(addMenu);
   const body = document.createElement("div");
   body.className = "collection-body";
   const results = document.createElement("div");
   results.className = "collection-results";
   const footer = document.createElement("div");
   footer.className = "collection-results-footer";
-  const aside = document.createElement("aside");
+  const aside = document.createElement("dialog");
   aside.id = "collectionOptions";
   aside.className = "collection-options";
+  aside.dataset.responsiveLayout = "true";
   aside.setAttribute("aria-label", "Opzioni della raccolta");
   const header = document.createElement("div");
   header.className = "collection-options-heading";
@@ -284,6 +335,7 @@ export function installCollectionLayout(document) {
     }
     title.textContent = pages.get(key).title;
     aside.hidden = false;
+    if (!aside.open) aside.showModal();
     body.dataset.optionsOpen = key;
   };
   const close = (focus = true) => {
@@ -296,6 +348,7 @@ export function installCollectionLayout(document) {
       page.button.setAttribute("aria-expanded", "false");
     }
     aside.hidden = true;
+    if (aside.open) aside.close();
     delete body.dataset.optionsOpen;
     if (focus) button?.focus();
   };
@@ -324,13 +377,13 @@ export function installCollectionLayout(document) {
   const filters = document.getElementById("collectionFilters");
   const filtersButton = addPage("filters", filters, "Filtri");
   filtersButton.append(document.getElementById("activeFilterCount"));
-  filters.append(document.getElementById("collectionFilterChips"));
+  toolbar.append(document.getElementById("collectionFilterChips"));
   const view = document.getElementById("viewMenu");
   const viewContent = view.querySelector(".view-menu-content");
   const tools = document.createElement("details");
   tools.className = "collection-tools";
   const toolsTitle = document.createElement("summary");
-  toolsTitle.textContent = "Altre azioni";
+  toolsTitle.textContent = "Raccolta";
   const toolsContent = document.createElement("div");
   toolsContent.className = "collection-tools-content";
   tools.append(toolsTitle, toolsContent);
@@ -339,12 +392,17 @@ export function installCollectionLayout(document) {
     if (!["savedCollectionView", "saveCollectionViewButton", "deleteCollectionViewButton",
       "collectionLayout", "pinnedOnlyInput", "groupEditionsInput"].includes(control?.id)) toolsContent.append(child);
   }
-  viewContent.append(tools);
   const toolGroups = new Map();
+  const toolHelp = {
+    "Ascolto": "Scegli cosa ascoltare o prepara una coda dalla raccolta.",
+    "Catalogo e dati": "Gestisci collegamenti, copertine, etichette e controlli della raccolta.",
+    "Salvataggio": "Gestisci backup, sincronizzazione, bozze e spazio locale.",
+  };
   for (const caption of ["Ascolto", "Catalogo e dati", "Salvataggio"]) {
     const group = document.createElement("details");
     const heading = document.createElement("summary");
     heading.textContent = caption;
+    heading.title = toolHelp[caption];
     group.append(heading);
     if (caption === "Catalogo e dati") group.id = "collectionCatalogTools";
     toolGroups.set(caption, group);
@@ -360,18 +418,16 @@ export function installCollectionLayout(document) {
   toolsContent.append(...toolGroups.values());
   toolGroups.get("Catalogo e dati").append(document.getElementById("reviewMusicAssociations"));
   addPage("view", view, "Vista");
-  const imports = document.createElement("details");
-  const importSummary = document.createElement("summary");
-  importSummary.textContent = "Importa album";
-  imports.append(importSummary, document.getElementById("playlistImportButton"), document.getElementById("tidalCollectionMount"));
-  addPage("import", imports, "Importa album", toolGroups.get("Catalogo e dati"));
-  pages.get("import").returnButton = pages.get("view").button;
+  const toolsButton = addPage("tools", tools, "Raccolta");
+  toolsButton.title = "Ascolto, catalogo e salvataggio dell'intera raccolta.";
+  panel.append(document.getElementById("tidalCollectionMount"));
   const storage = panel.querySelector(".collection-storage-details");
   const coverNotice = document.getElementById("coverSyncNotice");
   storage.append(document.getElementById("unratedSummary"), coverNotice);
-  const stateButton = addPage("state", storage, "Salvataggio", footer);
+  const stateButton = addPage("state", storage, "Stato locale", toolGroups.get("Salvataggio"));
+  pages.get("state").returnButton = toolsButton;
   const updateCoverNotice = () => {
-    stateButton.textContent = coverNotice.hidden ? "Stato" : "Stato !";
+    stateButton.textContent = coverNotice.hidden ? "Stato locale" : "Stato locale !";
     stateButton.title = coverNotice.textContent || "Stato del salvataggio e delle copertine";
     stateButton.setAttribute("aria-label", `Stato del salvataggio: ${stateButton.title}`);
   };
@@ -380,8 +436,34 @@ export function installCollectionLayout(document) {
   updateCoverNotice();
   const selection = document.getElementById("selectionToolbar");
   const secondary = selection.querySelector(".selection-secondary");
-  secondary.querySelector(".selection-options").prepend(
-    document.getElementById("bulkEditButton"), document.getElementById("clearSelectionButton"));
+  const selectionOptions = secondary.querySelector(".selection-options");
+  const selectionGroups = new Map();
+  const selectionHelpText = {
+    "Ascolto": "Aggiorna lo stato degli album selezionati.",
+    "Organizza": "Gestisci generi, evidenza e rimozione degli album selezionati.",
+    "Completa dati": "Cerca i dati mancanti degli album selezionati.",
+    "Selezione": "Gestisci gli album selezionati, anche quelli nascosti dai filtri.",
+  };
+  for (const caption of ["Ascolto", "Organizza", "Completa dati", "Selezione"]) {
+    const group = document.createElement("details");
+    const heading = document.createElement("summary");
+    heading.textContent = caption;
+    heading.title = selectionHelpText[caption];
+    group.append(heading); selectionGroups.set(caption, group);
+  }
+  selectionOptions.append(document.getElementById("bulkGenresButton"), document.getElementById("clearSelectionButton"));
+  for (const child of [...selectionOptions.children]) {
+    const id = child.id || child.querySelector?.("input, select")?.id;
+    const group = ["bulkStatus", "applyBulkStatus"].includes(id) ? "Ascolto"
+      : ["bulkGenresButton", "pinSelectedButton", "unpinSelectedButton", "removeSelectedButton"].includes(id)
+        ? "Organizza" : "Selezione";
+    selectionGroups.get(group).append(child);
+  }
+  for (const id of ["completeMusicButton", "completeDurationsButton", "resumeMusicCompletionButton"]) {
+    const button = document.getElementById(id);
+    if (button) selectionGroups.get("Completa dati").append(button);
+  }
+  selectionOptions.append(...selectionGroups.values());
   addPage("selection", secondary, "Azioni", selection.querySelector(".selection-primary"));
   pages.get("selection").title = "Album selezionati";
   document.getElementById("bulkGenresButton").textContent = "Generi";
@@ -392,9 +474,33 @@ export function installCollectionLayout(document) {
   for (const id of ["manualOrderHint", "albumList", "emptyState"]) {
     results.append(document.getElementById(id));
   }
-  stateButton.before(selection);
+  footer.append(selection);
   footer.prepend(document.getElementById("collectionSummary"));
   results.append(footer);
+  const actionCopy = {
+    pickAlbumButton: ["Scegli un album...", "Propone un album dalla raccolta locale."],
+    durationQueueButton: ["Coda per durata...", "Scegli album che entrano nel tempo disponibile."],
+    musicChoicesButton: ["Collegamenti al catalogo...", "Gestisci edizioni associate, disponibilita' e rinvii."],
+    completeMusicButton: ["Metadati mancanti...", "Cerca i dati mancanti degli album selezionati."],
+    completeDurationsButton: ["Solo durate...", "Cerca le durate degli album selezionati."],
+    resumeMusicCompletionButton: ["Riprendi lettura...", "Riprende il completamento interrotto."],
+    duplicatesButton: ["Confronta edizioni...", "Confronta possibili duplicati senza unire gli album."],
+    auditCollectionButton: ["Controlla dati...", "Mostra i dati mancanti e le incongruenze, senza modificarli."],
+    normalizeLabelsButton: ["Uniforma generi e tag...", "Unifica etichette equivalenti dopo l'anteprima."],
+    collectionHistoryButton: ["Cronologia modifiche...", "Consulta le modifiche locali e le possibilita' di annullamento."],
+    draftListButton: ["Riprendi bozze...", "Riprendi o scarta le modifiche locali non salvate."],
+    statisticsButton: ["Statistiche...", "Riepiloga stati, generi e voti della raccolta."],
+    loadCoversButton: ["Cerca copertine mancanti...", "Scarica solo le copertine mancanti."],
+    backupButton: ["Esporta backup...", "Salva una copia locale della raccolta."],
+    verifyBackupButton: ["Verifica backup...", "Controlla un file senza ripristinarlo."],
+    syncChangesButton: ["Modifiche da sincronizzare...", "Mostra le differenze rispetto alla base GitHub."],
+    offlineStatusButton: ["Disponibilita' offline...", "Controlla app e copertine salvate sul dispositivo."],
+    coverStorageButton: ["Spazio copertine...", "Misura o rimuovi le immagini offline, non gli album."],
+  };
+  for (const [id, [label, tip]] of Object.entries(actionCopy)) {
+    const button = document.getElementById(id);
+    if (button) { button.textContent = label; button.title = tip; }
+  }
   const service = document.querySelector(".music-service-picker");
   const servicePosition = document.createComment("Servizio musicale");
   service.before(servicePosition);
@@ -406,6 +512,11 @@ export function installCollectionLayout(document) {
     if (selection.hidden && active === "selection") close(false);
   }).observe(selection, { attributes: true, attributeFilter: ["hidden"] });
   closeButton.addEventListener("click", () => close());
+  aside.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    close();
+  });
+  aside.addEventListener("close", () => { if (active) close(); });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && active && !document.querySelector("dialog[open]")) {
       event.preventDefault();

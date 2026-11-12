@@ -3,7 +3,7 @@ import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=10";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
 import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=3";
-import { bindPauseNotice } from "./music-continuity.mjs?v=10";
+import { bindPauseNotice } from "./music-continuity.mjs?v=11";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 
 const SESSION = "accord-qobuz-session-v1";
@@ -177,7 +177,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   });
   compareEditionsButton.hidden = true;
   compareEditionsButton.disabled = true;
-  button(actions, "Importa selezionati in Accord", () => run(async (guard) => {
+  const importAlbumsButton = button(actions, "Importa selezionati in Accord", () => run(async (guard) => {
     const chosen = selected();
     if (!chosen.length) throw new Error("Seleziona almeno un album.");
     if (!confirm(`Importare ${chosen.length} album in Accord? I dati esistenti non vengono sovrascritti.`)) return;
@@ -229,7 +229,14 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
   }));
   actions.append(favoriteActions);
   section.append(actions, status);
-  document.getElementById("tidalCollectionMount").append(section);
+  const catalogDialog = element("dialog", "", { class: "qobuz-library-dialog", "aria-label": "Aggiungi album Qobuz" });
+  const catalogHeading = element("div", "", { class: "dialog-heading" });
+  catalogHeading.append(element("h2", "Aggiungi album Qobuz"));
+  button(catalogHeading, "Chiudi", () => catalogDialog.close(), false);
+  const catalogFooter = element("div", "", { class: "dialog-actions" });
+  catalogFooter.append(importAlbumsButton);
+  catalogDialog.append(catalogHeading, section, catalogFooter);
+  document.getElementById("tidalCollectionMount").append(catalogDialog);
   document.querySelector("#settingsDialog .dialog-scroll").append(accountDetails);
 
   const suggestions = element("section", "", { class: "tidal-panel", "data-qobuz-panel": "suggestionsPanel" });
@@ -750,6 +757,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     const active = gate.service === "qobuz";
     section.hidden = suggestions.hidden = playlists.hidden = !active;
     if (!active && wasActive) {
+      if (catalogDialog.open) catalogDialog.close();
       stopPlayer();
       loadedPlaylist = null; playlistRows = []; playlistListing.replaceChildren(); playlistResults.replaceChildren();
       playlistMode = ""; playlistNext = null; playlistPrevious = [];
@@ -766,6 +774,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
     selectView("collection");
     section.open = true;
     query.value = value;
+    if (!catalogDialog.open) catalogDialog.showModal();
     query.focus();
   }
   function useAlbum(album, view) {
@@ -781,6 +790,7 @@ export function initializeQobuzUI({ addAlbum, gate, selectView = () => {}, openS
       playlists.open = true;
     }
     selectView(view);
+    if (catalogDialog.open) catalogDialog.close();
   }
   function openPlaylists() {
     gate.assert("qobuz");

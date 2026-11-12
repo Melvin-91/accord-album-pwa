@@ -15,9 +15,33 @@ import {
   userFacingStatus,
   installDialogLayout,
   installCollectionLayout,
+  reconcileAlbumCards,
 } from "./ui.mjs";
 
 const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+
+test("album reconciliation retains untouched nodes and handles edits, removals and sorting", () => {
+  const mutations = [];
+  const list = { children: [],
+    insertBefore(card, reference) {
+      mutations.push(card.id);
+      this.children = this.children.filter(node => node !== card);
+      this.children.splice(reference ? this.children.indexOf(reference) : this.children.length, 0, card);
+    } };
+  const card = (id) => ({ id, remove() {
+    mutations.push(`remove:${id}`);
+    list.children = list.children.filter(node => node !== this);
+  } });
+  const a = card("a"), b = card("b"), c = card("c"), edited = card("new-b");
+  list.children = [a, b, c];
+  reconcileAlbumCards(list, [a, edited, c]);
+  assert.deepEqual(list.children, [a, edited, c]);
+  assert.deepEqual(mutations, ["remove:b", "new-b"]);
+  mutations.length = 0;
+  reconcileAlbumCards(list, [c, a]);
+  assert.deepEqual(list.children, [c, a]);
+  assert.deepEqual(mutations, ["remove:new-b", "c"]);
+});
 
 test("collection options keep every control connected and only one panel open", () => {
   const observers = [];
@@ -61,6 +85,8 @@ test("collection options keep every control connected and only one panel open", 
     }
     setAttribute(name, value) { this.attributes[name] = value; }
     addEventListener(name, callback) { this.events[name] = callback; }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
     focus() { document.activeElement = this; }
   }
   const root = new Node("main"), panel = new Node("section", "collectionPanel");
@@ -109,34 +135,43 @@ test("collection options keep every control connected and only one panel open", 
   }
   const controller = installCollectionLayout(document);
   assert.equal(quickFilters.parentElement, toolbar);
+  assert.equal(document.getElementById("collectionFilterChips").parentElement, toolbar);
   assert.equal(reviewAssociations.parentElement.id, "collectionCatalogTools");
-  assert.equal(playlist.parentElement.tagName, "DETAILS");
+  assert.equal(playlist.parentElement.classList.contains("collection-add-content"), true);
   assert.deepEqual(root.querySelector(".collection-tools-content").children
     .map(group => group.children[0].textContent), ["Ascolto", "Catalogo e dati", "Salvataggio"]);
   for (const [id, node] of records) assert.equal(document.getElementById(id), node, id);
   const aside = document.getElementById("collectionOptions");
   assert.equal(aside.hidden, true);
   assert.equal(selection.parentElement.classList.contains("collection-results-footer"), true);
-  assert.deepEqual(primary.children.map((node) => node.id), ["bulkGenresButton", "collectionSelectionToggle"]);
-  assert.equal(bulk.parentElement, options);
-  assert.equal(clear.parentElement, options);
-  for (const key of ["filters", "view", "import", "state", "selection"]) {
+  assert.deepEqual(primary.children.map((node) => node.id), ["bulkEditButton", "collectionSelectionToggle"]);
+  assert.equal(bulk.parentElement, primary);
+  assert.equal(clear.parentElement.tagName, "DETAILS");
+  assert.deepEqual(options.children.map(group => group.children[0].textContent),
+    ["Ascolto", "Organizza", "Completa dati", "Selezione"]);
+  for (const key of ["filters", "view", "tools", "state", "selection"]) {
     controller.show(key);
     assert.equal(aside.hidden, false);
+    assert.equal(aside.tagName, "DIALOG");
+    assert.equal(aside.open, true);
     const pages = aside.querySelector(".collection-options-scroll").children;
     assert.equal(pages.filter((node) => node.open && !node.hidden).length, 1);
     assert.equal(document.getElementById("albumList").parentElement.classList.contains("collection-results"), true);
   }
   selection.hidden = true; observers.find((observer) => observer.target === selection).callback();
   assert.equal(aside.hidden, true);
+  assert.equal(aside.open, false);
+  controller.show("filters");
+  aside.events.cancel({ preventDefault() {} });
+  assert.equal(aside.open, false);
   filters.open = true; filters.events.toggle();
   assert.equal(aside.hidden, false);
   document.keydown({ key: "Escape", preventDefault() {} });
   assert.equal(aside.hidden, true);
   assert.equal(document.activeElement.id, "collectionFiltersToggle");
-  controller.show("import");
+  controller.show("tools");
   controller.close();
-  assert.equal(document.activeElement.id, "collectionViewToggle");
+  assert.equal(document.activeElement.id, "collectionToolsToggle");
   panel.hidden = true; controller.updateView();
   assert.equal(service.parentElement, root);
   panel.hidden = false; controller.updateView();

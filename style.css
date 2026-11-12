@@ -277,6 +277,7 @@ dialog::backdrop { background: rgb(0 0 0 / 72%); }
 dialog form { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 0; width: 100%; min-width: 0; max-height: calc(100dvh - 72px); overflow: hidden; }
 dialog form > * { min-width: 0; }
 .dialog-scroll { display: grid; align-content: start; gap: 18px; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+dialog :is(.restore-album-list, .qol-details, .conflict-list, .command-results) { max-height: none; overflow: visible; }
 .dialog-footer { min-width: 0; padding-top: 10px; background: var(--surface); border-top: 1px solid var(--border); }
 .dialog-footer .dialog-actions { margin-top: 0; }
 dialog.responsive-dialog[open] { display: flex; flex-direction: column; overflow: hidden; }
@@ -411,6 +412,9 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-toolbar > div:first-child { display: none; }
 .collection-toolbar .playlist-import-actions { align-items: center; gap: 6px; }
 .collection-toolbar .playlist-import-actions > button { flex: none; padding: 7px 10px; min-height: 36px; }
+.collection-add-menu { position: relative; }
+.collection-add-menu > summary { padding: 7px 12px; min-height: 36px; border-radius: 8px; background: var(--accent); color: #181023; font-size: .875rem; font-weight: 600; }
+.collection-add-content { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; display: grid; gap: 6px; min-width: 220px; padding: 10px; background: var(--raised); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 24px #0008; }
 .collection-toolbar .collection-search { flex: 1 1 220px; min-width: 0; margin: 0; gap: 6px; }
 .collection-toolbar .collection-search .search { min-width: 0; font-size: 0; gap: 0; }
 .collection-toolbar .collection-search input { min-width: 0; min-height: 36px; font-size: .875rem; }
@@ -420,16 +424,33 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-toolbar .music-service-picker select { font-size: .8125rem; min-height: 36px; padding: 6px; }
 .quick-collection-filters { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 5px; }
 .quick-collection-filters button { padding: 3px 9px; min-height: 28px; font-size: .75rem; background: transparent; color: var(--muted); }
-.quick-collection-filters button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--raised); }
+.quick-collection-filters button[aria-pressed="true"] { color: #181023; border: 2px solid #e8dcff; background: #d3beff; font-weight: 700; }
+.quick-collection-filters button[aria-pressed="true"]::before { content: "✓ "; }
+#collectionFilterChips { display: flex; gap: 5px; overflow-x: auto; padding-top: 5px; }
+#collectionFilterChips:empty { display: none; }
+#collectionFilterChips button { flex: none; padding: 4px 9px; color: #fff; background: #4a386d; border: 1px solid #c3b0ff; font-weight: 600; }
 .album-sync-indicator { display: inline-flex; align-items: center; font-size: 0; color: #88b9dc; font-weight: normal; }
 .album-sync-indicator::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.collection-tools-content > details { padding: 5px 0; border-top: 1px solid var(--border); }
-.collection-tools-content > details[open] { display: flex; flex-direction: column; gap: 5px; }
+.collection-tools-content > details, .selection-options > details { padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.collection-tools-content > details[open], .selection-options > details[open] { display: flex; flex-direction: column; gap: 8px; }
+.collection-tools-content > details > summary, .selection-options > details > summary { font-weight: 600; font-size: .8125rem; }
+.collection-tools-content > details > button, .selection-options > details > button { text-align: left; }
+.tidal-library-dialog { width: min(760px, calc(100vw - 32px)); }
+.tidal-library-dialog .tidal-panel { margin: 0; padding: 0; border: 0; background: transparent; }
+.tidal-library-dialog .tidal-collection-details { padding: 0; border: 0; display: grid; gap: 8px; }
+.tidal-library-dialog .tidal-controls { grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin: 0; }
+.tidal-library-dialog .tidal-playlist-import { border-top: 1px solid var(--border); padding-top: 12px; }
+.tidal-library-dialog .tidal-results { max-height: 48dvh; overflow-y: auto; }
+.tidal-library-dialog .tidal-results:empty { display: none; }
+.tidal-library-dialog .tidal-output { gap: 8px; margin: 0; }
+@media (max-width: 520px) {
+  .tidal-library-dialog .tidal-controls { grid-template-columns: minmax(0, 1fr); }
+}
 .music-service-picker #musicLinkTarget { width: auto; font-size: .8125rem; }
 .music-service-picker > .music-link-error { grid-column: 1 / -1; color: #f3c1ba; font-size: .8125rem; }
 .collection-toolbar .music-service-picker > .music-link-error:not([hidden]) { display: block; flex-basis: 100%; }
 .collection-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; gap: 10px; }
-.collection-body[data-options-open] { grid-template-columns: minmax(0, 1fr) minmax(240px, 30%); }
+.collection-body[data-options-open] { grid-template-columns: minmax(0, 1fr); }
 .collection-results { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 6px; }
 .collection-results #albumList { flex: 1; min-height: 0; overflow-y: auto; align-content: start; padding-right: 4px; }
 .collection-results #albumList:empty { display: none; }
@@ -453,7 +474,6 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-options-page .tidal-panel { margin-top: 10px; padding: 10px; }
 .association-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; font: inherit; font-size: .8125rem; }
 .collection-tools > summary { padding-block: 10px; font-size: .8125rem; font-weight: 600; }
-.collection-options-page #collectionFilterChips { margin-top: 10px; display: grid; }
 .collection-results .selection-toolbar { display: flex; flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; gap: 6px 10px; margin: 0; padding: 0; border: 0; background: transparent; }
 .collection-results .selection-toolbar .selection-summary { flex: 1; min-width: 0; gap: 6px; }
 .collection-results .selection-summary strong { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -463,14 +483,14 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .album-card:not(.has-cover) .album-cover { visibility: hidden; }
 .album-card .cover-placeholder { font-size: 0; padding: 0; }
 .album-card .cover-placeholder::before { content: "♫"; font-size: 24px; }
-.album-card { grid-template-columns: 32px 22px 88px minmax(0, 1fr); }
-.album-list[data-layout="compact"] .album-card { grid-template-columns: 32px 22px 52px minmax(0, 1fr); }
+.album-card { grid-template-columns: 22px 88px minmax(0, 1fr); }
+.album-list[data-layout="compact"] .album-card { grid-template-columns: 22px 52px minmax(0, 1fr); }
 @media (max-width: 760px) {
-  .album-card { grid-template-columns: 32px 20px 64px minmax(0, 1fr); }
-  .album-list[data-layout="compact"] .album-card { grid-template-columns: 32px 20px 44px minmax(0, 1fr); }
+  .album-card { grid-template-columns: 20px 64px minmax(0, 1fr); }
+  .album-list[data-layout="compact"] .album-card { grid-template-columns: 20px 44px minmax(0, 1fr); }
 }
 @media (max-width: 400px) {
-  .album-card { grid-template-columns: 32px 20px 48px minmax(0, 1fr); }
+  .album-card { grid-template-columns: 20px 48px minmax(0, 1fr); }
 }
 .collection-results .album-list[data-layout="compact"] .album-extra { display: block; }
 .collection-results .album-secondary { flex-basis: auto; }
@@ -479,13 +499,91 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-results .album-list[data-layout="compact"] .album-main { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
 .collection-results .album-list[data-layout="compact"] .album-main > div:first-child { flex: 1; }
 .collection-results .album-list[data-layout="compact"] .album-actions { flex: 0 1 auto; }
-@media (max-width: 980px) {
-  .collection-body[data-options-open] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 70fr) minmax(0, 30fr); gap: 6px; }
-}
 @media (max-width: 760px) {
   body:has(#collectionPanel:not([hidden])) .header-actions button:not(.icon-button) { padding: 7px 10px; font-size: .75rem; }
   body:has(#collectionPanel:not([hidden])) .view-tab { padding: 8px 4px; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .collection-toolbar .collection-search { flex: 1 1 calc(100% - 130px); }
   .collection-toolbar .playlist-import-actions { justify-content: flex-end; }
   .collection-results .album-list[data-layout="compact"] .album-main { flex-direction: column; align-items: stretch; }
+}
+
+.app-menu { position: relative; }
+.app-menu > summary { padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.app-menu-content { position: absolute; right: 0; top: calc(100% + 8px); z-index: 5; display: grid; gap: 8px; width: 240px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 24px #0008; }
+dialog.collection-options { width: min(560px, calc(100vw - 24px)); height: min(760px, calc(100dvh - 24px)); padding: 0; }
+.collection-options .collection-options-heading { padding: 12px 16px; }
+.collection-options-heading strong { font-size: 1.125rem; }
+.manual-search-options { border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.manual-search-options > summary { font-weight: 600; }
+.manual-search-options[open] > :not(summary) { margin-top: 16px; }
+.album-player-link { gap: 6px; padding: 8px 10px; }
+.album-card .favorite-album { font-size: .8125rem; padding: 8px; border: 1px solid var(--border); border-radius: 9px; }
+
+@media (max-width: 760px) {
+  html:has(dialog[open]) { overflow: hidden; }
+  body:has(#collectionPanel:not([hidden])) { display: block; height: auto; min-height: 100dvh; overflow: visible; }
+  body:has(#collectionPanel:not([hidden])) main { display: block; margin-bottom: 24px; }
+  body:has(#collectionPanel:not([hidden])) .topbar { flex-direction: row; align-items: center; padding: 10px 12px; gap: 8px; }
+  .brand { gap: 8px; min-width: 0; }
+  .brand img { width: 28px; height: 28px; }
+  .brand h1 { font-size: .9375rem; }
+  .brand .sync-state { font-size: .6875rem; }
+  .header-actions { flex: none; flex-wrap: nowrap; gap: 6px; }
+  .app-version { display: none; }
+  .header-actions > button, .app-menu > summary { min-height: 44px; padding: 10px 8px; font-size: .8125rem; }
+  #collectionPanel, .collection-body, .collection-results { display: block; }
+  .collection-results #albumList { overflow: visible; padding: 0; }
+  .collection-toolbar { margin-bottom: 14px; padding: 10px; }
+  .collection-toolbar .playlist-import-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px 4px; }
+  .collection-toolbar .collection-search { grid-column: 1 / -1; width: 100%; }
+  .collection-toolbar .collection-search input { font-size: 16px; min-height: 46px; }
+  .collection-toolbar .music-service-picker { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .collection-toolbar .music-service-picker > label { font-size: .75rem; gap: 4px; }
+  .collection-toolbar .music-service-picker select { min-height: 44px; font-size: 16px; }
+  .collection-toolbar .playlist-import-actions > button, .collection-add-menu > summary { padding: 10px 4px; min-height: 44px; text-align: center; font-size: .8125rem; }
+  .collection-add-menu > summary { list-style: none; }
+  .collection-add-menu > summary::-webkit-details-marker { display: none; }
+  .collection-add-content { right: auto; left: 0; width: min(280px, calc(100vw - 48px)); }
+  .collection-add-content button { min-height: 48px; text-align: left; }
+  .quick-collection-filters { gap: 6px; padding-top: 10px; }
+  .quick-collection-filters button { min-height: 44px; font-size: .8125rem; padding: 8px 10px; border: 1px solid var(--border); }
+  .collection-results .album-card, .collection-results .album-list[data-layout="compact"] .album-card { position: relative; grid-template-columns: 64px minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .collection-results .album-card .cover-frame { grid-column: 1; grid-row: 1; width: 64px; align-self: start; }
+  .collection-results .album-card .album-selection { position: absolute; top: 8px; left: 8px; z-index: 1; width: 44px; height: 44px; min-height: 44px; justify-content: center; border-radius: 8px; background: #090909c9; }
+  .collection-results .album-main, .collection-results .album-list[data-layout="compact"] .album-main { display: contents; }
+  .collection-results .album-main > div:first-child { grid-column: 2; grid-row: 1; min-width: 0; }
+  .collection-results .album-title { font-size: 1rem; line-height: 1.4; }
+  .collection-results .album-meta, .collection-results .album-extra { font-size: .8125rem; line-height: 1.5; }
+  .collection-results .album-actions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .collection-results .album-actions > button, .collection-results .album-actions > a, .collection-results .album-secondary > summary { min-height: 44px; padding: 10px 8px; width: 100%; font-size: .875rem; text-align: center; }
+  .collection-results .album-secondary[open] { grid-column: 1 / -1; }
+  .collection-results .album-secondary-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .collection-results .album-secondary-actions button { min-height: 44px; font-size: .875rem; }
+  .collection-results .album-quick-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .collection-results .album-quick-edit label { min-width: 0; font-size: .8125rem; }
+  .collection-results-footer { position: sticky; bottom: 0; z-index: 2; margin-top: 12px; padding: 12px 0 max(12px, env(safe-area-inset-bottom)); background: var(--surface); }
+  .collection-results .selection-toolbar { flex-wrap: wrap; padding: 8px; }
+  .collection-results .selection-toolbar button { min-height: 44px; font-size: .875rem; max-width: none; }
+  .collection-results-footer #collectionSummary { font-size: .8125rem; white-space: normal; }
+  dialog.responsive-dialog[open], dialog.collection-options[open], #albumDetailsDialog.responsive-dialog[open] {
+    position: fixed; inset: 0; margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh;
+    padding: 0; border: 0; border-radius: 0; overflow: hidden;
+  }
+  .responsive-dialog .responsive-dialog-body, #albumDetailsDialog.responsive-dialog form, #messageDialog.responsive-dialog form {
+    display: flex; flex-direction: column; flex: 1; width: 100%; min-height: 0; max-height: none; overflow: hidden;
+  }
+  .responsive-dialog .dialog-scroll, #messageDialog.responsive-dialog .dialog-scroll {
+    flex: 1; min-height: 0; padding: max(12px, env(safe-area-inset-top)) 16px 16px;
+    overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; gap: 16px;
+  }
+  .responsive-dialog .dialog-heading { position: sticky; top: -12px; z-index: 2; padding-block: 12px; background: var(--surface); }
+  .responsive-dialog .dialog-heading h2 { font-size: 1.25rem; }
+  .responsive-dialog .dialog-footer { flex: none; padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+  .responsive-dialog :is(button, summary, .album-player-link), .collection-options :is(button, summary) { min-height: 44px; }
+  .responsive-dialog :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { font-size: 16px; min-height: 46px; }
+  .responsive-dialog :is(label, legend) { font-size: .875rem; }
+  .responsive-dialog :is(.tidal-results, .suggestion-albums, .restore-album-list, .conflict-list, .command-results, .qol-details) { max-height: none; overflow: visible; }
+  .collection-options .collection-options-scroll { padding: 16px; overscroll-behavior: contain; }
+  .collection-options :is(button, select, input:not([type="checkbox"])) { min-height: 44px; font-size: 16px; }
+  .collection-tools-content > details, .selection-options > details { padding: 12px; }
 }

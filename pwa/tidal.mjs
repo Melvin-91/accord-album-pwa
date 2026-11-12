@@ -34,6 +34,7 @@ export function createMusicServiceGate(storage) {
   };
 }
 const PUBLIC_PATHS = [
+  [/^(albums|tracks)$/, ["GET"]],
   [/^(albums|artists|tracks)\/[1-9][0-9]*$/, ["GET"]],
   [/^albums\/[1-9][0-9]*\/relationships\/(artists|coverArt|items|similarAlbums)$/, ["GET"]],
   [/^artists\/[1-9][0-9]*\/relationships\/(albums|similarArtists)$/, ["GET"]],
@@ -220,9 +221,9 @@ export function createTidalTransport({
       return result.json();
     },
     clear() { cache.clear(); },
-    async pages(path, token, { maxPages = 5, maxItems = 250 } = {}) {
+    async pages(path, token, { maxPages = 5, maxItems = 250, onPage } = {}) {
       const documents = [], seen = new Set();
-      let next = tidalApiUrl(path).href, complete = true, count = 0;
+      let next = tidalApiUrl(path).href, complete = true, count = 0, pageCount = 0;
       const pathname = new URL(next).pathname;
       while (next) {
         const url = tidalApiUrl(next);
@@ -230,7 +231,9 @@ export function createTidalTransport({
         seen.add(url.href);
         const document = await requestJson(url.href, token);
         const size = Array.isArray(document.data) ? document.data.length : document.data ? 1 : 0;
-        documents.push(document);
+        pageCount += 1;
+        if (onPage) await onPage(document);
+        else documents.push(document);
         count += size;
         const link = document.links?.next;
         next = typeof link === "string" ? link : link?.href;
@@ -240,9 +243,65 @@ export function createTidalTransport({
               && candidate.pathname === pathname.slice("/v2".length)) candidate.pathname = pathname;
           next = candidate.href;
         }
-        if (next && (documents.length >= maxPages || count >= maxItems)) { complete = false; break; }
+        if (next && (pageCount >= maxPages || count >= maxItems)) { complete = false; break; }
       }
       return { documents, complete, count };
+    },
+    async playlistAlbums(value, token, { countryCode = "IT", progress = () => {} } = {}) {
+      const albums = new Map(), artwork = new Map();
+      const params = new URLSearchParams({ countryCode, include: "items.albums.artists,items.albums.coverArt" });
+      let unavailable = 0, count = 0;
+      try {
+        await this.pages(`playlists/${tidalPlaylistId(value)}/relationships/items?${params}`, token, {
+          maxPages: Infinity, maxItems: Infinity,
+          onPage: async (document) => {
+            if (!Array.isArray(document.data)) throw new Error("Pagina playlist TIDAL non valida.");
+            const documents = [document];
+            let index = new Map(tidalResources(documents).map((item) => [`${item.type}:${item.id}`, item]));
+            const tracks = document.data.filter((item) => item.type === "tracks");
+            unavailable += document.data.length - tracks.length;
+            const hydrate = async (ids, type, include) => {
+              for (let start = 0; start < ids.length; start += 20) {
+                const query = new URLSearchParams({ countryCode, "filter[id]": ids.slice(start, start + 20).join(","), include });
+                const page = await this.pages(`${type}?${query}`, token);
+                if (!page.complete) throw new Error("Metadati TIDAL incompleti.");
+                documents.push(...page.documents);
+              }
+              index = new Map(tidalResources(documents).map((item) => [`${item.type}:${item.id}`, item]));
+            };
+            const missingTracks = [...new Set(tracks.filter((item) => !index.get(`tracks:${item.id}`)?.relationships?.albums?.data)
+              .map((item) => tidalAlbumId(item.id)))];
+            await hydrate(missingTracks, "tracks", "albums.artists,albums.coverArt");
+            const ids = new Set();
+            for (const track of tracks) {
+              const refs = index.get(`tracks:${track.id}`)?.relationships?.albums?.data;
+              if (!Array.isArray(refs) || !refs.length) { unavailable += 1; continue; }
+              for (const ref of refs) {
+                if (ref.type !== "albums") throw new Error("Riferimento album TIDAL non valido.");
+                ids.add(`tidal:${tidalAlbumId(ref.id)}`);
+              }
+            }
+            let records = new Map(tidalAlbumRecords(documents).map((album) => [album.id, album]));
+            const missingAlbums = [...ids].filter((id) => !albums.has(id) && !records.has(id)).map((id) => id.slice(6));
+            await hydrate(missingAlbums, "albums", "artists,coverArt");
+            records = new Map(tidalAlbumRecords(documents).map((album) => [album.id, album]));
+            const covers = tidalAlbumArtwork(documents);
+            for (const id of ids) {
+              if (records.has(id)) albums.set(id, records.get(id));
+              else if (!albums.has(id)) unavailable += 1;
+              if (covers.has(id)) artwork.set(id, covers.get(id));
+            }
+            count += document.data.length;
+            progress(count, albums.size);
+          },
+        });
+        if (unavailable) throw new Error(`${unavailable} elementi non hanno un album disponibile.`);
+      } catch (error) {
+        error.partialResults = [...albums.values()];
+        error.artwork = artwork;
+        throw error;
+      }
+      return { albums: [...albums.values()], artwork };
     },
   };
 }

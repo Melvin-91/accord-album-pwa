@@ -40,7 +40,7 @@ test("add album searches albums only and toggles cached live and short results w
   ] };
   await uiFixture(async f => {
     f.gate.select("tidal"); f.field("Titolo, artista o link album TIDAL").value = "Artist";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const calls = f.calls.length;
     assert.ok(f.calls.some(call => new URL(call.url).pathname.endsWith("/relationships/albums")));
     assert.ok(!f.walk().some(node => node._text === "Ricerca pubblica"));
@@ -79,6 +79,8 @@ class Node {
   }
   async dispatch(name) { for (const listener of this.listeners.get(name) || []) await listener({ target: this }); }
   focus() { this.focused = true; }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   append(...nodes) {
     for (const node of nodes) {
       if (node.parent) node.parent.children = node.parent.children.filter((child) => child !== node);
@@ -127,7 +129,8 @@ test("association link metadata reads the exact TIDAL album without imports or s
   });
 });
 
-async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget = "app") {
+async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget = "app",
+  playlistResponse = playlistDocument) {
   const root = new Node("main"), tabs = new Node("nav"), existing = new Map();
   const settingsDialog = new Node("dialog"), settingsScroll = new Node("div");
   settingsDialog.append(settingsScroll);
@@ -163,6 +166,7 @@ async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget =
   const overrides = {
     localStorage: local, sessionStorage: session,
     document: {
+      body: root,
       createElement: (tag) => new Node(tag), createTextNode: (text) => new Node("text", text),
       getElementById: (id) => existing.get(id),
       querySelector: (selector) => selector === ".view-tabs" ? tabs
@@ -195,7 +199,7 @@ async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget =
       else if (options.method !== "GET") return new Response(null, { status: 204 });
       else if (path.includes("Mixes/me")) document = { data: { type: "userDailyMixes", id: "me" },
         included: [{ type: "playlists", id: "mix-playlist", attributes: { name: "Daily" } }] };
-      else if (path.includes("/playlists/") && path.endsWith("/items")) document = playlistDocument;
+      else if (path.includes("/playlists/") && path.endsWith("/items")) document = playlistResponse;
       return new Response(JSON.stringify(document), { headers: { "Content-Type": "application/vnd.api+json" } });
     },
   };
@@ -278,7 +282,7 @@ test("the shared playlist adapter reads real tracks and writes only UNLISTED thr
 test("the collection stays available on TIDAL, configuration shares account settings, and local import never contacts Spotify", async () => {
   await uiFixture(async (f) => {
     assert.equal(f.calls.length, 0);
-    const tidalCollection = f.existing.get("tidalCollectionMount").children[0];
+    const tidalCollection = f.walk().find(node => node.dataset.tidalPanel === "collectionPanel");
     assert.ok(tidalCollection);
     assert.equal(tidalCollection.hidden, true);
     assert.equal(f.existing.get("settingsDialog").children[0].children.some((node) => node.getAttribute("id") === "tidalConfiguration"), true);
@@ -294,11 +298,11 @@ test("the collection stays available on TIDAL, configuration shares account sett
     assert.equal(f.session.getItem("accord-spotify-access-token"), "preserved-session");
     assert.equal(f.local.getItem("accord-spotify-client-id"), "preserved");
     assert.equal(f.walk().some((node) => /^(Riproduci|Pausa|Now playing|Cronologia TIDAL)$/.test(node.textContent)), false);
-    f.field("Titolo, artista o link album TIDAL").value = "Test";
+    f.ui.openCatalog("Test");
     assert.equal(f.calls.length, 0);
     assert.equal(f.find("Importa album selezionati nella raccolta locale").disabled, true);
-    await f.find("Cerca · anteprima").dispatch("click");
-    assert.equal(collectionDetails.open, true);
+    await f.find("Cerca album").dispatch("click");
+    assert.equal(f.walk().find(node => node.attributes.class === "tidal-library-dialog").open, true);
     assert.equal(f.calls.length, 2);
     assert.equal(new URL(f.calls[0].url).searchParams.get("filter[query]"), "Test");
     assert.match(f.calls[1].url, /searchResults\/opaque%2FTest\/relationships\/albums/);
@@ -307,6 +311,7 @@ test("the collection stays available on TIDAL, configuration shares account sett
     assert.match(card.textContent, /Test Album/);
     assert.match(card.textContent, /Test Artist/);
     assert.match(card.textContent, /2026/);
+    assert.equal(card.children.find(node => node.textContent === "Usa per suggerimenti").hidden, true);
     card.children[0].children[0].checked = true;
     await card.children[0].children[0].dispatch("change");
     assert.equal(f.find("Importa album selezionati nella raccolta locale").disabled, false);
@@ -327,9 +332,9 @@ test("Qobuz uses the shared selector without exposing Spotify or TIDAL views", a
     await f.field("Servizio musicale").dispatch("change");
     assert.equal(f.gate.service, "qobuz");
     assert.equal(f.local.getItem("accord-music-service-v1"), "qobuz");
-    assert.equal(f.existing.get("tidalCollectionMount").children[0].hidden, true);
+    assert.equal(f.walk().find(node => node.dataset.tidalPanel === "collectionPanel").hidden, true);
     assert.equal(f.existing.get("playlistImportButton").hidden, false);
-    assert.match(f.existing.get("playlistImportButton").textContent, /Qobuz/);
+    assert.match(f.existing.get("playlistImportButton").title, /Qobuz/);
     for (const id of ["suggestionsPanel", "playlistBuilderPanel"]) {
       const children = f.existing.get(id).children;
       assert.equal(children.find((node) => node.dataset.qobuzPanel).hidden, id === "suggestionsPanel");
@@ -365,7 +370,7 @@ test("TIDAL prepares selected album tracks for playlists without writing remotel
     f.field("Servizio musicale").value = "tidal";
     await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     card.children[0].children[0].checked = true;
     await card.children[0].children[0].dispatch("change");
@@ -405,7 +410,7 @@ test("TIDAL album track preview reports bounded pagination and missing metadata"
     f.field("Servizio musicale").value = "tidal";
     await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     card.children[0].children[0].checked = true;
     await card.children[0].children[0].dispatch("change");
@@ -434,7 +439,7 @@ test("TIDAL discards album preview if the selection or service changes during th
     f.field("Servizio musicale").value = "tidal";
     await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     const check = card.children[0].children[0];
     check.checked = true; await check.dispatch("change");
@@ -461,22 +466,20 @@ test("TIDAL discards album preview if the selection or service changes during th
   });
 });
 
-test("dedicated TIDAL playlist import opens in collection without requests, lists saved playlists and imports only previewed albums", async () => {
+test("TIDAL import opens a dedicated dialog without requests and imports only previewed albums", async () => {
   await uiFixture(async (f) => {
     f.field("Servizio musicale").value = "tidal";
     await f.field("Servizio musicale").dispatch("change");
-    assert.match(f.existing.get("playlistImportButton").textContent, /TIDAL/);
+    assert.match(f.existing.get("playlistImportButton").title, /TIDAL/);
     f.ui.openImport();
     assert.deepEqual(f.views, ["collection"]);
     assert.equal(f.calls.length, 0);
-    assert.equal(f.find("Elenca playlist TIDAL da importare").focused, true);
-    assert.equal(f.find("Importa album da una playlist TIDAL").parent.open, true);
-    await f.find("Elenca playlist TIDAL da importare").dispatch("click");
+    assert.equal(f.field("Link playlist TIDAL").focused, true);
+    assert.equal(f.walk().find(node => node.attributes.class === "tidal-library-dialog").open, true);
+    f.field("Link playlist TIDAL").value = "https://tidal.com/playlist/playlist-one";
+    await f.find("Mostra album della playlist").dispatch("click");
     assert.equal(f.calls.length, 1);
-    assert.match(f.calls[0].url, /userCollectionPlaylists\/me\/relationships\/items/);
-    await f.find("Usa questa playlist").dispatch("click");
-    assert.equal(f.calls.length, 2);
-    assert.match(f.calls[1].url, /playlists\/playlist-one\/relationships\/items/);
+    assert.match(f.calls[0].url, /playlists\/playlist-one\/relationships\/items/);
     const cards = f.walk().filter((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     assert.equal(cards.length, 1, "duplicate track occurrences import one album");
     cards[0].children[0].children[0].checked = true;
@@ -484,14 +487,28 @@ test("dedicated TIDAL playlist import opens in collection without requests, list
     await f.find("Importa album selezionati nella raccolta locale").dispatch("click");
     assert.equal(f.imported.length, 1);
     assert.equal(f.imported[0].id, "tidal:123");
-    assert.equal(f.calls.length, 2, "local import performs no remote writes or additional reads");
+    assert.equal(f.calls.length, 1, "local import performs no remote writes or additional reads");
     assert.ok(f.calls.every((call) => call.method === "GET"));
     assert.equal(f.session.getItem("accord-spotify-access-token"), "preserved-session");
     f.field("Servizio musicale").value = "spotify";
     await f.field("Servizio musicale").dispatch("change");
-    assert.match(f.existing.get("playlistImportButton").textContent, /Spotify/);
+    assert.match(f.existing.get("playlistImportButton").title, /Spotify/);
     assert.throws(() => f.ui.openImport(), /cambiato/);
   });
+});
+
+test("incomplete TIDAL playlist reads show verified albums and an explicit warning without importing", async () => {
+  await uiFixture(async f => {
+    f.field("Servizio musicale").value = "tidal";
+    await f.field("Servizio musicale").dispatch("change");
+    f.ui.openImport();
+    f.field("Link playlist TIDAL").value = "https://tidal.com/playlist/playlist-one";
+    await f.find("Mostra album della playlist").dispatch("click");
+    assert.ok(f.walk().some(node => node.textContent.startsWith("Lettura incompleta: 1 album disponibili.")));
+    assert.equal(f.walk().filter(node => node.getAttribute("class") === "suggestion-album tidal-album-result").length, 1);
+    assert.deepEqual(f.imported, []);
+    assert.ok(f.calls.every(call => call.method === "GET"));
+  }, albumDocument, "app", {...playlistDocument, links: {next: "https://untrusted.invalid/items"}});
 });
 
 test("TIDAL playlist import supports pasted links and respects the shared cooldown before any read", async () => {
@@ -499,14 +516,14 @@ test("TIDAL playlist import supports pasted links and respects the shared cooldo
     f.field("Servizio musicale").value = "tidal";
     await f.field("Servizio musicale").dispatch("change");
     f.ui.openImport();
-    f.field("Playlist TIDAL da importare · ID o link").value = "https://tidal.com/browse/playlist/playlist-one";
-    await f.find("Anteprima album della playlist TIDAL").dispatch("click");
+    f.field("Link playlist TIDAL").value = "https://tidal.com/browse/playlist/playlist-one";
+    await f.find("Mostra album della playlist").dispatch("click");
     assert.equal(f.calls.length, 1);
     const output = f.walk().find((node) => node.attributes.class === "tidal-results");
     const verifiedRows = [...output.children];
     assert.ok(verifiedRows.length > 0);
     f.local.setItem("accord-tidal-cooldown-until-v1", String(Date.now() + 60000));
-    await f.find("Anteprima album della playlist TIDAL").dispatch("click");
+    await f.find("Mostra album della playlist").dispatch("click");
     assert.equal(f.calls.length, 1);
     assert.deepEqual(output.children, verifiedRows);
     assert.match(f.walk().find((node) => node.attributes.id === "tidalStatus").textContent, /attend|limite|429/i);
@@ -523,7 +540,7 @@ test("TIDAL add-album command opens the actual catalog controls without requesti
     assert.equal(f.field("Titolo, artista o link album TIDAL").value, "https://tidal.com/browse/album/123");
     assert.equal(f.field("Titolo, artista o link album TIDAL").focused, true);
     assert.equal(f.calls.length, 0);
-    await f.find("Leggi album dal link / ID").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     assert.equal(f.calls.length, 1);
     assert.match(f.calls[0].url, /albums\/123/);
   });
@@ -591,7 +608,7 @@ test("TIDAL search is manual and empty results have an accessible status", async
     f.field("Servizio musicale").value = "tidal"; await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "NoMatch";
     assert.equal(f.calls.length, 0);
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     assert.equal(f.calls.length, 2);
     assert.ok(f.walk().some((node) => node.textContent === "Nessun album corrisponde ai filtri."));
     assert.ok(f.walk().some((node) => node.attributes.id === "tidalStatus" && node.textContent.includes("0 album mostrati")));
@@ -603,7 +620,7 @@ test("actual favourites and playlist UI requires preview/confirmation and sends 
     f.field("Servizio musicale").value = "tidal"; await f.field("Servizio musicale").dispatch("change");
     assert.equal(f.find("Dati e letture playlist TIDAL").parent.open, true);
     assert.ok(f.find("Mostra gestione playlist esistenti"));
-    f.field("Titolo, artista o link album TIDAL").value = "Test"; await f.find("Cerca · anteprima").dispatch("click");
+    f.field("Titolo, artista o link album TIDAL").value = "Test"; await f.find("Cerca album").dispatch("click");
     const albumCard = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     albumCard.children[0].children[0].checked = true;
     await albumCard.children[0].children[0].dispatch("change");
@@ -642,7 +659,7 @@ test("suggestions can use a catalog album without typing an ID", async () => {
   await uiFixture(async (f) => {
     f.field("Servizio musicale").value = "tidal"; await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     const choose = card.children.find((node) => node.textContent === "Usa per suggerimenti");
     await choose.dispatch("click");
@@ -660,7 +677,7 @@ test("saved artist exclusions apply to suggestions but not the catalog", async (
   await uiFixture(async (f) => {
     f.field("Servizio musicale").value = "tidal"; await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     await card.children.find((node) => node.textContent === "Usa per suggerimenti").dispatch("click");
     await f.find("Leggi suggerimenti ufficiali · anteprima").dispatch("click");
@@ -672,7 +689,7 @@ test("saved artist exclusions apply to suggestions but not the catalog", async (
     await f.find("Leggi suggerimenti ufficiali · anteprima").dispatch("click");
     assert.equal(f.walk().filter((node) => node.getAttribute("class") === "suggestion-album tidal-album-result").length, 0);
     assert.equal(f.walk().some((node) => node.textContent === "Artista · Test Artist"), false);
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     assert.ok(f.walk().some((node) => node.getAttribute("class") === "suggestion-album tidal-album-result"));
   });
 });
@@ -685,7 +702,7 @@ test("artist exclusions match individual TIDAL credits without splitting names",
   await uiFixture(async (f) => {
     f.field("Servizio musicale").value = "tidal"; await f.field("Servizio musicale").dispatch("change");
     f.field("Titolo, artista o link album TIDAL").value = "Test";
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const card = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     await card.children.find((node) => node.textContent === "Usa per suggerimenti").dispatch("click");
     f.field("Artisti da escludere").value = "guest artist";
@@ -703,7 +720,7 @@ test("artist exclusions match individual TIDAL credits without splitting names",
     await f.find("Leggi suggerimenti ufficiali · anteprima").dispatch("click");
     await f.find("Album dell’artista").dispatch("click");
     assert.equal(f.walk().filter((node) => node.getAttribute("class") === "suggestion-album tidal-album-result").length, 0);
-    await f.find("Cerca · anteprima").dispatch("click");
+    await f.find("Cerca album").dispatch("click");
     const catalogCard = f.walk().find((node) => node.getAttribute("class") === "suggestion-album tidal-album-result");
     assert.ok(catalogCard);
     catalogCard.children[0].children[0].checked = true;

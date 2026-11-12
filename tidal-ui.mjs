@@ -1,9 +1,9 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=11";
+} from "./tidal.mjs?v=12";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
 import { configureMusicAppLink, musicLinkTarget, refreshMusicAppLinks, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=3";
-import { bindPauseNotice } from "./music-continuity.mjs?v=10";
+import { bindPauseNotice } from "./music-continuity.mjs?v=11";
 import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 
@@ -139,11 +139,15 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     return node;
   });
   const [library, suggestions, playlists] = sections;
-  const collectionDetails = element("details", "", { class: "tidal-collection-details" });
-  const collectionSummary = element("summary");
-  collectionSummary.append(element("span", "CATALOGO TIDAL", { class: "eyebrow" }),
-    element("strong", "Cerca e importa album TIDAL"));
-  collectionDetails.append(collectionSummary);
+  const libraryDialog = element("dialog", "", { class: "tidal-library-dialog", "aria-label": "Aggiungi album TIDAL" });
+  const libraryHeading = element("div", "", { class: "dialog-heading" });
+  libraryHeading.append(element("h2", "Aggiungi album TIDAL"));
+  button(libraryHeading, "Chiudi", () => libraryDialog.close());
+  libraryDialog.append(libraryHeading, library);
+  const libraryActions = element("div", "", { class: "dialog-actions" });
+  libraryDialog.append(libraryActions);
+  document.body.append(libraryDialog);
+  const collectionDetails = element("section", "", { class: "tidal-collection-details" });
   const collectionControls = element("div", "", { class: "tidal-controls tidal-collection-controls" });
   const catalogOptions = element("details", "", { class: "tidal-secondary-details" });
   catalogOptions.append(element("summary", "Opzioni catalogo"));
@@ -151,33 +155,35 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   const query = input(collectionControls, "Titolo, artista o link album TIDAL", "", { maxlength: "300" });
   query.id = "tidalAlbumQuery";
   let searchAlbumRows = null;
-  const searchOptions = albumSearchControls(collectionControls, { prefix: "tidalAlbumSearch",
+  const searchFilterDetails = element("details", "", { class: "tidal-secondary-details" });
+  searchFilterDetails.append(element("summary", "Filtri ricerca"));
+  const searchOptions = albumSearchControls(searchFilterDetails, { prefix: "tidalAlbumSearch",
     changed: () => { if (searchAlbumRows) showAlbumSearch(); } });
-  button(collectionControls, "Cerca · anteprima", () => read("search"), "primary");
-  button(collectionControls, "Leggi album dal link / ID", () => read("album"));
-  collectionDetails.append(collectionControls, catalogOptions,
-    element("p", "L’importazione aggiunge soltanto gli album selezionati alla raccolta locale. I preferiti TIDAL restano separati da stato e voto Accord.", { class: "summary" }));
-  const favoriteDetails = element("details", "", { class: "tidal-secondary-details" });
-  favoriteDetails.append(element("summary", "Mostra altre azioni"));
-  button(favoriteDetails, "Leggi i miei album preferiti · anteprima importazione", () => read("collection"));
-  library.append(collectionDetails, favoriteDetails);
-  const importDetails = element("details", "", { class: "tidal-playlist-import" });
-  importDetails.append(element("summary", "Importa album da una playlist TIDAL"));
+  button(collectionControls, "Cerca album", () => {
+    const text = query.value.trim();
+    return read(/^(?:https:\/\/|tidal:|[1-9][0-9]*$)/.test(text) ? "album" : "search");
+  }, "primary");
+  query.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const text = query.value.trim();
+      void read(/^(?:https:\/\/|tidal:|[1-9][0-9]*$)/.test(text) ? "album" : "search");
+    }
+  });
+  collectionDetails.append(collectionControls, searchFilterDetails, catalogOptions);
+  library.append(collectionDetails);
+  const importDetails = element("section", "", { class: "tidal-playlist-import" });
   const importControls = element("div", "", { class: "tidal-controls" });
-  const importAdvanced = element("details", "", { class: "tidal-secondary-details" });
-  importAdvanced.append(element("summary", "Usa un link o ID playlist"));
-  const importPlaylist = input(importAdvanced, "Playlist TIDAL da importare · ID o link", "", { maxlength: "300" });
+  const importPlaylist = input(importControls, "Link playlist TIDAL", "", {
+    maxlength: "300", placeholder: "Incolla il link della playlist",
+    title: "Mostra tutti gli album della playlist, senza modificarla.",
+  });
   importPlaylist.id = "tidalImportPlaylist";
-  importControls.append(importAdvanced);
   importDetails.append(importControls);
-  const listImportPlaylists = button(importDetails, "Elenca playlist TIDAL da importare", () => read("importPlaylists"));
-  button(importDetails, "Anteprima album della playlist TIDAL", () => read("importPlaylist"), "primary");
+  button(importControls, "Mostra album della playlist", () => read("importPlaylist"), "primary");
   importPlaylist.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); void read("importPlaylist"); }
   });
-  importDetails.append(element("p",
-    "Scegli una playlist salvata oppure incolla il link. Leggi l’anteprima e seleziona gli album da aggiungere: nessuna scrittura remota o sincronizzazione automatica.",
-    { class: "summary" }));
   library.append(importDetails);
 
   const suggestionsHeading = element("div", "", { class: "tidal-panel-heading" });
@@ -341,6 +347,7 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     albumTracksButton.disabled = !selected.some((row) => row.album);
     addTracksButton.disabled = !selected.some((row) => ["tracks", "videos"].includes(row.resource?.type));
   }
+  let outputInLibrary = true;
   function renderAlbumResult(row) {
     const item = element("article", "", { class: "suggestion-album tidal-album-result" });
     const choice = element("label", "", { class: "tidal-album-choice" });
@@ -370,7 +377,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
       });
       compare.prepend(row.compareCheck); item.append(compare);
     }
-    button(item, "Usa per suggerimenti", () => useSeed(row.album.id.slice(6), `${row.album.artist} · ${row.album.name}`, "similarAlbums"));
+    row.seedButton = button(item, "Usa per suggerimenti", () => useSeed(
+      row.album.id.slice(6), `${row.album.artist} · ${row.album.name}`, "similarAlbums"));
+    row.seedButton.hidden = outputInLibrary;
     if (row.resource?.id) {
       item.append(configureMusicAppLink(element("a", "Apri in TIDAL ↗", { class: "tidal-result-link" }),
         `https://tidal.com/browse/album/${encodeURIComponent(row.resource.id)}`));
@@ -474,18 +483,31 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     const active = document.querySelector(".view-tabs [aria-selected='true']");
     const target = sections.find((section) => section.dataset.tidalPanel === active?.getAttribute("aria-controls")) || library;
     target.append(output); output.hidden = gate.service !== "tidal";
+    const importing = target === library;
+    if (importing) libraryActions.append(actions);
+    else output.append(actions);
+    libraryActions.hidden = !importing;
+    outputInLibrary = importing;
+    for (const row of rows) if (row.seedButton) row.seedButton.hidden = importing;
+    albumTracksButton.hidden = importing;
+    addTracksButton.hidden = importing;
+    resultManagement.hidden = importing;
+    if (!importing && libraryDialog.open) libraryDialog.close();
   }
   document.querySelector(".view-tabs").addEventListener("click", () => queueMicrotask(moveOutput));
   document.querySelector(".view-tabs").addEventListener("keydown", () => queueMicrotask(moveOutput));
   function updateService() {
     gate.select(provider.value);
     const tidal = gate.service === "tidal";
+    if (!tidal && libraryDialog.open) libraryDialog.close();
     const qobuz = gate.service === "qobuz";
     spotifyCapabilities.hidden = tidal || qobuz;
     capabilities.hidden = !tidal;
     qobuzCapabilities.hidden = !qobuz;
     document.getElementById("playlistImportButton").hidden = false;
-    document.getElementById("playlistImportButton").textContent = `Importa playlist ${tidal ? "TIDAL" : qobuz ? "Qobuz" : "Spotify"}…`;
+    const importPlaylist = document.getElementById("playlistImportButton");
+    importPlaylist.textContent = "Da playlist...";
+    importPlaylist.title = `Leggi una playlist ${tidal ? "TIDAL" : qobuz ? "Qobuz" : "Spotify"} e scegli gli album da aggiungere.`;
     for (const section of sections) section.hidden = !tidal || section.dataset.tidalPanel === "suggestionsPanel";
     for (const id of ["suggestionsPanel", "playlistBuilderPanel"]) {
       for (const child of document.getElementById(id).children) {
@@ -527,11 +549,40 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   async function read(action) {
     return run(async () => {
       const current = epoch();
-      if (["search", "album", "collection"].includes(action)) collectionDetails.open = true;
       if (!/^[A-Za-z]{2}$/.test(country.value)) throw new Error("Immetti un codice paese ISO di due lettere.");
       const requestedPlaylist = ["playlist", "importPlaylist"].includes(action)
         ? tidalPlaylistId(action === "importPlaylist" ? importPlaylist.value : playlist.value) : null;
       const token = await auth.access(client.value.trim()); gate.assert("tidal", current);
+      if (action === "importPlaylist") {
+        let result, problem = "";
+        status.textContent = "Lettura degli album della playlist…";
+        try {
+          result = await transport.playlistAlbums(requestedPlaylist, token, {
+            countryCode: country.value.toUpperCase(),
+            progress: (tracks, albums) => {
+              gate.assert("tidal", current);
+              status.textContent = `${tracks} elementi letti · ${albums} album distinti…`;
+            },
+          });
+        } catch (error) {
+          if (!error.partialResults?.length) throw error;
+          result = { albums: error.partialResults, artwork: error.artwork };
+          problem = error.message;
+        }
+        gate.assert("tidal", current);
+        clearPreview(); results.replaceChildren(); rows = []; lastPlaylist = null;
+        searchAlbumRows = null; suggestionResultsActive = false;
+        for (const album of result.albums) {
+          const row = { album, coverUrl: result.artwork.get(album.id),
+            resource: { type: "albums", id: album.id.slice(6) }, label: `${album.name} · ${album.artist}` };
+          results.append(renderAlbumResult(row)); rows.push(row);
+        }
+        status.textContent = problem
+          ? `Lettura incompleta: ${rows.length} album disponibili. ${problem}`
+          : `${rows.length} album distinti. Seleziona quelli da aggiungere.`;
+        refreshSelectionControls();
+        return;
+      }
       let path, label = "", playlistId = null;
       if (action === "search") {
         const text = query.value.trim();
@@ -775,7 +826,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
   function openImport() {
     gate.assert("tidal"); selectView("collection");
     revealCollection();
-    importDetails.open = true; moveOutput(); listImportPlaylists.focus();
+    moveOutput();
+    if (!libraryDialog.open) libraryDialog.showModal();
+    importPlaylist.focus();
   }
   let editionSelection = null;
   function openCatalog(value = "", selection = null) {
@@ -784,7 +837,9 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     compareEditionsButton.disabled = true;
     gate.assert("tidal"); selectView("collection");
     revealCollection();
-    collectionDetails.open = true; query.value = value; moveOutput(); query.focus();
+    query.value = value; moveOutput();
+    if (!libraryDialog.open) libraryDialog.showModal();
+    query.focus();
   }
   function useSeed(id, label, kind) {
     gate.assert("tidal");

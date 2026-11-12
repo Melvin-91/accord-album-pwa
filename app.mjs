@@ -1,14 +1,14 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=18";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=19";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
   libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=2";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=13";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=14";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=9";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=10";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=10";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=11";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
 import {
   addPlaylistAlbums,
@@ -81,20 +81,21 @@ import {
   appendCollectionHistory, collectionHealthSummary, createCollectionHistoryEntry,
   prepareCollectionHistoryRestore, selectCollectionAlbum,
   runPlatformAccessChecks,
-  userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout, installControlHelp,
-} from "./ui.mjs?v=22";
-import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=11";
+  userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout, installControlHelp, installSelectWheelGuard,
+  reconcileAlbumCards,
+} from "./ui.mjs?v=23";
+import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=12";
 import { createQobuzClient } from "./qobuz.mjs?v=11";
 import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=3";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=8";
+} from "./music-qol.mjs?v=9";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=12";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=12";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=34";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=28";
+  from "./music-completion.mjs?v=13";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=13";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=35";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=29";
 import { qobuzAlbumId } from "./qobuz.mjs?v=11";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -1536,11 +1537,8 @@ function render(options = {}) {
   updateSelectionToolbar();
   renderCollectionFilterChips();
   $("#resetFiltersButton").hidden = !collectionHasFilters();
-  const filterCount = ["#primaryGenreFilter", "#secondaryGenreFilter", "#statusFilter",
-    "#collectionFilter", "#tagFilter"].filter((selector) => $(selector).value).length
-    + localCollectionChecks.filter((selector) => $(selector).checked).length
-    + Number($("#pinnedOnlyInput").checked) + Number(collectionSelectionOnly);
-  $("#activeFilterCount").textContent = filterCount ? `· ${filterCount} attivi` : "";
+  const filterCount = $("#collectionFilterChips").children.length;
+  $("#activeFilterCount").textContent = filterCount ? ` · ${filterCount} ${filterCount === 1 ? "attivo" : "attivi"}` : "";
   const manualSorting = sortOrder === "manual";
   const editionGroups = new Map(duplicateAlbumGroups(albums).flatMap(group => group.map(row => [row.id, group])));
   $("#manualOrderHint").hidden = !manualSorting;
@@ -1554,8 +1552,13 @@ function render(options = {}) {
   const previousCovers = new Map([...$("#albumList").children]
     .filter((card) => card.classList.contains("has-cover"))
     .map((card) => [card.dataset.albumId, card.querySelector(".cover-frame")]));
-  $("#albumList").replaceChildren();
-  const cardsFragment = document.createDocumentFragment();
+  const changedAlbumIds = new Set(options.changedAlbumIds || []);
+  const previousCards = new Map([...$("#albumList").children].map(card => [card.dataset.albumId, card]));
+  const sameOrder = [...previousCards.keys()].join("\n") === albums.map(album => album.id).join("\n");
+  const canReuseCards = changedAlbumIds.size && !options.remoteCovers && !$("#groupEditionsInput").checked
+    && (!manualSorting || sameOrder);
+  const scrollTop = $("#albumList").scrollTop;
+  const cards = [];
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
   $("#unratedSummary").textContent = `${state.albums.filter((album) =>
     smartAlbumMatch("unrated", album, qol.changedAt)).length} ascoltati senza voto · mostra`;
@@ -1567,7 +1570,14 @@ function render(options = {}) {
   $("#emptyActionButton").textContent = state.albums.length ? "Azzera filtri" : "Aggiungi il primo album";
   updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
+    const previousCard = previousCards.get(album.id);
+    if (canReuseCards && !changedAlbumIds.has(album.id) && previousCard?._albumIdentity === JSON.stringify(album)) {
+      previousCard.querySelector(".album-select").checked = selectedAlbumIds.has(album.id);
+      cards.push(previousCard);
+      continue;
+    }
     const card = template.content.firstElementChild.cloneNode(true);
+    card._albumIdentity = JSON.stringify(album);
     card.dataset.albumId = album.id;
     const selection = card.querySelector(".album-select");
     selection.checked = selectedAlbumIds.has(album.id);
@@ -1581,7 +1591,7 @@ function render(options = {}) {
     const pinned = pins.has(album.id);
     const favorite = (collectionPreferences.favoriteIds || []).includes(album.id);
     const favoriteButton = card.querySelector(".favorite-album");
-    favoriteButton.textContent = favorite ? "★" : "☆";
+    favoriteButton.textContent = favorite ? "★ Preferito" : "☆ Preferiti";
     favoriteButton.setAttribute("aria-pressed", String(favorite));
     const favoriteLabel = `${favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti"}: ${album.name}`;
     favoriteButton.setAttribute("aria-label", favoriteLabel);
@@ -1647,14 +1657,14 @@ function render(options = {}) {
     const secondary = document.createElement("details");
     secondary.className = "album-secondary";
     const secondaryHeading = document.createElement("summary");
-    secondaryHeading.textContent = "Altre azioni";
+    secondaryHeading.textContent = "Stato e azioni";
     const secondaryActions = document.createElement("div");
     secondaryActions.className = "album-secondary-actions";
     secondary.append(secondaryHeading, secondaryActions);
     card.querySelector(".album-actions").append(secondary);
     secondaryActions.append(quick, pinButton, card.querySelector(".manual-order-controls"));
     const choicesButton = document.createElement("button"); choicesButton.type = "button";
-    choicesButton.textContent = "Associazione, disponibilita' e rinvio...";
+    choicesButton.textContent = "Collegamento al catalogo...";
     choicesButton.addEventListener("click", () => openMusicChoices({ album }));
     secondaryActions.append(choicesButton);
     appendListeningActions(secondaryActions, album, {
@@ -1707,6 +1717,9 @@ function render(options = {}) {
       : sameQobuz ? "M8 8h13v13H8zM16 8V3H3v13h5"
         : "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6";
     link.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="${iconPath}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const linkCaption = document.createElement("span");
+    linkCaption.textContent = albumLink ? `Apri in ${serviceLabel}` : sameQobuz ? "Copia per Qobuz" : "Associa edizione";
+    link.append(linkCaption);
     link.title = `${label}: ${album.artist} · ${album.name}`;
     link.setAttribute("aria-label", link.title);
     {
@@ -1765,9 +1778,10 @@ function render(options = {}) {
     rating.addEventListener("change", () => updateAlbum(album.id, {
       rating: rating.value ? Number(rating.value) : null,
     }));
-    cardsFragment.append(card);
+    cards.push(card);
   }
-  $("#albumList").append(cardsFragment);
+  reconcileAlbumCards($("#albumList"), cards);
+  if (changedAlbumIds.size) $("#albumList").scrollTop = scrollTop;
   const retainedUrls = new Set([...$("#albumList").querySelectorAll(".album-cover")].map((image) => image.src));
   coverObjectUrls = coverObjectUrls.filter((url) => {
     if (retainedUrls.has(url)) return true;
@@ -5893,11 +5907,11 @@ function updateAlbum(id, changes) {
     if (!state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
     if (qol.drafts[`edit:${id}`]) throw new Error("Una bozza è presente per questo album: apri Dettagli per salvarla o scartarla prima della modifica rapida.");
     commitAlbumChanges(new Set([id]), changes);
-    render();
+    render({ changedAlbumIds: [id] });
     restoreFocus();
     showFeedback("Album salvato sul dispositivo");
   } catch (error) {
-    render();
+    render({ changedAlbumIds: [id] });
     restoreFocus();
     showFeedback(`Modifica non salvata: ${error.message}`, true);
   }
@@ -7340,10 +7354,6 @@ async function updateBackupStatus() {
   }
 }
 
-$("#viewMenu").addEventListener("toggle", () => {
-  if ($("#viewMenu").open) void updateBackupStatus();
-});
-
 $("#backupButton").addEventListener("click", async () => {
   try {
     if (state.loadError) throw new Error(state.loadError);
@@ -7708,7 +7718,7 @@ const qobuzUI = initializeQobuzUI({
 const tidalUI = initializeTidalUI({
   gate: musicService,
   selectView: selectMusicView,
-  revealCollection: () => collectionLayout?.show("import"),
+  revealCollection: () => collectionLayout?.close(false),
   playlistPrepared: (records) => catalogPlaylistUI.prepareRecords(records),
   addAlbum: (album, artwork) => {
     const record = validateAlbum(album);
@@ -7867,6 +7877,9 @@ setInterval(updateSpotifyPlaylistPause, 1000);
 window.addEventListener("storage", updateSpotifyPlaylistPause);
 updateSpotifyPlaylistPause();
 collectionLayout = installCollectionLayout(document);
+$(".collection-tools").addEventListener("toggle", () => {
+  if ($(".collection-tools").open) void updateBackupStatus();
+});
 bindQuickCollectionFilters();
 const associateCollectionButton = document.createElement("button");
 associateCollectionButton.id = "associateCollection";
@@ -7881,6 +7894,7 @@ associateCollectionButton.addEventListener("click", associateFilteredCollection)
 updateAssociationButton();
 installTechnicalStatusDetails(document.body);
 installControlHelp(document.body);
+installSelectWheelGuard(document);
 installDialogLayout(document.body);
 
 function platformAccessChecks() {

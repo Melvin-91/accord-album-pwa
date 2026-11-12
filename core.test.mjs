@@ -77,8 +77,37 @@ import {
   backupReminderItems,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
-  updateAlbumActivity, sortAlbumsByActivity, installControlHelp,
+  updateAlbumActivity, sortAlbumsByActivity, installControlHelp, installSelectWheelGuard,
 } from "./ui.mjs";
+
+test("wheel over an unfocused select scrolls its container without changing the selection", () => {
+  const listeners = new Map(), calls = [];
+  const view = { innerHeight: 600, scrollBy: (...args) => calls.push(args),
+    getComputedStyle: () => ({ overflowX: "hidden", overflowY: "auto" }) };
+  const root = { activeElement: null, defaultView: view,
+    addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: name => listeners.delete(name) };
+  const parent = { parentElement: null, scrollWidth: 100, clientWidth: 100,
+    scrollHeight: 400, clientHeight: 100, scrollTop: 0 };
+  const select = { multiple: false, size: 0, parentElement: parent };
+  const makeEvent = (extra = {}) => ({ target: { closest: () => select },
+    deltaX: 0, deltaY: 3, deltaMode: 1, preventDefault() { this.prevented = true; }, ...extra });
+  const stop = installSelectWheelGuard(root);
+  const event = makeEvent(); listeners.get("wheel")(event);
+  assert.equal(event.prevented, true);
+  assert.equal(parent.scrollTop, 48);
+  root.activeElement = select;
+  const focused = makeEvent(); listeners.get("wheel")(focused);
+  assert.equal(focused.prevented, undefined);
+  root.activeElement = null;
+  const zoom = makeEvent({ ctrlKey: true }); listeners.get("wheel")(zoom);
+  assert.equal(zoom.prevented, undefined);
+  parent.scrollHeight = parent.clientHeight;
+  const page = makeEvent(); listeners.get("wheel")(page);
+  assert.deepEqual(calls, [[0, 48]]);
+  stop();
+  assert.equal(listeners.size, 0);
+});
 
 test("local activity keeps original additions, ignores noops and sorts unknown dates last", () => {
   const before = [qosAlbum("a"), qosAlbum("b")];
@@ -155,7 +184,7 @@ test("favorite toggle persists before render, preserves pins and restores keyboa
   assert.equal(renders, 2);
   assert.equal(focused, 2);
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-  assert.match(html, /class="album-card">\s*<button class="favorite-album"[^]*aria-pressed="false"/);
+  assert.match(html, /class="album-actions"><button class="favorite-album"[^]*aria-pressed="false"/);
   assert.match(html, /id="favoritesOnlyFilter"/);
 });
 
@@ -173,10 +202,11 @@ test("dialogs fit the viewport, keep primary actions visible and avoid horizonta
   assert.match(css, /dialog \{[^}]*max-height: calc\(100dvh - 24px\);[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
   assert.match(css, /dialog form \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/);
   assert.match(css, /\.dialog-scroll \{[^}]*overflow-x: hidden; overflow-y: auto;/);
+  assert.match(css, /dialog :is\(\.restore-album-list, \.qol-details, \.conflict-list, \.command-results\) \{ max-height: none; overflow: visible; \}/);
   assert.match(css, /\.dialog-footer \{[^}]*border-top:/);
   assert.match(css, /\.qol-comparison-scroll \{[^}]*overflow-x: hidden;/);
   assert.doesNotMatch(css, /\.qol-conflict-table \{[^}]*min-width:/);
-  assert.doesNotMatch(css, /overflow-x:\s*auto/);
+  assert.doesNotMatch(css, /dialog(?:\s[^{]+)?\s*\{[^}]*overflow-x:\s*auto/);
 });
 
 test("message dialogs use natural height with a single viewport overflow fallback", () => {
@@ -327,7 +357,7 @@ test("incoming GET shares remove only share parameters, stage unknown albums, an
   const context = { URL, location: { href: original }, history: { state: {}, replaceState: (_state, _unused, url) => { replacement = url; } },
     musicService: { service: "spotify" }, spotifyAlbumIntent, state: { albums: [] }, $: (selector) => nodes[selector], activateViewTab() {}, showFeedback() {},
     openSpotifyAlbumIntent: () => { opens += 1; } };
-  const receive = runInNewContext(`${appFunction("function receiveSharedAlbum(", '\n$("#viewMenu").addEventListener')}\nreceiveSharedAlbum`, context);
+  const receive = runInNewContext(`${appFunction("function receiveSharedAlbum(", '\n$("#backupButton").addEventListener')}\nreceiveSharedAlbum`, context);
   receive();
   assert.equal(opens, 0);
   assert.equal(nodes["#openSpotifyInput"].value, `https://open.spotify.com/album/${id}`);
@@ -352,7 +382,7 @@ test("incoming TIDAL shares stage catalog lookup or open local details without a
     openAlbumDetails: (id) => opened.push(id),
     openSpotifyAlbumIntent() { assert.fail("Spotify must not be used"); },
   };
-  runInNewContext(`${appFunction("function openTidalAlbumIntent(", '\n$("#openSpotifyForm")')}\n${appFunction("function receiveSharedAlbum(", '\n$("#viewMenu").addEventListener')}\nreceiveSharedAlbum()`, context);
+  runInNewContext(`${appFunction("function openTidalAlbumIntent(", '\n$("#openSpotifyForm")')}\n${appFunction("function receiveSharedAlbum(", '\n$("#backupButton").addEventListener')}\nreceiveSharedAlbum()`, context);
   assert.deepEqual(staged, ["https://tidal.com/browse/album/42"]);
   assert.deepEqual(opened, []);
   assert.equal(replacement.searchParams.get("code"), "oauth");
@@ -1752,7 +1782,7 @@ test("installable shell links resolve locally and are present in the offline cac
   const manifestPath = html.match(/<link rel="manifest" href="([^"]+)"/)?.[1];
   const appPath = html.match(/<script type="module" src="([^"]+)"/)?.[1];
   const workerFiles = sw.match(/const FILES = \[([\s\S]*?)\];/)?.[1];
-  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">/);
   assert.ok(stylesheet, "The document must link its stylesheet");
   assert.ok(manifestPath, "The document must link its install manifest");
   assert.ok(appPath, "The document must load its application module");
@@ -1819,15 +1849,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=120", "style.css?v=42"]) {
+  for (const file of ["app.mjs?v=121", "style.css?v=43"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=49", "ui.mjs?v=22", "tidal.mjs?v=11", "tidal-ui.mjs?v=34", "qobuz-ui.mjs?v=28",
-    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=18",
-    "music-qol.mjs?v=8", "playlist-ui.mjs?v=13",
-    "music-app-links.mjs?v=3", "music-continuity.mjs?v=10", "album-association.mjs?v=9",
-    "music-completion.mjs?v=12", "music-completion-ui.mjs?v=12"]) {
+  for (const file of ["core.mjs?v=49", "ui.mjs?v=23", "tidal.mjs?v=12", "tidal-ui.mjs?v=35", "qobuz-ui.mjs?v=29",
+    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=19",
+    "music-qol.mjs?v=9", "playlist-ui.mjs?v=14",
+    "music-app-links.mjs?v=3", "music-continuity.mjs?v=11", "album-association.mjs?v=10",
+    "music-completion.mjs?v=13", "music-completion-ui.mjs?v=13"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

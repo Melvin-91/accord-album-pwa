@@ -2,6 +2,26 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.25.0 · Raccolta mobile e importazione TIDAL
+
+Su telefono la raccolta scorre come una pagina, con schede leggibili e
+comandi testuali. Aggiunta album, filtri e strumenti usano finestre a pieno
+schermo; il contenuto scorre senza nascondere le conferme. Titolo e artista
+sono immediatamente disponibili nella ricerca manuale, con le opzioni
+secondarie raccolte in un pannello espandibile.
+
+Ricerca album e lettura playlist TIDAL sono dirette, in una finestra
+dedicata. La lettura raggiunge l'ultima pagina della playlist, invece
+di fermarsi al limite della ricerca; conserva i risultati verificati
+e segnala eventuali interruzioni. Anche il catalogo Qobuz usa una finestra
+dedicata. Nessuna importazione o scrittura remota parte automaticamente.
+
+Le azioni della raccolta e della selezione sono raggruppate per attivita'.
+Le modifiche puntuali riusano le altre schede, senza ricostruire tutta la
+raccolta. Preferiti e collegamenti ai cataloghi hanno etichette visibili.
+Corretto anche un errore che interrompeva il primo avvio senza cache.
+Storage, credenziali e dati personali non cambiano con l'aggiornamento.
+
 ### PWA 1.24.0 · Raccolta compatta
 
 Filtri rapidi **Preferiti**, **Da ascoltare**, **Senza voto** accanto alla
