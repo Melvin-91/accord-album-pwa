@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { suggestDurationQueue, localCollectionMatch, listeningStep, selectionVisibility, reviewManualGenres,
+import { artistGenreSuggestions, suggestDurationQueue, localCollectionMatch, listeningStep, selectionVisibility, reviewManualGenres,
   appendListeningActions } from "./music-qol.mjs";
 import { filterAlbums, validateAlbum } from "./core.mjs";
 import {
-  visibleSelection, prepareAlbumReview, batchAlbumChanges, appendCollectionHistory,
+  visibleSelection, prepareAlbumReview, batchAlbumChanges, albumGenreChanges, appendCollectionHistory,
   collectionHealthSummary, commitLocalRestore, createCollectionHistoryEntry,
   prepareCollectionHistoryRestore,
   selectCollectionAlbum,
@@ -19,6 +19,18 @@ import {
 } from "./ui.mjs";
 
 const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+
+test("genre suggestions come from other albums of the exact artist and deduplicate matching classifications", () => {
+  const album = { id: "a", name: "Current", artist: "  ARTIST  " };
+  const albums = [album, { id: "b", name: "Other", artist: "Artist", genres: ["Power", "Metal"], primary_genre: "Metal" },
+    { id: "c", name: "Duplicate", artist: "artist", genres: ["metal", "POWER"] },
+    { id: "d", name: "Unrelated", artist: "Artist Two", genres: ["Jazz"] },
+    { id: "e", name: "Empty", artist: "Artist", genres: [] }];
+  const before = JSON.stringify(albums);
+  assert.deepEqual(artistGenreSuggestions(album, albums), [{ name: "Other", genres: ["Metal", "Power"] }]);
+  assert.deepEqual(artistGenreSuggestions({ ...album, artist: "" }, albums), []);
+  assert.equal(JSON.stringify(albums), before);
+});
 
 test("album reconciliation retains untouched nodes and handles edits, removals and sorting", () => {
   const mutations = [];
@@ -144,7 +156,8 @@ test("collection options keep every control connected and only one panel open", 
   const aside = document.getElementById("collectionOptions");
   assert.equal(aside.hidden, true);
   assert.equal(selection.parentElement.classList.contains("collection-results-footer"), true);
-  assert.deepEqual(primary.children.map((node) => node.id), ["bulkEditButton", "collectionSelectionToggle"]);
+  assert.deepEqual(primary.children.map((node) => node.id), ["bulkGenresButton", "bulkEditButton", "collectionSelectionToggle"]);
+  assert.equal(genres.textContent, "Modifica generi");
   assert.equal(bulk.parentElement, primary);
   assert.equal(clear.parentElement.tagName, "DETAILS");
   assert.deepEqual(options.children.map(group => group.children[0].textContent),
@@ -289,6 +302,7 @@ class Element {
   replaceChildren(...items) { this.children = items; }
   setAttribute(name, value) { this[name] = value; }
   addEventListener(name, fn) { this.events[name] = fn; }
+  dispatchEvent(event) { this.events[event.type]?.(event); }
   add(option) { this.children.push(option); if (!this.value) this.value = option.value; }
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -332,35 +346,85 @@ test("plain selection replaces hidden or visible members; only control-click tog
   assert.deepEqual([...selectCollectionAlbum(new Set(["hidden"]), "c", false, ["a", "b", "c"])], ["a", "b", "c"]);
 });
 
-test("dedicated multiple genre editor uses the existing guarded preview without changing other fields", () => {
+test("the genre editor assigns primary and secondary genres across different artists with guarded preview", () => {
   const albums = ["a", "b"].map((id) => validateAlbum({
-    id, name: id, artist: "Band", url: `https://open.spotify.com/album/${id}`,
-    year: "", status: "liked", rating: 4, genres: id === "a" ? ["Rock"] : [],
-    collections: [], tags: ["Keep"], notes: "", primary_genre: id === "a" ? "Rock" : "", cover_sha256: null,
+    id, name: id, artist: id === "a" ? "Band" : "Another artist", url: `https://open.spotify.com/album/${id}`,
+    year: "", status: "liked", rating: 4, genres: id === "a" ? ["Rock", "Punk"] : ["Jazz", "Fusion"],
+    collections: [], tags: ["Keep"], notes: "", primary_genre: id === "a" ? "Rock" : "Jazz", cover_sha256: null,
   }));
   let form, build;
   const body = new Element("body");
   const context = { document: { body, createElement: (tag) => new Element(tag) },
     Option: class { constructor(text, value) { this.textContent = text; this.value = value; } },
     selectedAlbumIds: new Set(["a", "b"]), visibleAlbums: albums, state: { albums },
-    labels: { liked: "Piaciuto" }, selectionVisibility, prepareAlbumReview, batchAlbumChanges, validateAlbum,
+    labels: { liked: "Piaciuto" }, selectionVisibility, prepareAlbumReview, batchAlbumChanges, albumGenreChanges, validateAlbum,
+    Event,
     reviewManualGenres, localStorage: { getItem: () => null }, COMPLETION_PROVENANCE_KEY: "provenance",
     appendAlbumReview: (target, _dialog, builder) => { form = target; build = builder; } };
   runInNewContext(appSection("function openBulkEditor(", "\nfunction appendAlbumReview(")
     + "\nopenBulkEditor({}, { genresOnly: true })", context);
-  assert.equal(body.children[0].children[0].textContent, "Generi di 2 album");
-  const rows = form.children.filter((child) => child.className === "qol-bulk-row");
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].children[1].checked, true);
-  rows[0].children[2].value = "Jazz";
+  assert.equal(body.children[0].children[0].textContent, "Generi musicali");
+  const rows = form.children.filter((child) => child.tag === "label");
+  assert.equal(rows.length, 2);
+  const primary = rows[0].children[1], secondary = rows[1].children[1];
+  assert.equal(primary["aria-label"], "Genere principale");
+  assert.equal(secondary["aria-label"], "Sottogenere");
+  assert.equal(primary.value, "");
+  assert.equal(secondary.value, "");
+  assert.throws(build, /Modifica almeno/);
+  primary.value = "Metal";
+  const partial = build();
+  assert.deepEqual(partial.next[0].genres, ["Metal", "Punk"]);
+  assert.deepEqual(partial.next[1].genres, ["Metal", "Fusion"]);
+  secondary.value = "Symphonic";
   const review = build();
-  assert.deepEqual(review.next[0].genres, ["Rock", "Jazz"]);
-  assert.deepEqual(review.next[1].genres, ["Jazz"]);
+  assert.deepEqual(review.next[0].genres, ["Metal", "Symphonic"]);
+  assert.deepEqual(review.next[1].genres, ["Metal", "Symphonic"]);
+  assert.equal(review.next[0].primary_genre, "Metal");
+  assert.equal(review.next[1].primary_genre, "Metal");
   assert.equal(review.next[0].rating, 4);
   assert.deepEqual(review.next[0].tags, ["Keep"]);
   assert.equal(review.related.provenance.a.genres.source, "manual");
+  form.children.find((child) => child.textContent === "Svuota entrambi").events.click();
+  assert.ok(build().next.every((album) => !album.genres.length && !album.primary_genre));
+  form.children.find((child) => child.textContent === "Annulla").events.click();
+  assert.equal(body.children[0].open, false);
+  assert.deepEqual(albums[0].genres, ["Rock", "Punk"]);
+  assert.deepEqual(albums[1].genres, ["Jazz", "Fusion"]);
   context.selectedAlbumIds.delete("b");
   assert.throws(build, /Selezione cambiata/);
+});
+
+test("the single genre editor uses the same primary and secondary fields and artist suggestions only prefill them", () => {
+  const albums = ["a", "b", "c"].map((id) => validateAlbum({
+    id, name: id, artist: id === "c" ? "Other artist" : "Band", url: `https://open.spotify.com/album/${id}`,
+    year: "", status: "queued", rating: null, genres: id === "a" ? ["Rock", "Punk"] : ["Metal", "Death"],
+    collections: [], tags: [], primary_genre: id === "a" ? "Rock" : "Metal", cover_sha256: null,
+  }));
+  let form, build;
+  const context = {
+    document: { body: new Element("body"), createElement: (tag) => new Element(tag) },
+    Option: class { constructor(text, value) { this.textContent = text; this.value = value; } },
+    Event, selectedAlbumIds: new Set(["a"]), visibleAlbums: albums, state: { albums }, labels: {},
+    selectionVisibility, prepareAlbumReview, albumGenreChanges, validateAlbum, artistGenreSuggestions,
+    reviewManualGenres, localStorage: { getItem: () => null }, COMPLETION_PROVENANCE_KEY: "provenance",
+    appendAlbumReview: (target, _dialog, builder) => { form = target; build = builder; },
+  };
+  runInNewContext(appSection("function openBulkEditor(", "\nfunction appendAlbumReview(")
+    + "\nopenBulkEditor({}, { genresOnly: true })", context);
+  const rows = form.children.filter((child) => child.tag === "label");
+  assert.equal(rows[0].children[1].value, "Rock");
+  assert.equal(rows[1].children[1].value, "Punk");
+  const suggestions = rows[2].children[0];
+  assert.equal(suggestions.children.length, 2);
+  suggestions.value = "0";
+  suggestions.events.change();
+  assert.equal(rows[0].children[1].value, "Metal");
+  assert.equal(rows[1].children[1].value, "Death");
+  const review = build();
+  assert.deepEqual(review.next[0].genres, ["Metal", "Death"]);
+  assert.equal(review.next[0].primary_genre, "Metal");
+  assert.deepEqual(albums[0].genres, ["Rock", "Punk"]);
 });
 
 test("local criteria combine with title/artist and distinguish missing durations, empty notes and catalog identity", () => {
@@ -433,6 +497,50 @@ test("selection toolbar keeps hidden IDs, shows counts, reveals selection and re
   context.selectedAlbumIds = visibleSelection(context.selectedAlbumIds, []);
   runInNewContext("updateSelectionToolbar()", context);
   assert.equal($("#selectionToolbar").hidden, true);
+});
+
+test("render clears albums excluded by new filters or edits under existing filters without selecting another album", () => {
+  const elements = new Map(), noop = () => {};
+  const $ = id => {
+    if (!elements.has(id)) elements.set(id, { value: "", checked: false, children: [] });
+    return elements.get(id);
+  };
+  $("#sortOrder").value = "artist";
+  const first = { id: "a", name: "First", artist: "Band", status: "liked", genres: [], collections: [], tags: [] };
+  const second = { ...first, id: "b", name: "Second" };
+  const other = { ...first, id: "c", name: "Other", status: "queued" };
+  const context = {
+    $, state: { albums: [first, second, other] }, selectedAlbumIds: new Set(["a", "b"]), visibleAlbums: [],
+    filterAlbums, visibleSelection, localCollectionMatch, collectionSelectionOnly: false,
+    collectionPreferences: { pinnedIds: [], favoriteIds: [] }, qol: { changedAt: {} }, localFacet: null,
+    facetReturnViews: [], appliedCollectionSearch: "", musicService: { service: "spotify" },
+    localStorage: { getItem: key => key === "queue" ? '{"durations":{}}' : "{}" },
+    LISTENING_QUEUE_KEY: "queue", ALBUM_DURATIONS_KEY: "durations",
+    readLibraryChoices: () => ({}), smartAlbumMatch: () => true, exactAlbumFacet: () => true,
+    duplicateAlbumGroups: () => [],
+    updateAssociationButton: noop, finishManualDrag: noop, ensureManualOrder: noop,
+    refreshGenreFilters: noop, refreshGroupFilter: noop, updateQuickCollectionFilters: noop,
+    updateSelectionToolbar: noop, renderCollectionFilterChips: noop, collectionHasFilters: () => false,
+    showFeedback: message => assert.fail(message),
+  };
+  const prefix = appSection("function render(options = {})", "  const generation = ++coverRenderGeneration;");
+  runInNewContext(`${prefix}\n}\n`, context);
+  $("#statusFilter").value = "liked";
+  runInNewContext("render()", context);
+  assert.deepEqual([...context.selectedAlbumIds], ["a", "b"]);
+  first.status = "neutral";
+  runInNewContext("render()", context);
+  assert.deepEqual([...context.selectedAlbumIds], ["b"]);
+  second.status = "neutral";
+  runInNewContext("render()", context);
+  assert.equal(context.selectedAlbumIds.size, 0);
+  $("#statusFilter").value = "";
+  runInNewContext("render()", context);
+  assert.equal(context.selectedAlbumIds.size, 0);
+  context.selectedAlbumIds = new Set(["a", "b", "c"]);
+  $("#statusFilter").value = "queued";
+  runInNewContext("render()", context);
+  assert.deepEqual([...context.selectedAlbumIds], ["c"]);
 });
 
 test("active criteria render removable chips even when the filter disclosure is collapsed", () => {

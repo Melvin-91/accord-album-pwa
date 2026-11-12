@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { configureMusicAppLink, desktopAppLinks, nativeMusicLink, webMusicLink,
   musicLinkTarget, MUSIC_LINK_TARGET_KEY, refreshMusicAppLinks } from "./music-app-links.mjs";
+import { setTidalAlbumLinkResolver } from "./music-app-links.mjs";
 import { musicAlbumLink } from "./tidal.mjs";
 
 test("music content links are native only, including tracks and playlists", () => {
@@ -39,6 +40,68 @@ class Link {
   removeAttribute(name) { delete this.attributes[name]; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
 }
+
+test("verified TIDAL links reserve the web tab on click, open the resolved edition, and close on cancel or error", async () => {
+  const originalOpen = Object.getOwnPropertyDescriptor(globalThis, "open");
+  let tab;
+  Object.defineProperty(globalThis, "open", { configurable: true, writable: true, value: () => (tab = {
+    document: { title: "", body: {} }, closed: false, location: { replace(value) { this.href = value; } },
+    close() { this.closed = true; },
+  }) });
+  try {
+    for (const outcome of ["success", "cancel", "error", "blocked"]) {
+      const storage = { getItem: () => "web" }, messages = [];
+      setTidalAlbumLinkResolver(storage, async () => {
+        if (outcome === "error") throw new Error("Rights unavailable");
+        return outcome === "cancel" ? null : "https://tidal.com/browse/album/3180424";
+      });
+      if (outcome === "blocked") globalThis.open = () => null;
+      const link = configureMusicAppLink(new Link(), "tidal://album/4004795", {
+        storage, report: message => messages.push(message),
+      });
+      let prevented = false;
+      await link.listeners.click({ preventDefault() { prevented = true; } });
+      assert.equal(prevented, true);
+      assert.equal(link.attributes["aria-busy"], undefined);
+      if (outcome === "success") {
+        assert.equal(tab.location.href, "https://listen.tidal.com/album/3180424");
+        assert.equal(tab.opener, null);
+      } else if (outcome !== "blocked") assert.equal(tab.closed, true);
+      if (outcome === "error") assert.deepEqual(messages, ["Rights unavailable"]);
+      if (outcome === "blocked") assert.match(messages[0], /Consenti/);
+    }
+  } finally {
+    if (originalOpen) Object.defineProperty(globalThis, "open", originalOpen);
+    else delete globalThis.open;
+  }
+});
+
+test("repeated clicks cannot queue another TIDAL verification while the first is pending", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "open");
+  let release, requests = 0, tabs = 0;
+  const tab = { document: { body: {} }, location: { replace() {} }, close() {} };
+  Object.defineProperty(globalThis, "open", { configurable: true, value: () => { tabs += 1; return tab; } });
+  try {
+    const storage = { getItem: () => "web" };
+    setTidalAlbumLinkResolver(storage, () => {
+      requests += 1;
+      return new Promise(resolve => { release = resolve; });
+    });
+    const link = configureMusicAppLink(new Link(), "tidal://album/4004795", { storage });
+    const event = { preventDefault() {} };
+    const pending = link.listeners.click(event);
+    await link.listeners.click(event);
+    await link.listeners.click(event);
+    assert.equal(requests, 1);
+    assert.equal(tabs, 1);
+    release("https://tidal.com/browse/album/3180424");
+    await pending;
+    assert.equal(link.href, "https://listen.tidal.com/album/3180424");
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "open", previous);
+    else delete globalThis.open;
+  }
+});
 
 test("native anchors have no new web tab or delayed browser fallback", async () => {
   const link = configureMusicAppLink(new Link(), "https://tidal.com/browse/album/123");

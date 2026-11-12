@@ -980,6 +980,44 @@ function appFunction(start, end) {
   return uiAppSource.slice(beginning, ending);
 }
 
+test("removing albums preserves desktop list and mobile document positions only after a successful save", () => {
+  for (const outcome of ["saved", "cancelled", "failed"]) {
+    const list = { scrollTop: 640, scrollLeft: 24 };
+    const state = { albums: [{ id: "a" }, { id: "b" }], manualOrder: ["a", "b"] };
+    const selectedAlbumIds = new Set(["a"]);
+    let restored = null;
+    let rendered = 0;
+    const context = {
+      state, selectedAlbumIds, Set,
+      $: () => list,
+      window: {
+        confirm: () => outcome !== "cancelled", scrollX: 0, scrollY: 960,
+        scrollTo: (position) => { restored = position; },
+      },
+      prepareAlbumRemoval,
+      saveState: () => { if (outcome === "failed") throw new Error("storage full"); },
+      showFeedback: () => {},
+      render: (options) => {
+        rendered++;
+        assert.deepEqual([...options.changedAlbumIds], ["a"]);
+        list.scrollTop = 0;
+        list.scrollLeft = 0;
+      },
+    };
+    runInNewContext(`${appFunction("function removeSelectedAlbums()", "function commitAlbumChanges(")}
+      removeSelectedAlbums();`, context);
+    assert.equal(rendered, outcome === "saved" ? 1 : 0);
+    assert.equal(list.scrollTop, 640);
+    assert.equal(list.scrollLeft, 24);
+    assert.equal(selectedAlbumIds.size, outcome === "saved" ? 0 : 1);
+    assert.equal(state.albums.length, outcome === "saved" ? 1 : 2);
+    if (outcome === "saved") {
+      assert.deepEqual(JSON.parse(JSON.stringify(restored)), { left: 0, top: 960, behavior: "instant" });
+      assert.equal(state.albums[0].id, "b");
+    } else assert.equal(restored, null);
+  }
+});
+
 test("manual album dialog defaults to Last.fm and preserves the saved search source", () => {
   const nodes = new Map();
   let savedSource = null;
@@ -1849,15 +1887,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=121", "style.css?v=43"]) {
+  for (const file of ["app.mjs?v=122", "style.css?v=43"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=49", "ui.mjs?v=23", "tidal.mjs?v=12", "tidal-ui.mjs?v=35", "qobuz-ui.mjs?v=29",
-    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=19",
-    "music-qol.mjs?v=9", "playlist-ui.mjs?v=14",
-    "music-app-links.mjs?v=3", "music-continuity.mjs?v=11", "album-association.mjs?v=10",
-    "music-completion.mjs?v=13", "music-completion-ui.mjs?v=13"]) {
+  for (const file of ["core.mjs?v=49", "ui.mjs?v=24", "tidal.mjs?v=13", "tidal-ui.mjs?v=36", "qobuz-ui.mjs?v=30",
+    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=20",
+    "music-qol.mjs?v=10", "playlist-ui.mjs?v=15",
+    "music-app-links.mjs?v=4", "music-continuity.mjs?v=12", "album-association.mjs?v=11",
+    "music-completion.mjs?v=14", "music-completion-ui.mjs?v=14"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

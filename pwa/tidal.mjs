@@ -1,5 +1,5 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
-import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=3";
+import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=4";
 import { createServiceRequests } from "./service-requests.mjs?v=3";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
@@ -81,6 +81,22 @@ export function tidalPlaylistId(value) {
   if (url.protocol !== "https:" || !["tidal.com", "www.tidal.com"].includes(url.host)
       || url.username || url.password || !match) throw new Error("Link playlist TIDAL non valido.");
   return match[1];
+}
+
+export function tidalAlbumStreamable(resource, resources, country) {
+  const refs = resource.relationships?.usageRules?.data;
+  for (const ref of Array.isArray(refs) ? refs : refs ? [refs] : []) {
+    const rules = resources.find(item => item.type === ref.type && item.id === ref.id)?.attributes;
+    if (rules?.countryCode !== country) continue;
+    if (!Array.isArray(rules.subscription) || !Array.isArray(rules.free)) return null;
+    if (rules.validFrom) {
+      const start = Date.parse(rules.validFrom);
+      if (!Number.isFinite(start)) return null;
+      if (start > Date.now()) return false;
+    }
+    return rules.subscription.includes("STREAM") || rules.free.includes("STREAM");
+  }
+  return null;
 }
 
 export function createTidalTransport({
@@ -195,6 +211,37 @@ export function createTidalTransport({
   return {
     ready: () => { guard(); requests.ready(); },
     request: requestJson,
+    async resolveAlbumLink(value, token, { countryCode } = {}) {
+      if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificato.");
+      const identifier = tidalAlbumId(value);
+      const params = new URLSearchParams({ "filter[id]": identifier, countryCode, include: "artists,usageRules" });
+      const page = await this.pages(`albums?${params}`, token);
+      if (!page.complete) throw new Error("Verifica TIDAL incompleta: nessun link aperto.");
+      const resources = tidalResources(page.documents);
+      const original = tidalAlbumRecords(page.documents).find(album => album.id === `tidal:${identifier}`);
+      const resource = resources.find(item => item.type === "albums" && item.id === identifier);
+      if (!original || !resource) throw new Error("Album TIDAL non trovato: cerca dal nome dell'artista.");
+      const streamable = tidalAlbumStreamable(resource, resources, countryCode);
+      if (streamable === null) throw new Error("TIDAL non comunica i diritti di streaming per questo paese. Nessun link aperto.");
+      if (streamable) return { album: original, original, country: countryCode };
+      const path = await this.searchPath(`${original.artist} ${original.name}`, "albums", token, {
+        countryCode, include: "albums.artists,albums.usageRules",
+      });
+      const matches = await this.pages(path, token);
+      if (!matches.complete) throw new Error("Ricerca delle edizioni TIDAL incompleta: nessun link aperto.");
+      const included = tidalResources(matches.documents);
+      const normalize = value => value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+      const candidates = tidalAlbumRecords(matches.documents).filter(album =>
+        normalize(album.artist) === normalize(original.artist) && normalize(album.name) === normalize(original.name)
+        && album.year === original.year
+        && normalize(included.find(item => item.type === "albums" && item.id === album.id.slice(6))?.attributes?.version || "")
+          === normalize(resource.attributes?.version || "")
+        && tidalAlbumStreamable(
+          included.find(item => item.type === "albums" && item.id === album.id.slice(6)), included, countryCode) === true);
+      if (candidates.length !== 1) throw new Error(`Edizione non riproducibile in ${countryCode}. `
+        + "Scegli l'edizione nel catalogo: corrispondenza assente o ambigua.");
+      return { album: candidates[0], original, country: countryCode };
+    },
     async searchPath(query, kind, token, { countryCode, include } = {}) {
       if (typeof query !== "string" || !query.trim() || query.length > 256
           || !["albums", "artists", "tracks", "playlists"].includes(kind)) {

@@ -42,6 +42,57 @@ const fixture = (respond, options = {}) => {
   return { transport, calls, local, advance: (ms) => { time += ms; } };
 };
 
+function streamingDocument(ids, playable = [], country = "IT") {
+  return {
+    data: ids.map(id => ({ type: "albums", id, attributes: { title: "Only Revolutions", releaseDate: "2009-11-10" },
+      relationships: { artists: { data: [{ type: "artists", id: "18535" }] },
+        usageRules: { data: { type: "usageRules", id: `rules-${id}` } } } })),
+    included: [{ type: "artists", id: "18535", attributes: { name: "Biffy Clyro" } },
+      ...ids.map(id => ({ type: "usageRules", id: `rules-${id}`,
+        attributes: { countryCode: country, subscription: playable.includes(id) ? ["STREAM"] : [], free: [] } }))],
+  };
+}
+
+test("album opening resolves the Italian streaming edition without changing stored album identities", async () => {
+  const f = fixture(url => {
+    const path = new URL(url).pathname;
+    if (path === "/v2/albums") return json(streamingDocument(["4004795"]));
+    if (path === "/v2/searchResults") return json({ data: [{ type: "searchResults", id: "opaque/search" }] });
+    return json(streamingDocument(["4004795", "3180424"], ["3180424"]));
+  });
+  const result = await f.transport.resolveAlbumLink("4004795", "token", { countryCode: "IT" });
+  assert.equal(result.original.id, "tidal:4004795");
+  assert.equal(result.album.id, "tidal:3180424");
+  assert.equal(result.country, "IT");
+  assert.equal(f.calls.length, 3);
+  assert.ok(f.calls.every(call => call.method === "GET" && new URL(call.url).searchParams.get("countryCode") === "IT"));
+});
+
+test("playable albums skip searches, and missing rights, ambiguous editions or other countries never pass", async () => {
+  const f = fixture(() => json(streamingDocument(["42"], ["42"])));
+  const result = await f.transport.resolveAlbumLink("42", "token", { countryCode: "IT" });
+  assert.equal(result.album.id, result.original.id);
+  assert.equal(f.calls.length, 1);
+  for (const mismatch of ["missing", "ambiguous", "country", "version", "artist"]) {
+    const denied = fixture(url => {
+      const path = new URL(url).pathname;
+      if (path === "/v2/albums") {
+        const doc = streamingDocument(["42"]);
+        if (mismatch === "missing") doc.included = doc.included.filter(item => item.type !== "usageRules");
+        return json(doc);
+      }
+      if (path === "/v2/searchResults") return json({ data: [{ type: "searchResults", id: "search" }] });
+      const doc = streamingDocument(mismatch === "ambiguous" ? ["43", "44"] : ["43"], ["43", "44"],
+        mismatch === "country" ? "US" : "IT");
+      if (mismatch === "version") doc.data[0].attributes.version = "Remastered";
+      if (mismatch === "artist") doc.included[0].attributes.name = "Different Artist";
+      return json(doc);
+    });
+    await assert.rejects(denied.transport.resolveAlbumLink("42", "token", { countryCode: "IT" }),
+      /non comunica|assente o ambigua/, mismatch);
+  }
+});
+
 test("playlist album import reads all pages beyond search limits and deduplicates in playlist order", async () => {
   const playlist = "4e17b836-f114-46e2-a2cf-70ec1b0e4c43";
   const progress = [];
@@ -501,24 +552,24 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.25\.0/); assert.match(sw, /v1\.25\.0/);
+  assert.match(html, /v1\.26\.0/); assert.match(sw, /v1\.26\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=121/); assert.match(sw, /style\.css\?v=43/);
-  assert.match(sw, /tidal\.mjs\?v=12/); assert.match(sw, /tidal-ui\.mjs\?v=35/);
+  assert.match(sw, /app\.mjs\?v=122/); assert.match(sw, /style\.css\?v=43/);
+  assert.match(sw, /tidal\.mjs\?v=13/); assert.match(sw, /tidal-ui\.mjs\?v=36/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v1\.25\.0/); assert.match(mirrorWorker, /v1\.25\.0/);
+    assert.match(mirrorHtml, /v1\.26\.0/); assert.match(mirrorWorker, /v1\.26\.0/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}malt_metal.ico"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=121", "style.css?v=43", "tidal-ui.mjs?v=35", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=29",
-      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=19", "music-suggestion-recipes.mjs?v=2",
-      "edition-comparison.mjs?v=2", "music-qol.mjs?v=9", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=14",
-      "music-app-links.mjs?v=3", "qobuz-playback.mjs?v=10", "music-suggestion-filters.mjs?v=3", "service-requests.mjs?v=3",
-      "music-continuity.mjs?v=11", "album-association.mjs?v=10",
-      "music-completion.mjs?v=13", "music-completion-ui.mjs?v=13", "runtime-status.mjs?v=2"]) {
+    for (const file of ["app.mjs?v=122", "style.css?v=43", "tidal-ui.mjs?v=36", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=30",
+      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=20", "music-suggestion-recipes.mjs?v=2",
+      "edition-comparison.mjs?v=2", "music-qol.mjs?v=10", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=15",
+      "music-app-links.mjs?v=4", "qobuz-playback.mjs?v=10", "music-suggestion-filters.mjs?v=3", "service-requests.mjs?v=3",
+      "music-continuity.mjs?v=12", "album-association.mjs?v=11",
+      "music-completion.mjs?v=14", "music-completion-ui.mjs?v=14", "runtime-status.mjs?v=2"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }

@@ -2,6 +2,19 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.26.0 · Generi e collegamenti TIDAL
+
+Modifica generi usa gli stessi campi principale e secondari per uno o piu'
+album, anche di artisti diversi. I campi non modificati conservano i valori
+di ciascun album; anteprima e annullamento restano disponibili. Gli album
+esclusi dai filtri vengono deselezionati e la rimozione conserva la posizione
+nella raccolta.
+
+I link TIDAL vengono verificati per il paese dell'account. Se l'edizione non
+e' abilitata, viene proposta un'alternativa disponibile, senza sostituire
+automaticamente gli album salvati. Gli eventuali limiti della verifica sono
+espliciti. Dati personali e sincronizzazione non cambiano.
+
 ### PWA 1.25.0 · Raccolta mobile e importazione TIDAL
 
 Su telefono la raccolta scorre come una pagina, con schede leggibili e

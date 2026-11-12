@@ -1,9 +1,10 @@
 import {
   TIDAL_SCOPES, createTidalTransport, createTidalAuth, tidalAlbumId, tidalPlaylistId, tidalAlbumRecords, tidalResources, tidalAlbumArtwork,
-} from "./tidal.mjs?v=12";
+} from "./tidal.mjs?v=13";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
-import { configureMusicAppLink, musicLinkTarget, refreshMusicAppLinks, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=3";
-import { bindPauseNotice } from "./music-continuity.mjs?v=11";
+import { configureMusicAppLink, musicLinkTarget, refreshMusicAppLinks, MUSIC_LINK_TARGET_KEY,
+  setTidalAlbumLinkResolver, webMusicLink } from "./music-app-links.mjs?v=4";
+import { bindPauseNotice } from "./music-continuity.mjs?v=12";
 import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 
@@ -52,6 +53,26 @@ export function initializeTidalUI({ gate, addAlbum, changed, selectView = () => 
     },
   });
   const auth = createTidalAuth({ session: sessionStorage, transport });
+  setTidalAlbumLinkResolver(localStorage, async (value) => {
+    if (gate.service !== "tidal" || !sessionStorage.getItem("accord-tidal-token-v1")) {
+      status.textContent = "Apertura del link originale: disponibilita' non verificata. "
+        + "Seleziona e collega TIDAL per verificare l'edizione nel paese dell'account.";
+      return value;
+    }
+    const current = epoch(), account = accountRevision, configuredClient = client.value.trim();
+    const token = await auth.access(configuredClient);
+    gate.assert("tidal", current);
+    const profile = await transport.request("users/me", token);
+    const countryCode = profile.data?.attributes?.country;
+    const result = await transport.resolveAlbumLink(webMusicLink(value), token, { countryCode });
+    gate.assert("tidal", current);
+    if (account !== accountRevision || configuredClient !== client.value.trim()) throw new Error("Account TIDAL cambiato.");
+    if (result.album.id !== result.original.id && !confirm(
+      `${result.original.artist} · ${result.original.name}\nL'edizione ${result.original.id.slice(6)} `
+      + `non e' riproducibile in ${result.country}.\nAprire l'edizione disponibile ${result.album.id.slice(6)}? `
+      + "Album e voti restano invariati.")) return null;
+    return result.album.url;
+  });
   const serviceBox = element("section", "", { class: "music-service-picker", "aria-label": "Servizio musicale" });
   serviceBox.append(element("p", "SERVIZIO MUSICALE", { class: "eyebrow" }));
   const provider = selection(serviceBox, "Servizio musicale", [["spotify", "Spotify"], ["tidal", "TIDAL"], ["qobuz", "Qobuz"]]);

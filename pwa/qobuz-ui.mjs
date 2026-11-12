@@ -2,8 +2,8 @@ import { createQobuzClient, qobuzCredentials, qobuzNumericId, qobuzAlbumId } fro
 import { qobuzBundleSecrets, qobuzStreamUrl } from "./qobuz-playback.mjs?v=10";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
 import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
-import { configureMusicAppLink } from "./music-app-links.mjs?v=3";
-import { bindPauseNotice } from "./music-continuity.mjs?v=11";
+import { configureMusicAppLink } from "./music-app-links.mjs?v=4";
+import { bindPauseNotice } from "./music-continuity.mjs?v=12";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 
 const SESSION = "accord-qobuz-session-v1";

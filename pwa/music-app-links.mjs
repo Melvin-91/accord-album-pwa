@@ -1,4 +1,9 @@
 const linkUpdates = new WeakMap();
+const tidalAlbumResolvers = new WeakMap();
+
+export function setTidalAlbumLinkResolver(storage, resolve) {
+  tidalAlbumResolvers.set(storage, resolve);
+}
 
 export function refreshMusicAppLinks(root = globalThis.document) {
   for (const link of root.querySelectorAll("a[data-music-link]")) linkUpdates.get(link)?.();
@@ -39,7 +44,7 @@ export function nativeMusicLink(value, { desktop = desktopAppLinks() } = {}) {
 export function configureMusicAppLink(link, value, { query = "", report = () => {}, desktop,
   storage = globalThis.localStorage } = {}) {
   const originalText = link.textContent;
-  let copying = false;
+  let copying = false, opening = false;
   const update = () => {
     const web = musicLinkTarget(storage) === "web";
     const uri = web ? webMusicLink(value) : nativeMusicLink(value, { desktop });
@@ -74,8 +79,56 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
     }
   };
   link.addEventListener("click", async (event) => {
-    try { if (!update()) await copy(event); }
-    catch (error) { event.preventDefault(); report(error.message); }
+    if (opening) { event.preventDefault(); return; }
+    let tab = null;
+    try {
+      if (!update()) { await copy(event); return; }
+      const resolve = tidalAlbumResolvers.get(storage);
+      if (!resolve || !/^tidal:\/\/album\/[1-9][0-9]*$/.test(nativeMusicLink(value, { desktop: true }))) return;
+      event.preventDefault();
+      opening = true;
+      link.setAttribute("aria-busy", "true");
+      const target = musicLinkTarget(storage);
+      if (target === "web") {
+        tab = globalThis.open("about:blank", "_blank");
+        if (!tab) throw new Error("Consenti l'apertura della scheda TIDAL nel browser e riprova.");
+        tab.opener = null;
+        tab.document.title = "Verifica edizione TIDAL";
+        tab.document.body.textContent = "Verifica della disponibilita' TIDAL in corso...";
+      }
+      const verified = await resolve(value);
+      if (!verified) { tab?.close(); return; }
+      if (musicLinkTarget(storage) !== target) throw new Error("Apertura App/Web cambiata: riprova.");
+      const uri = target === "web" ? webMusicLink(verified) : nativeMusicLink(verified, { desktop });
+      value = verified;
+      update();
+      if (target === "web") {
+        if (tab.closed) throw new Error("Scheda TIDAL chiusa: nessun collegamento aperto.");
+        tab.location.replace(uri);
+      } else if (globalThis.navigator?.userActivation && !globalThis.navigator.userActivation.isActive) {
+        const dialog = document.createElement("dialog");
+        const caption = document.createElement("p");
+        caption.textContent = "Edizione TIDAL verificata.";
+        const open = document.createElement("a");
+        open.href = uri; open.textContent = "Apri nell'app TIDAL"; open.target = "_self";
+        open.addEventListener("click", () => dialog.close());
+        const cancel = document.createElement("button");
+        cancel.type = "button"; cancel.textContent = "Annulla";
+        cancel.addEventListener("click", () => dialog.close());
+        dialog.append(caption, open, cancel);
+        dialog.setAttribute("aria-label", "Apri edizione TIDAL verificata");
+        dialog.addEventListener("close", () => dialog.remove());
+        document.body.append(dialog);
+        dialog.showModal();
+      } else globalThis.location.assign(uri);
+    } catch (error) {
+      event.preventDefault();
+      tab?.close();
+      report(error.message);
+    } finally {
+      opening = false;
+      link.removeAttribute("aria-busy");
+    }
   });
   link.addEventListener("keydown", (event) => {
     if (copying && (event.key === "Enter" || event.key === " ")) {

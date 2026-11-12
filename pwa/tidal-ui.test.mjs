@@ -77,7 +77,9 @@ class Node {
     if (!this.listeners.has(name)) this.listeners.set(name, []);
     this.listeners.get(name).push(listener);
   }
-  async dispatch(name) { for (const listener of this.listeners.get(name) || []) await listener({ target: this }); }
+  async dispatch(name) {
+    for (const listener of this.listeners.get(name) || []) await listener({ target: this, preventDefault() {} });
+  }
   focus() { this.focused = true; }
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -181,7 +183,10 @@ async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget =
       assert.match(String(url), /^https:\/\/openapi\.tidal\.com\/v2\//);
       const path = new URL(url).pathname;
       let document = albumResponse;
-      if (path === "/v2/searchResults") document = {
+      if (path === "/v2/users/me") document = {
+        data: { type: "users", id: "synthetic-account", attributes: { country: "IT" } },
+      };
+      else if (path === "/v2/searchResults") document = {
         data: [{ type: "searchResults", id: `opaque/${new URL(url).searchParams.get("filter[query]")}` }],
       };
       else if (path === "/v2/userCollectionPlaylists/me/relationships/items") document = {
@@ -217,6 +222,41 @@ async function uiFixture(run, albumResponse = albumDocument, initialLinkTarget =
     }
   }
 }
+
+test("TIDAL result links verify the account market and confirm a playable edition without importing or relinking albums", async () => {
+  const document = {
+    data: ["4004795", "3180424"].map(id => ({
+      type: "albums", id, attributes: { title: "Only Revolutions", releaseDate: "2009-11-10" },
+      relationships: { artists: { data: [{ type: "artists", id: "9" }] },
+        usageRules: { data: { type: "usageRules", id: `rules-${id}` } } },
+    })),
+    included: [{ type: "artists", id: "9", attributes: { name: "Biffy Clyro" } },
+      ...["4004795", "3180424"].map(id => ({ type: "usageRules", id: `rules-${id}`,
+        attributes: { countryCode: "IT", subscription: id === "3180424" ? ["STREAM"] : [], free: [] } }))],
+  };
+  await uiFixture(async f => {
+    const opened = [], confirmations = [];
+    globalThis.location.assign = value => opened.push(value);
+    globalThis.confirm = message => { confirmations.push(message); return true; };
+    f.gate.select("tidal");
+    f.field("Titolo, artista o link album TIDAL").value = "Biffy Clyro Only Revolutions";
+    await f.find("Cerca album").dispatch("click");
+    const link = f.walk().find(node => node.href === "tidal://album/4004795");
+    assert.ok(link);
+    await link.dispatch("click");
+    assert.deepEqual(opened, ["tidal://album/3180424"]);
+    assert.equal(confirmations.length, 1);
+    assert.match(confirmations[0], /4004795.*non e' riproducibile in IT/);
+    assert.ok(f.calls.some(call => new URL(call.url).pathname === "/v2/users/me"));
+    assert.deepEqual(f.imported, []);
+    assert.equal(f.local.getItem("accord-music-edition-links-v1"), null);
+    f.session.removeItem("accord-tidal-token-v1");
+    const calls = f.calls.length;
+    await link.dispatch("click");
+    assert.equal(opened.at(-1), "tidal://album/3180424");
+    assert.equal(f.calls.length, calls);
+  }, document);
+});
 
 test("compact link selector remembers web choice without switching service or reading catalogs", async () => {
   await uiFixture(async f => {

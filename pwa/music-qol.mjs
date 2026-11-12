@@ -1,6 +1,23 @@
-import { validEdition } from "./music-continuity.mjs?v=11";
+import { validEdition } from "./music-continuity.mjs?v=12";
 
 const normalized = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+
+export function artistGenreSuggestions(album, albums) {
+  const artist = normalized(album.artist);
+  const seen = new Set();
+  const suggestions = [];
+  if (!artist) return suggestions;
+  for (const other of albums) {
+    if (other.id === album.id || normalized(other.artist) !== artist || !other.genres?.length) continue;
+    const primary = other.genres.find((genre) => normalized(genre) === normalized(other.primary_genre)) || other.genres[0];
+    const genres = [primary, ...other.genres.filter((genre) => normalized(genre) !== normalized(primary))];
+    const key = JSON.stringify([normalized(primary), genres.map(normalized).sort()]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    suggestions.push({ name: other.name, genres });
+  }
+  return suggestions;
+}
 
 export function listeningStep(album) {
   if (!["liked", "neutral", "disliked"].includes(album.status)) {

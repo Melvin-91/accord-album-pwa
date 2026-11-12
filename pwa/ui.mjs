@@ -451,11 +451,11 @@ export function installCollectionLayout(document) {
     heading.title = selectionHelpText[caption];
     group.append(heading); selectionGroups.set(caption, group);
   }
-  selectionOptions.append(document.getElementById("bulkGenresButton"), document.getElementById("clearSelectionButton"));
+  selectionOptions.append(document.getElementById("clearSelectionButton"));
   for (const child of [...selectionOptions.children]) {
     const id = child.id || child.querySelector?.("input, select")?.id;
     const group = ["bulkStatus", "applyBulkStatus"].includes(id) ? "Ascolto"
-      : ["bulkGenresButton", "pinSelectedButton", "unpinSelectedButton", "removeSelectedButton"].includes(id)
+      : ["pinSelectedButton", "unpinSelectedButton", "removeSelectedButton"].includes(id)
         ? "Organizza" : "Selezione";
     selectionGroups.get(group).append(child);
   }
@@ -466,7 +466,7 @@ export function installCollectionLayout(document) {
   selectionOptions.append(...selectionGroups.values());
   addPage("selection", secondary, "Azioni", selection.querySelector(".selection-primary"));
   pages.get("selection").title = "Album selezionati";
-  document.getElementById("bulkGenresButton").textContent = "Generi";
+  document.getElementById("bulkGenresButton").textContent = "Modifica generi";
   document.getElementById("bulkEditButton").textContent = "Modifica";
   const selectionHelp = panel.querySelector(".selection-help");
   selection.title = selectionHelp.textContent;
@@ -941,6 +941,13 @@ export function suggestionWhy(album) {
   if (album.reason || album.matchReason) return [album.reason, album.matchReason].filter(Boolean).join("\n");
   if (album.spotifyArtistId) return `Ripiego Spotify per generi condivisi: ${(album.genres || []).join(", ") || "non comunicati"}`;
   return "Riferimenti non disponibili nel risultato salvato. Nessuna nuova ricerca eseguita.";
+}
+
+export function albumGenreChanges(album, values) {
+  const primary = Object.hasOwn(values, "primary_genre") ? values.primary_genre : album.primary_genre || "";
+  const secondary = Object.hasOwn(values, "secondary_genres") ? values.secondary_genres
+    : album.genres.filter((genre) => genre.toLocaleLowerCase() !== (album.primary_genre || "").toLocaleLowerCase());
+  return { primary_genre: primary, genres: [primary, ...secondary].filter(Boolean) };
 }
 
 export function batchAlbumChanges(album, values, mode = "replace") {

@@ -1,14 +1,14 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=19";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=20";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
   libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=2";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=14";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=15";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=10";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=11";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=11";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=12";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
 import {
   addPlaylistAlbums,
@@ -72,7 +72,7 @@ import {
   prepareAlbumRemoval,
   visibleSelection,
   duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch, updateAlbumActivity, sortAlbumsByActivity, normalizeAlbumActivity,
-  albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
+  albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges, albumGenreChanges,
   normalizeAccessibility, adjacentAlbumIds, spotifyAlbumIntent, playlistPreviewStatistics,
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore as persistLocalRestore,
   backupReminderItems,
@@ -83,19 +83,19 @@ import {
   runPlatformAccessChecks,
   userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout, installControlHelp, installSelectWheelGuard,
   reconcileAlbumCards,
-} from "./ui.mjs?v=23";
-import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=12";
+} from "./ui.mjs?v=24";
+import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=13";
 import { createQobuzClient } from "./qobuz.mjs?v=11";
-import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=3";
+import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=4";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
-  selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=9";
+  selectionVisibility, appendListeningActions, reviewManualGenres, artistGenreSuggestions,
+} from "./music-qol.mjs?v=10";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=13";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=13";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=35";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=29";
+  from "./music-completion.mjs?v=14";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=14";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=36";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=30";
 import { qobuzAlbumId } from "./qobuz.mjs?v=11";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -1052,6 +1052,8 @@ function removeSelectedAlbums() {
   )) return;
   const previousAlbums = state.albums;
   const previousOrder = state.manualOrder;
+  const list = $("#albumList");
+  const position = { top: list.scrollTop, left: list.scrollLeft, x: window.scrollX, y: window.scrollY };
   try {
     state.albums = prepareAlbumRemoval(previousAlbums, ids);
     state.manualOrder = previousOrder.filter((id) => !ids.has(id));
@@ -1063,8 +1065,11 @@ function removeSelectedAlbums() {
     return;
   }
   selectedAlbumIds.clear();
-  render();
+  render({ changedAlbumIds: ids });
   showFeedback(`${count} album rimossi localmente · sincronizza per propagare la modifica`);
+  list.scrollTop = position.top;
+  list.scrollLeft = position.left;
+  window.scrollTo({ left: position.x, top: position.y, behavior: "instant" });
 }
 
 function commitAlbumChanges(ids, changes) {
@@ -1533,7 +1538,7 @@ function render(options = {}) {
   $("#facetSummary").hidden = !localFacet;
   $("#facetSummary").textContent = localFacet ? `Filtro locale esatto · ${localFacet.field}: ${localFacet.value}` : "";
   visibleAlbums = albums;
-  selectedAlbumIds = visibleSelection(selectedAlbumIds, state.albums);
+  selectedAlbumIds = visibleSelection(selectedAlbumIds, visibleAlbums);
   updateSelectionToolbar();
   renderCollectionFilterChips();
   $("#resetFiltersButton").hidden = !collectionHasFilters();
@@ -5271,40 +5276,91 @@ function composeDurationQueue() {
 function openBulkEditor(initialValues = {}, { genresOnly = false } = {}) {
   if (!selectedAlbumIds.size) return;
   const ids = new Set(selectedAlbumIds);
+  const selected = state.albums.filter((album) => ids.has(album.id));
   const genreEditTime = new Date().toISOString();
   const dialog = document.createElement("dialog");
   const heading = document.createElement("h2");
-  heading.textContent = genresOnly ? `Generi di ${ids.size} album` : `Modifica ${ids.size} album`;
+  heading.textContent = genresOnly ? "Generi musicali" : `Modifica ${ids.size} album`;
   const hidden = selectionVisibility(ids, visibleAlbums).hidden;
   const notice = document.createElement("p");
-  notice.textContent = `${hidden} nascosti dai filtri inclusi. Solo i campi spuntati cambiano. `
+  notice.textContent = genresOnly
+    ? `${ids.size} album selezionati. Solo i campi modificati si applicano alla selezione; gli altri restano invariati.`
+    : `${hidden} nascosti dai filtri inclusi. Solo i campi spuntati cambiano. `
     + "Aggiungi mantiene gli altri valori; Rimuovi toglie solo quelli indicati; Sostituisci con elenco vuoto svuota il campo.";
   dialog.setAttribute("aria-label", heading.textContent);
   const form = document.createElement("form");
   const controls = new Map();
-  const fields = genresOnly ? [["genres", "Generi"]] : [["status", "Stato"],
+  const fields = genresOnly ? [["primary_genre", "Genere principale"], ["secondary_genres", "Sottogenere"]] : [["status", "Stato"],
     ["rating", "Voto (vuoto = nessun voto)"], ["genres", "Generi"], ["collections", "Collezioni"], ["tags", "Tag"]];
   for (const [key, caption] of fields) {
     const row = document.createElement("label");
-    row.className = "qol-bulk-row";
+    if (!genresOnly) row.className = "qol-bulk-row";
     const captionText = document.createElement("span");
     captionText.textContent = caption;
     const enabled = document.createElement("input");
     enabled.type = "checkbox";
-    enabled.checked = genresOnly;
+    enabled.checked = false;
     enabled.setAttribute("aria-label", `Applica ${caption}`);
     const field = document.createElement(key === "status" ? "select" : "input");
     if (key === "status") for (const [value, label] of Object.entries(labels)) field.add(new Option(label, value));
     else if (key === "rating") { field.type = "number"; field.min = "0.5"; field.max = "5"; field.step = "0.5"; }
     else field.placeholder = "Valori separati da virgole";
+    if (genresOnly) {
+      field.setAttribute("aria-label", caption);
+      const values = selected.map((album) => key === "primary_genre" ? album.primary_genre
+        : album.genres.filter((genre) => genre.toLocaleLowerCase() !== (album.primary_genre || "").toLocaleLowerCase()).join(", "));
+      field.value = values.every((value) => value === values[0]) ? values[0] || "" : "";
+      field.placeholder = values.every((value) => value === values[0])
+        ? key === "primary_genre" ? "Scegli o scrivi il genere principale" : "Separa piu' sottogeneri con una virgola"
+        : "Generi diversi: lascia invariati o scegli";
+    }
     if (Object.hasOwn(initialValues, key)) {
       enabled.checked = true;
       field.value = initialValues[key];
     }
     field.addEventListener("input", () => { enabled.checked = true; });
-    row.append(captionText, enabled, field);
+    row.append(captionText);
+    if (!genresOnly) row.append(enabled);
+    row.append(field);
+    if (genresOnly) {
+      const suggestions = document.createElement("datalist");
+      suggestions.id = `album-${key}-suggestions`;
+      field.setAttribute("list", suggestions.id);
+      const known = new Set(state.albums.flatMap((album) => key === "primary_genre" ? [album.primary_genre].filter(Boolean)
+        : album.genres.filter((genre) => genre.toLocaleLowerCase() !== (album.primary_genre || "").toLocaleLowerCase())));
+      for (const value of [...known].sort((a, b) => a.localeCompare(b))) suggestions.append(new Option(value, value));
+      row.append(suggestions);
+    }
     form.append(row);
-    controls.set(key, { enabled, field });
+    controls.set(key, { enabled, field, initial: field.value });
+  }
+  if (ids.size === 1) {
+    const album = state.albums.find((record) => ids.has(record.id));
+    const suggestions = artistGenreSuggestions(album, state.albums);
+    if (suggestions.length) {
+      const label = document.createElement("label");
+      label.textContent = `Già usati per ${album.artist}`;
+      const choice = document.createElement("select");
+      choice.setAttribute("aria-label", label.textContent);
+      choice.title = "Compila i generi; conferma l'anteprima per salvare.";
+      choice.add(new Option("Scegli da un altro album...", ""));
+      for (const [index, source] of suggestions.entries()) {
+        choice.add(new Option(`${source.genres.join(", ")} — ${source.name}`, String(index)));
+      }
+      choice.addEventListener("change", () => {
+        if (choice.value === "") return;
+        const source = suggestions[Number(choice.value)];
+        for (const key of genresOnly ? ["primary_genre", "secondary_genres"] : ["genres"]) {
+          const { enabled, field } = controls.get(key);
+          field.value = key === "primary_genre" ? source.genres[0]
+            : key === "secondary_genres" ? source.genres.slice(1).join(", ") : source.genres.join(", ");
+          enabled.checked = true;
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      });
+      label.append(choice);
+      form.append(label);
+    }
   }
   const mode = document.createElement("select");
   mode.setAttribute("aria-label", "Modifica generi, collezioni e tag");
@@ -5317,24 +5373,37 @@ function openBulkEditor(initialValues = {}, { genresOnly = false } = {}) {
   close.type = "button";
   close.textContent = "Annulla";
   close.addEventListener("click", () => dialog.close());
-  form.append(mode, error);
+  if (genresOnly) {
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.textContent = "Svuota entrambi";
+    clear.addEventListener("click", () => {
+      for (const { enabled, field } of controls.values()) {
+        field.value = "";
+        enabled.checked = true;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+    form.append(clear);
+  } else form.append(mode);
+  form.append(error);
   appendAlbumReview(form, dialog, () => {
       if (ids.size !== selectedAlbumIds.size || [...ids].some((id) => !selectedAlbumIds.has(id))) {
         throw new Error("Selezione cambiata: riapri la modifica multipla.");
       }
       const values = {};
-      for (const [key, { enabled, field }] of controls) {
-        if (!enabled.checked) continue;
-        values[key] = key === "status" ? field.value : key === "rating" ? (field.value ? Number(field.value) : null)
+      for (const [key, { enabled, field, initial }] of controls) {
+        if (!enabled.checked && !(genresOnly && field.value !== initial)) continue;
+        values[key] = key === "status" || key === "primary_genre" ? field.value : key === "rating" ? (field.value ? Number(field.value) : null)
           : field.value.split(",").map((value) => value.trim()).filter(Boolean);
         if (["genres", "collections", "tags"].includes(key) && mode.value !== "replace" && !values[key].length) {
           delete values[key];
         }
       }
-      if (!Object.keys(values).length) throw new Error("Spunta almeno un campo.");
+      if (!Object.keys(values).length) throw new Error(genresOnly ? "Modifica almeno un campo." : "Spunta almeno un campo.");
       const review = prepareAlbumReview(state.albums, ids,
-        (album) => validateAlbum({ ...album, ...batchAlbumChanges(album, values, mode.value) }));
-      return Object.hasOwn(values, "genres")
+        (album) => validateAlbum({ ...album, ...(genresOnly ? albumGenreChanges(album, values) : batchAlbumChanges(album, values, mode.value)) }));
+      return genresOnly || Object.hasOwn(values, "genres")
         ? reviewManualGenres(review, ids, localStorage, COMPLETION_PROVENANCE_KEY, genreEditTime) : review;
   }, error);
   form.append(close);
