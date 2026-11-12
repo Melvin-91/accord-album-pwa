@@ -1,5 +1,154 @@
 const LOCAL_LAYOUTS = new Set(["comfortable", "compact"]);
 
+export function controlHelp(label) {
+  const key = label.trim().replace(/[.\u2026]+$/, "").toLocaleLowerCase();
+  const descriptions = {
+    "sincronizza": "Confronta la raccolta locale con il repository GitHub configurato e sincronizza le modifiche.",
+    "filtri": "Scegli quali album mostrare senza modificare la raccolta salvata.",
+    "vista": "Regola presentazione, ordinamento e viste salvate; non modifica gli album.",
+    "ascolto": "Raccoglie i comandi per scegliere e aprire la musica da ascoltare.",
+    "catalogo e dati": "Raccoglie associazioni, classificazione, completamento dei metadati e controlli della raccolta.",
+    "salvataggio": "Raccoglie sincronizzazione, backup, cronologia e bozze locali.",
+    "altre azioni": "Apri i comandi aggiuntivi, raggruppati per funzione.",
+    "preferiti": "Mostra solo gli album contrassegnati con la stellina.",
+    "album preferiti": "Mostra solo gli album contrassegnati con la stellina.",
+    "senza voto": "Mostra gli album a cui non hai ancora assegnato un voto.",
+    "note presenti": "Mostra gli album con una nota salvata.",
+    "associazione mancante": "Mostra gli album non ancora collegati al catalogo del servizio selezionato.",
+    "dettagli": "Mostra le informazioni e i comandi di questo album.",
+    "fissa": "Mantiene questo album prima degli altri nella raccolta, indipendentemente dall'ordinamento.",
+    "non fissare": "Riporta questo album nell'ordinamento normale della raccolta.",
+    "salva": "Salva i valori inseriti nel modulo corrente.",
+    "annulla": "Esci da questa operazione senza confermare le modifiche proposte.",
+    "chiudi": "Chiudi questo pannello o questa finestra.",
+    "impostazioni": "Configura i servizi collegati e le preferenze di questo dispositivo.",
+    "statistiche": "Mostra un riepilogo della raccolta usando i dati locali.",
+    "comandi": "Cerca e apri un comando senza navigare nei menu.",
+    "seleziona visibili": "Seleziona solo gli album attualmente mostrati dopo i filtri.",
+    "azzera filtri": "Mostra tutta la raccolta mantenendo ordinamento e presentazione.",
+    "selezione": "Mostra le azioni applicabili soltanto agli album selezionati.",
+    "applica filtri": "Ricalcola i risultati usando i criteri selezionati.",
+    "applica ricetta": "Usa i criteri della ricetta selezionata per la ricerca dei suggerimenti.",
+    "indietro": "Ritorna alla vista precedente mantenendone i criteri di visualizzazione.",
+    "pagina precedente": "Mostra il gruppo precedente di risultati mantenendo gli stessi filtri.",
+    "pagina successiva": "Mostra il gruppo successivo di risultati mantenendo gli stessi filtri.",
+    "riproduci": "Avvia la riproduzione del brano o album selezionato con il player configurato.",
+    "pausa": "Mette in pausa la riproduzione corrente senza svuotare la coda.",
+    "ferma": "Interrompe la riproduzione corrente.",
+    "valuta": "Assegna il tuo voto all'album selezionato.",
+    "segna ascoltato": "Cambia lo stato d'ascolto dell'album selezionato.",
+    "fissa in evidenza": "Mantiene l'album prima degli altri senza cambiare il suo voto o la stellina.",
+    "sposta all'inizio": "Porta gli album selezionati all'inizio dell'ordine manuale della raccolta.",
+    "sposta in fondo": "Porta gli album selezionati alla fine dell'ordine manuale della raccolta.",
+    "dettagli ricerca": "Mostra criteri e informazioni aggiuntive sulla ricerca dei suggerimenti.",
+    "scorciatoie": "Mostra le combinazioni di tasti disponibili nell'interfaccia.",
+    "attivit\u00e0": "Mostra le operazioni in corso e gli esiti delle operazioni recenti.",
+    "preferenze e collegamenti": "Configura i servizi collegati e le preferenze di questo dispositivo.",
+    "raccolta album": "Mostra gli album salvati sul dispositivo, con filtri e comandi di modifica.",
+    "suggerimenti": "Cerca nuova musica usando i riferimenti e i criteri selezionati.",
+    "chiudi il pannello della raccolta": "Nasconde il pannello laterale lasciando invariata la raccolta e i suoi filtri.",
+    "cosa ascolto adesso?": "Sceglie un album tra quelli filtrati, senza avviare automaticamente la riproduzione.",
+    "coda per tempo disponibile": "Prepara una sequenza di album con durate note entro il tempo scelto.",
+    "confronta possibili duplicati": "Confronta le edizioni simili della raccolta senza unirle automaticamente.",
+    "controllo qualit\u00e0 locale": "Mostra possibili anomalie nei dati della raccolta senza interrogare i servizi.",
+    "statistiche locali": "Mostra un riepilogo della raccolta usando soltanto i dati del dispositivo.",
+    "uniforma etichette locali": "Prepara la revisione delle varianti equivalenti di generi, collezioni e tag.",
+    "cronologia modifiche locali": "Mostra le modifiche locali con il comando per ripristinarle.",
+    "modifiche da sincronizzare": "Confronta i dati musicali con la base GitHub salvata, senza contattare il server.",
+    "disponibilita' offline": "Controlla quali parti dell'app e della raccolta sono gia' disponibili senza rete.",
+    "gestisci copertine offline": "Mostra lo spazio usato dalle immagini e permette di rimuoverle senza cancellare gli album.",
+    "scarica backup locale": "Prepara il file di backup dei dati musicali locali, senza credenziali o token.",
+  };
+  if (descriptions[key]) return descriptions[key];
+  for (const [prefix, explanation] of [
+    ["esporta", "Prepara un file con i dati indicati"],
+    ["importa", "Legge i dati da una fonte o da un file da scegliere"],
+    ["ripristina", "Apre il recupero dei dati indicati da un salvataggio precedente"],
+    ["elimina", "Rimuove gli elementi indicati"],
+    ["rimuovi", "Toglie gli elementi o il collegamento indicati"],
+    ["aggiungi", "Apre l'inserimento degli elementi indicati"],
+    ["modifica", "Apre la modifica dei dati indicati"],
+    ["aggiorna", "Rilegge i dati del pannello corrente"],
+    ["cerca", "Cerca gli elementi indicati usando i criteri del modulo"],
+    ["associa", "Collega l'elemento selezionato alla destinazione indicata"],
+    ["completa", "Prepara il completamento dei dati mancanti indicati"],
+    ["apri", "Apre la pagina, il collegamento o il pannello indicato"],
+    ["mostra", "Visualizza le informazioni indicate"],
+    ["copia", "Copia negli appunti il contenuto indicato"],
+    ["salva", "Salva le impostazioni o i dati indicati"],
+    ["carica", "Legge dalla fonte indicata i dati da usare nel pannello"],
+    ["elenca", "Legge e mostra l'elenco richiesto"],
+    ["leggi", "Recupera i dati indicati per mostrarli o prepararne l'anteprima"],
+    ["scegli", "Apre la scelta dell'elemento indicato"],
+    ["prepara", "Costruisce un'anteprima degli elementi indicati"],
+    ["crea", "Crea il nuovo elemento indicato usando i dati del modulo"],
+    ["genera", "Costruisce il risultato indicato usando i criteri del modulo"],
+    ["avvia", "Inizia l'operazione indicata"],
+    ["verifica", "Controlla lo stato o la validita' degli elementi indicati"],
+    ["torna", "Ritorna all'elenco di provenienza"],
+    ["continua", "Prosegue la ricerca dal punto in cui era stata interrotta"],
+    ["riprendi", "Riapre lo stato dell'operazione precedentemente conservato"],
+    ["scopri", "Usa l'elemento selezionato come riferimento per cercare suggerimenti"],
+    ["rivedi", "Apre la revisione degli elementi indicati"],
+    ["escludi", "Toglie gli elementi indicati dai criteri della ricerca corrente"],
+    ["pulisci", "Rimuove i dati locali indicati dalla selezione del pannello"],
+    ["dettagli di", "Mostra informazioni e comandi dell'album indicato"],
+    ["fissa", "Mantiene l'album indicato prima degli altri nell'ordinamento"],
+    ["non fissare", "Riporta l'album indicato nell'ordinamento normale della raccolta"],
+    ["bozze locali", "Mostra le modifiche lasciate in bozza per riprenderle o scartarle"],
+    ["svuota", "Svuota l'elenco o il contenuto locale indicato"],
+    ["dimentica", "Rimuove la copia o la credenziale salvata su questo dispositivo, senza cancellare la fonte originale"],
+    ["collega", "Avvia il collegamento o l'autorizzazione al servizio indicato"],
+    ["scollega", "Interrompe l'accesso locale al servizio indicato"],
+    ["seleziona", "Include gli elementi indicati nella selezione corrente"],
+    ["deseleziona", "Toglie gli elementi dalla selezione senza cancellarli"],
+    ["imposta", "Sceglie il valore da applicare agli elementi indicati"],
+    ["applica", "Applica i valori e i criteri indicati dal modulo corrente"],
+    ["conferma", "Conferma le scelte mostrate nel modulo corrente"],
+  ]) if (key.startsWith(prefix)) return `${explanation}: ${label}.`;
+  return `Comando del pannello corrente: ${label}.`;
+}
+
+export function installControlHelp(root) {
+  const generated = new WeakMap();
+  const explain = (event) => {
+    const control = event.target.closest?.("button, input, select, textarea, summary, a");
+    if (!control) return;
+    if (!control.title && control.labels?.[0]?.title) {
+      control.title = control.labels[0].title;
+      return;
+    }
+    const caption = control.labels?.[0]?.cloneNode(true);
+    caption?.querySelectorAll("input,select,textarea,button").forEach(node => node.remove());
+    const label = (control.getAttribute("aria-label") || caption?.textContent
+      || (control.tagName === "SELECT" ? "" : control.textContent) || control.placeholder || "").trim();
+    if (!label || control.title && control.title !== label && control.title !== generated.get(control)) return;
+    let text;
+    if (control.getAttribute("role") === "tab") text = `Apri la sezione ${label}, senza eseguire operazioni.`;
+    else if (control.tagName === "SELECT") text = `Scegli un valore per ${label} dal menu a tendina.`;
+    else if (control.matches("input[type=checkbox], input[type=radio]")) {
+      text = controlHelp(label);
+      if (text.startsWith("Comando del pannello")) text = `Attiva o disattiva: ${label}.`;
+    }
+    else if (control.matches("input[type=range]")) text = `Regola ${label} trascinando il cursore o usando i tasti freccia.`;
+    else if (control.matches("input, textarea")) text = `Inserisci o modifica ${label}.`;
+    else text = controlHelp(label);
+    if (text.startsWith("Comando del pannello") && control.tagName === "SUMMARY") {
+      text = `Mostra o nasconde le opzioni e le spiegazioni di questa sezione: ${label}.`;
+    } else if (text.startsWith("Comando del pannello") && control.tagName === "A") {
+      text = `Apri il collegamento indicato: ${label}.`;
+    }
+    control.title = text;
+    generated.set(control, text);
+  };
+  root.addEventListener("pointerover", explain);
+  root.addEventListener("focusin", explain);
+  return () => {
+    root.removeEventListener("pointerover", explain);
+    root.removeEventListener("focusin", explain);
+  };
+}
+
 export function userFacingStatus(message) {
   const text = String(message).split("Dettagli tecnici:")[0];
   return text.split("\n").filter((line) =>
@@ -95,6 +244,7 @@ export function installCollectionLayout(document) {
   const actions = toolbar.querySelector(".playlist-import-actions");
   const search = panel.querySelector(".collection-search");
   actions.prepend(search);
+  toolbar.append(document.getElementById("quickCollectionFilters"));
   const manualAlbum = document.getElementById("manualAlbumButton");
   manualAlbum.textContent = "+ Album";
   manualAlbum.setAttribute("aria-label", "Aggiungi album alla raccolta");
@@ -190,12 +340,31 @@ export function installCollectionLayout(document) {
       "collectionLayout", "pinnedOnlyInput", "groupEditionsInput"].includes(control?.id)) toolsContent.append(child);
   }
   viewContent.append(tools);
+  const toolGroups = new Map();
+  for (const caption of ["Ascolto", "Catalogo e dati", "Salvataggio"]) {
+    const group = document.createElement("details");
+    const heading = document.createElement("summary");
+    heading.textContent = caption;
+    group.append(heading);
+    if (caption === "Catalogo e dati") group.id = "collectionCatalogTools";
+    toolGroups.set(caption, group);
+  }
+  for (const child of [...toolsContent.children]) {
+    const id = child.id || child.querySelector?.("input, select")?.id;
+    const group = ["pickAlbumButton", "durationQueueButton", "openSpotifyForm"].includes(id) ? "Ascolto"
+      : ["backupButton", "verifyBackupButton", "verifyBackupInput", "restoreBackupInput", "backupStatus",
+          "syncChangesButton", "collectionHistoryButton", "offlineStatusButton", "coverStorageButton", "draftListButton"].includes(id)
+        ? "Salvataggio" : "Catalogo e dati";
+    toolGroups.get(group).append(child);
+  }
+  toolsContent.append(...toolGroups.values());
+  toolGroups.get("Catalogo e dati").append(document.getElementById("reviewMusicAssociations"));
   addPage("view", view, "Vista");
   const imports = document.createElement("details");
   const importSummary = document.createElement("summary");
   importSummary.textContent = "Importa album";
   imports.append(importSummary, document.getElementById("playlistImportButton"), document.getElementById("tidalCollectionMount"));
-  addPage("import", imports, "Importa album", toolsContent);
+  addPage("import", imports, "Importa album", toolGroups.get("Catalogo e dati"));
   pages.get("import").returnButton = pages.get("view").button;
   const storage = panel.querySelector(".collection-storage-details");
   const coverNotice = document.getElementById("coverSyncNotice");
@@ -360,6 +529,38 @@ export function collectionAuditSummary(albums, coveredIds = new Set()) {
     missingGenreIds: albums.filter((album) => !(album.genres || []).length && !album.primary_genre)
       .map((album) => album.id).sort(),
   };
+}
+
+export function normalizeAlbumActivity(activity = {}) {
+  if (!activity || typeof activity !== "object" || Array.isArray(activity)
+      || Object.values(activity).some(dates => !dates || typeof dates !== "object" || Array.isArray(dates)
+        || Object.keys(dates).some(field => !["added", "modified"].includes(field))
+        || Object.values(dates).some(stamp => typeof stamp !== "string" || stamp && !Number.isFinite(Date.parse(stamp))))) {
+    throw new Error("Date locali degli album non valide.");
+  }
+  return Object.fromEntries(Object.entries(activity).map(([id, dates]) => [id, { ...dates }]));
+}
+
+export function updateAlbumActivity(before, after, activity = {}, now = new Date().toISOString(), restoring = false) {
+  const result = normalizeAlbumActivity(activity);
+  const old = new Map(before.map(album => [album.id, album]));
+  for (const album of after) {
+    const previous = activity[album.id] || {};
+    const changed = !old.has(album.id) || albumFieldChanges(old.get(album.id), album).length > 0;
+    const dates = { ...previous };
+    if (!old.has(album.id) && !restoring) dates.added = now;
+    if (changed) dates.modified = now;
+    if (Object.keys(dates).length) result[album.id] = dates;
+  }
+  return result;
+}
+
+export function sortAlbumsByActivity(albums, activity, field) {
+  return [...albums].sort((a, b) => {
+    const left = Date.parse(activity[a.id]?.[field] || "") || 0;
+    const right = Date.parse(activity[b.id]?.[field] || "") || 0;
+    return right - left || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+  });
 }
 
 export function albumFieldChanges(before, after) {
@@ -1051,6 +1252,19 @@ export function commitLocalRestore(storage, key, current, next, related = {}, hi
   }
   const beforeAlbums = Array.isArray(savedCollection.albums) ? savedCollection.albums : [];
   const afterAlbums = collectionWrite && Array.isArray(next.albums) ? next.albums : beforeAlbums;
+  const now = new Date().toISOString();
+  const previousHistory = Array.isArray(savedCollection.collectionHistory) ? savedCollection.collectionHistory : [];
+  const restoring = collectionWrite && Array.isArray(next.collectionHistory)
+    && next.collectionHistory.some(entry => entry?.restoredAt
+      && !previousHistory.find(previous => previous.id === entry.id)?.restoredAt);
+  const activity = updateAlbumActivity(beforeAlbums, afterAlbums, savedCollection.activity, now,
+    restoring);
+  const knownIds = new Set(afterAlbums.map(album => album.id));
+  for (const change of historyChanges) if (knownIds.has(change.id)) {
+    activity[change.id] = { ...activity[change.id], modified: now };
+  }
+  if (collectionWrite) next = { ...next, activity };
+  else if (historyChanges.length) candidateRecords[COLLECTION_STORAGE_KEY] = { ...savedCollection, activity };
   const entry = historyLabel !== null && (key === COLLECTION_STORAGE_KEY || historyChanges.length)
     ? createCollectionHistoryEntry(beforeAlbums, afterAlbums, historyLabel, new Date().toISOString(), historyChanges)
     : null;
@@ -1058,14 +1272,15 @@ export function commitLocalRestore(storage, key, current, next, related = {}, hi
     next = { ...next, collectionHistory: savedCollection.collectionHistory || [] };
   }
   if (entry) {
-    let history = Array.isArray(savedCollection.collectionHistory) ? savedCollection.collectionHistory : [];
+    let history = previousHistory;
     if (collectionWrite && Array.isArray(next.collectionHistory)) {
       const marked = new Map(next.collectionHistory.filter((row) => row?.restoredAt).map((row) => [row.id, row.restoredAt]));
       history = history.map((row) => marked.has(row.id) ? { ...row, restoredAt: marked.get(row.id) } : row);
     }
     history = appendCollectionHistory(history, entry);
     if (collectionWrite) next = { ...next, collectionHistory: history };
-    else candidateRecords[COLLECTION_STORAGE_KEY] = { ...savedCollection, collectionHistory: history };
+    else candidateRecords[COLLECTION_STORAGE_KEY] = {
+      ...(candidateRecords[COLLECTION_STORAGE_KEY] || savedCollection), collectionHistory: history };
   }
   const writesByKey = new Map([[key, JSON.stringify(next)]]);
   for (const [relatedKey, value] of Object.entries(related)) {

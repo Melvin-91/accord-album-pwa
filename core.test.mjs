@@ -77,7 +77,42 @@ import {
   backupReminderItems,
   exactAlbumFacet, normalizeAlbumFacet, prepareAlbumReview, assertAlbumReviewCurrent, labelNormalizationProposals,
   normalizeAlbumLabels, coverStorageInventory, createCommandGuard, redactDiagnostics, technicalDiagnostics,
+  updateAlbumActivity, sortAlbumsByActivity, installControlHelp,
 } from "./ui.mjs";
+
+test("local activity keeps original additions, ignores noops and sorts unknown dates last", () => {
+  const before = [qosAlbum("a"), qosAlbum("b")];
+  const initial = { a: { added: "2020-01-01", modified: "2020-01-02" } };
+  assert.deepEqual(updateAlbumActivity(before, before, initial, "2030-01-01"), initial);
+  const edited = updateAlbumActivity(before, [{ ...before[0], notes: "Note" }, before[1], qosAlbum("c")],
+    initial, "2030-01-01");
+  assert.deepEqual(edited.a, { added: "2020-01-01", modified: "2030-01-01" });
+  assert.deepEqual(edited.c, { added: "2030-01-01", modified: "2030-01-01" });
+  assert.deepEqual(sortAlbumsByActivity([...before, qosAlbum("c")], edited, "added").map(album => album.id), ["c", "a", "b"]);
+  const removed = updateAlbumActivity(before, [before[1]], initial, "2031-01-01");
+  assert.deepEqual(updateAlbumActivity([before[1]], before, removed, "2032-01-01", true).a,
+    { added: "2020-01-01", modified: "2032-01-01" });
+  assert.throws(() => updateAlbumActivity(before, before, { a: { added: "not-a-date" } }), /Date locali/);
+});
+
+test("shared hover help explains dynamic commands and preserves explicit descriptions", () => {
+  const listeners = new Map();
+  const root = { addEventListener: (name, callback) => listeners.set(name, callback),
+    removeEventListener: (name) => listeners.delete(name) };
+  const stop = installControlHelp(root);
+  const control = { title: "", tagName: "BUTTON", textContent: "Salva", getAttribute: () => null,
+    closest() { return this; }, matches() { return false; } };
+  listeners.get("pointerover")({ target: control });
+  assert.match(control.title, /valori inseriti/);
+  control.textContent = "Esporta backup";
+  listeners.get("focusin")({ target: control });
+  assert.match(control.title, /file/);
+  control.title = "Salva solo una bozza locale.";
+  listeners.get("pointerover")({ target: control });
+  assert.equal(control.title, "Salva solo una bozza locale.");
+  stop();
+  assert.equal(listeners.size, 0);
+});
 
 const qosAlbum = (id, fields = {}) => validateAlbum({ id, name: `Album ${id}`, artist: "Band",
   url: `https://open.spotify.com/album/${id}`, year: "2026", status: "queued", rating: null,
@@ -1651,7 +1686,7 @@ test("one music service controls the association button and the missing-associat
   assert.ok(!uiAppSource.includes("#serviceFilter"));
   const button = {};
   const musicService = { service: "tidal" };
-  const update = runInNewContext(appFunction("function updateAssociationButton(", "\n$(\"#missingAssociationFilter\")")
+  const update = runInNewContext(appFunction("function updateAssociationButton(", "\n$(\"#collectionCatalogTools\")")
     + "\nupdateAssociationButton", { $: id => id === "#associateCollection" ? button : null, musicService });
   for (const [provider, name] of [["tidal", "TIDAL"], ["spotify", "Spotify"], ["qobuz", "Qobuz"]]) {
     musicService.service = provider; update();
@@ -1784,15 +1819,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=119", "style.css?v=41"]) {
+  for (const file of ["app.mjs?v=120", "style.css?v=42"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=49", "ui.mjs?v=21", "tidal.mjs?v=11", "tidal-ui.mjs?v=33", "qobuz-ui.mjs?v=27",
-    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=17",
-    "music-qol.mjs?v=7", "playlist-ui.mjs?v=12",
-    "music-app-links.mjs?v=3", "music-continuity.mjs?v=9", "album-association.mjs?v=8",
-    "music-completion.mjs?v=11", "music-completion-ui.mjs?v=11"]) {
+  for (const file of ["core.mjs?v=49", "ui.mjs?v=22", "tidal.mjs?v=11", "tidal-ui.mjs?v=34", "qobuz-ui.mjs?v=28",
+    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=18",
+    "music-qol.mjs?v=8", "playlist-ui.mjs?v=13",
+    "music-app-links.mjs?v=3", "music-continuity.mjs?v=10", "album-association.mjs?v=9",
+    "music-completion.mjs?v=12", "music-completion-ui.mjs?v=12"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }

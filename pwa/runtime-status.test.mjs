@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { createUpdateLifecycle, localCollectionStatus, musicalChanges, serviceFailure } from "./runtime-status.mjs";
-import { commitLocalRestore, createCollectionHistoryEntry, appendCollectionHistory, albumChanges, formatSyncSummary } from "./ui.mjs";
+import { commitLocalRestore, createCollectionHistoryEntry, appendCollectionHistory, albumChanges, formatSyncSummary, updateAlbumActivity } from "./ui.mjs";
 import { validateDocument } from "./core.mjs";
 
 const key = "accord-album-pwa-v1";
@@ -208,7 +208,7 @@ test("real saveState reports quota failure and preserves persisted identity unti
   const context = { state, localStorage: storage, STORAGE_KEY: key, localSaveError: "",
     persistedCollectionIdentity: JSON.stringify([state.albums, state.base]),
     normalizeLocalAlbums: (albums) => albums,
-    appendCollectionHistory, createCollectionHistoryEntry, updateLocalSyncSummary() {},
+    appendCollectionHistory, createCollectionHistoryEntry, updateAlbumActivity, updateLocalSyncSummary() {},
     showFeedback: (message) => messages.push(message) };
   const save = runInNewContext(`${section("function saveState(", "\nfunction ensureManualOrder(")}\nsaveState`, context);
   state.albums = [{ ...album, notes: "New" }];

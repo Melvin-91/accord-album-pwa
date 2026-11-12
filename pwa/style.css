@@ -418,6 +418,13 @@ body:has(#collectionPanel:not([hidden])) .view-tabs { flex: none; margin-block: 
 .collection-toolbar .music-service-picker > p { display: none; }
 .collection-toolbar .music-service-picker > label { font-size: 0; gap: 0; }
 .collection-toolbar .music-service-picker select { font-size: .8125rem; min-height: 36px; padding: 6px; }
+.quick-collection-filters { display: flex; flex-wrap: wrap; gap: 5px; padding-top: 5px; }
+.quick-collection-filters button { padding: 3px 9px; min-height: 28px; font-size: .75rem; background: transparent; color: var(--muted); }
+.quick-collection-filters button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--raised); }
+.album-sync-indicator { display: inline-flex; align-items: center; font-size: 0; color: #88b9dc; font-weight: normal; }
+.album-sync-indicator::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.collection-tools-content > details { padding: 5px 0; border-top: 1px solid var(--border); }
+.collection-tools-content > details[open] { display: flex; flex-direction: column; gap: 5px; }
 .music-service-picker #musicLinkTarget { width: auto; font-size: .8125rem; }
 .music-service-picker > .music-link-error { grid-column: 1 / -1; color: #f3c1ba; font-size: .8125rem; }
 .collection-toolbar .music-service-picker > .music-link-error:not([hidden]) { display: block; flex-basis: 100%; }

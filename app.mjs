@@ -1,14 +1,14 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=17";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=18";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
   libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=2";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=12";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=13";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=8";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=9";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=9";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=10";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
 import {
   addPlaylistAlbums,
@@ -71,7 +71,7 @@ import {
   prepareAlbumUpdates,
   prepareAlbumRemoval,
   visibleSelection,
-  duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch,
+  duplicateAlbumGroups, albumFieldChanges, albumChanges, smartAlbumMatch, updateAlbumActivity, sortAlbumsByActivity, normalizeAlbumActivity,
   albumStatistics, suggestionIdentity, suggestionWhy, batchAlbumChanges,
   normalizeAccessibility, adjacentAlbumIds, spotifyAlbumIntent, playlistPreviewStatistics,
   portablePreferences, createLocalBackup, validateLocalBackup, prepareSelectiveRestore, commitLocalRestore as persistLocalRestore,
@@ -81,20 +81,20 @@ import {
   appendCollectionHistory, collectionHealthSummary, createCollectionHistoryEntry,
   prepareCollectionHistoryRestore, selectCollectionAlbum,
   runPlatformAccessChecks,
-  userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout,
-} from "./ui.mjs?v=21";
+  userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout, installControlHelp,
+} from "./ui.mjs?v=22";
 import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=11";
 import { createQobuzClient } from "./qobuz.mjs?v=11";
 import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=3";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres,
-} from "./music-qol.mjs?v=7";
+} from "./music-qol.mjs?v=8";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=11";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=11";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=33";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=27";
+  from "./music-completion.mjs?v=12";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=12";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=34";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=28";
 import { qobuzAlbumId } from "./qobuz.mjs?v=11";
 
 const musicService = createMusicServiceGate(localStorage);
@@ -382,13 +382,13 @@ function loadState() {
     const manualOrder = Array.isArray(saved.manualOrder)
       ? [...new Set(saved.manualOrder.filter((id) => typeof id === "string" && /^(?:[A-Za-z0-9]+|tidal:[1-9][0-9]*|qobuz:[A-Za-z0-9]{1,120})$/.test(id)))]
       : [];
-    const sortOrders = ["artist", "name", "year", "rating", "genre", "collection", "manual"];
+    const sortOrders = ["artist", "name", "year", "rating", "genre", "collection", "manual", "added", "modified"];
     const sortOrder = sortOrders.includes(saved.sortOrder) ? saved.sortOrder : "artist";
     const hasLegacyStatuses = [saved.albums, saved.base].some((records) =>
       Array.isArray(records) && records.some((album) =>
         album && normalizeAlbumStatus(album.status) !== album.status));
     if (hasLegacyStatuses) localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...saved, albums, base }));
-    return { albums, base, manualOrder, sortOrder, preferences: saved.preferences,
+    return { albums, base, manualOrder, sortOrder, activity: normalizeAlbumActivity(saved.activity), preferences: saved.preferences,
       collectionHistory: Array.isArray(saved.collectionHistory) ? saved.collectionHistory : [] };
   } catch (error) {
     queueMicrotask(() => showMessage("Archivio locale non leggibile", error.message));
@@ -405,7 +405,9 @@ function normalizeLocalAlbums(albums) {
 }
 
 function commitLocalRestore(storage, key, current, next, related = {}, label = "Modifica locale raccolta") {
-  return persistLocalRestore(storage, key, current, next, related, label, normalizeLocalAlbums);
+  const result = persistLocalRestore(storage, key, current, next, related, label, normalizeLocalAlbums);
+  if (key !== STORAGE_KEY) state.activity = JSON.parse(storage.getItem(STORAGE_KEY) || "{}").activity || {};
+  return result;
 }
 
 function saveState(historyLabel = "Modifica locale raccolta") {
@@ -422,7 +424,9 @@ function saveState(historyLabel = "Modifica locale raccolta") {
     const collectionHistory = appendCollectionHistory(
       Array.isArray(saved.collectionHistory) ? saved.collectionHistory : state.collectionHistory, entry,
     );
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, collectionHistory }));
+    const activity = updateAlbumActivity(saved.albums || [], state.albums, saved.activity);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, activity, collectionHistory }));
+    state.activity = activity;
     state.collectionHistory = collectionHistory;
     localSaveError = "";
     updateLocalSyncSummary();
@@ -1443,6 +1447,28 @@ function refreshGenreFilters() {
     ? selectedSecondary : "";
 }
 
+function updateQuickCollectionFilters() {
+  for (const selector of ["#missingDurationFilter", "#unavailableOnlyFilter", "#deferredOnlyFilter"]) $(selector).checked = false;
+  for (const [button, checked] of [
+    ["#quickFavoritesFilter", $("#favoritesOnlyFilter").checked],
+    ["#quickQueuedFilter", $("#statusFilter").value === "queued"],
+    ["#quickUnratedFilter", $("#unratedFilter").checked],
+  ]) $(button).setAttribute("aria-pressed", String(checked));
+}
+
+function bindQuickCollectionFilters() {
+  for (const [button, selector] of [
+    ["#quickFavoritesFilter", "#favoritesOnlyFilter"], ["#quickUnratedFilter", "#unratedFilter"],
+  ]) $(button).addEventListener("click", () => {
+    $(selector).checked = !$(selector).checked;
+    render();
+  });
+  $("#quickQueuedFilter").addEventListener("click", () => {
+    $("#statusFilter").value = $("#statusFilter").value === "queued" ? "" : "queued";
+    render();
+  });
+}
+
 function render(options = {}) {
   updateAssociationButton();
   finishManualDrag(false);
@@ -1450,6 +1476,7 @@ function render(options = {}) {
   refreshGenreFilters();
   refreshGroupFilter("#collectionFilter", "collections", "Tutte le collezioni");
   refreshGroupFilter("#tagFilter", "tags", "Tutti i tag");
+  updateQuickCollectionFilters();
   const sortOrder = $("#sortOrder").value;
   let durations, editionLinks, libraryChoices;
   const associatedIds = new Set();
@@ -1483,20 +1510,19 @@ function render(options = {}) {
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
     order: sortOrder,
-  }).filter((album) => (!$("#unavailableOnlyFilter").checked || manuallyUnavailable(libraryChoices, album, musicService.service))
-    && (!$("#favoritesOnlyFilter").checked || (collectionPreferences.favoriteIds || []).includes(album.id))
-    && (!$("#deferredOnlyFilter").checked || albumDeferred(libraryChoices, album))
+  }).filter((album) => (!$("#favoritesOnlyFilter").checked || (collectionPreferences.favoriteIds || []).includes(album.id))
     && smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
     && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
     && localCollectionMatch(album, {
-      unrated: $("#unratedFilter").checked, missingDuration: $("#missingDurationFilter").checked,
+      unrated: $("#unratedFilter").checked,
       notesPresent: $("#notesPresentFilter").checked, durations,
       missingAssociation: $("#missingAssociationFilter").checked, musicProvider: musicService.service,
       associated: associatedIds.has(album.id),
     }));
   const sortedAlbums = sortOrder === "manual"
     ? sortAlbumsByManualOrder(filteredAlbums, state.manualOrder)
-    : filteredAlbums;
+    : ["added", "modified"].includes(sortOrder)
+      ? sortAlbumsByActivity(filteredAlbums, state.activity || {}, sortOrder) : filteredAlbums;
   const pins = new Set(collectionPreferences.pinnedIds);
   const pinnedAlbums = $("#pinnedOnlyInput").checked
     ? sortedAlbums.filter((album) => pins.has(album.id)) : sortedAlbums;
@@ -1523,6 +1549,8 @@ function render(options = {}) {
       "Ordine manuale salvato solo su questo dispositivo: tieni premuto un album e trascinalo; puoi anche usare le frecce.";
   }
   const generation = ++coverRenderGeneration;
+  const pendingSyncIds = new Set(albumChanges(musicalRecords(state.base), musicalRecords(state.albums))
+    .filter(change => change.kind !== "removed").map(change => change.id));
   const previousCovers = new Map([...$("#albumList").children]
     .filter((card) => card.classList.contains("has-cover"))
     .map((card) => [card.dataset.albumId, card.querySelector(".cover-frame")]));
@@ -1560,6 +1588,10 @@ function render(options = {}) {
     favoriteButton.title = favoriteLabel;
     favoriteButton.addEventListener("click", () => toggleAlbumFavorite(album.id));
     card.querySelector(".pinned-indicator").hidden = !pinned;
+    const syncBadge = card.querySelector(".album-sync-indicator");
+    syncBadge.hidden = !pendingSyncIds.has(album.id);
+    syncBadge.title = "Da sincronizzare: dati musicali diversi dall'ultima base GitHub salvata. Preferiti e filtri locali sono esclusi.";
+    syncBadge.setAttribute("aria-label", "Da sincronizzare");
     const pinButton = card.querySelector(".pin-album");
     pinButton.setAttribute("aria-pressed", String(pinned));
     pinButton.setAttribute("aria-label", `${pinned ? "Non fissare" : "Fissa"} ${album.name}`);
@@ -7835,6 +7867,7 @@ setInterval(updateSpotifyPlaylistPause, 1000);
 window.addEventListener("storage", updateSpotifyPlaylistPause);
 updateSpotifyPlaylistPause();
 collectionLayout = installCollectionLayout(document);
+bindQuickCollectionFilters();
 const associateCollectionButton = document.createElement("button");
 associateCollectionButton.id = "associateCollection";
 associateCollectionButton.type = "button";
@@ -7843,10 +7876,11 @@ function updateAssociationButton() {
   const button = $("#associateCollection");
   if (button) button.textContent = `Associa tutti a ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[musicService.service]}`;
 }
-$("#missingAssociationFilter").parentElement.after(associateCollectionButton);
+$("#collectionCatalogTools").append(associateCollectionButton);
 associateCollectionButton.addEventListener("click", associateFilteredCollection);
 updateAssociationButton();
 installTechnicalStatusDetails(document.body);
+installControlHelp(document.body);
 installDialogLayout(document.body);
 
 function platformAccessChecks() {

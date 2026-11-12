@@ -2,6 +2,24 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.24.0 · Raccolta compatta
+
+Filtri rapidi **Preferiti**, **Da ascoltare**, **Senza voto** accanto alla
+ricerca, senza criteri separati da quelli del pannello Filtri. Rimossi
+Durata mancante, Non disponibili e Rimandati, anche dalle vecchie viste
+riaperte. Non vengono cancellati dati personali.
+
+Le altre azioni sono raggruppate in **Ascolto**, **Catalogo e dati** e
+**Salvataggio**. Il passaggio del mouse spiega comandi e campi, anche nei
+pannelli dinamici, conservando le spiegazioni specifiche gia' presenti.
+
+Un puntino indica i dati musicali locali da sincronizzare rispetto alla
+base GitHub salvata: non include preferiti, ordine, date o copertine e
+non controlla automaticamente il server. Due ordinamenti mostrano gli
+album aggiunti o modificati di recente su questo browser. Le date di
+aggiunta mancanti degli album precedenti restano sconosciute e in fondo
+all'ordinamento; le date locali non vengono sincronizzate.
+
 ### PWA 1.23.0 · Preferiti e apertura App / Web
 
 Album preferiti con stellina all'inizio della riga, filtro dedicato e

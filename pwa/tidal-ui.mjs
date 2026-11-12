@@ -3,7 +3,7 @@ import {
 } from "./tidal.mjs?v=11";
 import { albumSearchControls, albumSearchMatch, artistIsExcluded, excludedArtistNames } from "./music-suggestion-filters.mjs?v=3";
 import { configureMusicAppLink, musicLinkTarget, refreshMusicAppLinks, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=3";
-import { bindPauseNotice } from "./music-continuity.mjs?v=9";
+import { bindPauseNotice } from "./music-continuity.mjs?v=10";
 import { deferredSuggestion, readLibraryChoices } from "./music-library-choices.mjs?v=2";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 

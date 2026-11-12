@@ -11,14 +11,14 @@
     <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
     <link rel="apple-touch-icon" href="./assets/accord-192.png">
     <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=41">
-    <title>Accord v1.23.0 · La mia raccolta</title>
+    <link rel="stylesheet" href="style.css?v=42">
+    <title>Accord v1.24.0 · La mia raccolta</title>
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
         <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.23.0</span></p><h1>La mia raccolta</h1></div>
+        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.24.0</span></p><h1>La mia raccolta</h1></div>
       </div>
       <div class="header-actions">
         <span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span>
@@ -104,6 +104,11 @@
         </label>
         <button id="resetFiltersButton" class="secondary" type="button" hidden>Azzera filtri</button>
       </div>
+      <div id="quickCollectionFilters" class="quick-collection-filters" role="group" aria-label="Filtri rapidi">
+        <button id="quickFavoritesFilter" type="button" aria-pressed="false" title="Mostra solo gli album con la stellina, mantenendo gli altri filtri.">Preferiti</button>
+        <button id="quickQueuedFilter" type="button" aria-pressed="false" title="Mostra gli album Da ascoltare; disattiva per tornare a ogni stato.">Da ascoltare</button>
+        <button id="quickUnratedFilter" type="button" aria-pressed="false" title="Mostra gli album senza un tuo voto, mantenendo gli altri filtri.">Senza voto</button>
+      </div>
       <details id="collectionFilters" class="filter-disclosure">
       <summary>Filtri e ordinamento <span id="activeFilterCount"></span></summary>
       <section class="filters" aria-label="Filtri album">
@@ -127,11 +132,11 @@
           <select id="tagFilter"><option value="">Tutti i tag</option></select>
         </label>
         <label class="check"><input id="unratedFilter" type="checkbox">Senza voto</label>
-        <label class="check"><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
+        <label class="check" hidden><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
         <label class="check"><input id="notesPresentFilter" type="checkbox">Note presenti</label>
         <label class="check" title="Senza un collegamento valido al servizio musicale scelto in alto; gli album nativi sono esclusi."><input id="missingAssociationFilter" type="checkbox">Associazione mancante</label>
-        <label class="check"><input id="unavailableOnlyFilter" type="checkbox">Non disponibili (manuale)</label>
-        <label class="check"><input id="deferredOnlyFilter" type="checkbox">Rimandati</label>
+        <label class="check" hidden><input id="unavailableOnlyFilter" type="checkbox">Non disponibili (manuale)</label>
+        <label class="check" hidden><input id="deferredOnlyFilter" type="checkbox">Rimandati</label>
         <label class="check"><input id="favoritesOnlyFilter" type="checkbox">Album preferiti</label>
         <button id="reviewMusicAssociations" type="button">Rivedi associazioni irrisolte...</button>
         <label>Ordina per
@@ -140,6 +145,7 @@
             <option value="year">Anno di uscita</option><option value="rating">Voto</option>
             <option value="genre">Genere</option><option value="collection">Collezione</option>
             <option value="manual">Ordine manuale</option>
+            <option value="added">Aggiunti di recente</option><option value="modified">Modificati di recente</option>
           </select>
         </label>
         <label>Lista intelligente
@@ -560,7 +566,7 @@
         <button class="favorite-album" type="button" aria-pressed="false" aria-label="Aggiungi ai preferiti">☆</button>
         <label class="album-selection"><input class="album-select" type="checkbox"><span class="sr-only">Seleziona album</span></label>
         <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
+        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="album-sync-indicator" hidden>Da sincronizzare</span><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
         <div class="album-fields" hidden>
         <label class="status-field">Stato
           <select class="status-input">
@@ -577,6 +583,6 @@
         </div>
       </article>
     </template>
-    <script type="module" src="app.mjs?v=119"></script>
+    <script type="module" src="app.mjs?v=120"></script>
   </body>
 </html>

@@ -76,12 +76,14 @@ test("collection options keep every control connected and only one panel open", 
     } },
   };
   const toolbar = new Node("section", "", "playlist-import");
+  const quickFilters = new Node("div", "quickCollectionFilters");
   const actions = new Node("div", "", "playlist-import-actions");
   const manual = new Node("button", "manualAlbumButton"); actions.append(manual);
   toolbar.append(new Node("div"), actions);
   const filters = new Node("details", "collectionFilters");
+  const reviewAssociations = new Node("button", "reviewMusicAssociations");
   const count = new Node("span", "activeFilterCount");
-  filters.append(count);
+  filters.append(count, reviewAssociations);
   const view = new Node("details", "viewMenu"), content = new Node("div", "", "view-menu-content");
   const playlist = new Node("button", "playlistImportButton");
   const saved = new Node("label"), savedSelect = new Node("select", "savedCollectionView");
@@ -98,7 +100,7 @@ test("collection options keep every control connected and only one panel open", 
   const options = new Node("div", "", "selection-options");
   const apply = new Node("button", "applyBulkStatus"); options.append(apply); secondary.append(options);
   selection.append(selectionSummary, primary, secondary);
-  panel.append(toolbar, new Node("div", "", "collection-search"), filters, view, storage, selection,
+  panel.append(toolbar, quickFilters, new Node("div", "", "collection-search"), filters, view, storage, selection,
     new Node("p", "", "selection-help"));
   const records = new Map([manual, playlist, count, savedSelect, genres, bulk, clear, selectedCount, apply].map((node) => [node.id, node]));
   for (const id of ["collectionFilterChips", "tidalCollectionMount", "unratedSummary", "manualOrderHint",
@@ -106,6 +108,11 @@ test("collection options keep every control connected and only one panel open", 
     const node = new Node("section", id); records.set(id, node); panel.append(node);
   }
   const controller = installCollectionLayout(document);
+  assert.equal(quickFilters.parentElement, toolbar);
+  assert.equal(reviewAssociations.parentElement.id, "collectionCatalogTools");
+  assert.equal(playlist.parentElement.tagName, "DETAILS");
+  assert.deepEqual(root.querySelector(".collection-tools-content").children
+    .map(group => group.children[0].textContent), ["Ascolto", "Catalogo e dati", "Salvataggio"]);
   for (const [id, node] of records) assert.equal(document.getElementById(id), node, id);
   const aside = document.getElementById("collectionOptions");
   assert.equal(aside.hidden, true);
@@ -134,6 +141,35 @@ test("collection options keep every control connected and only one panel open", 
   assert.equal(service.parentElement, root);
   panel.hidden = false; controller.updateView();
   assert.equal(service.parentElement, actions);
+});
+
+test("quick collection filters use the standard controls and discard retired saved filter flags", () => {
+  const selectors = ["#favoritesOnlyFilter", "#statusFilter", "#unratedFilter", "#missingDurationFilter",
+    "#unavailableOnlyFilter", "#deferredOnlyFilter", "#quickFavoritesFilter", "#quickQueuedFilter", "#quickUnratedFilter"];
+  const nodes = Object.fromEntries(selectors.map(selector => [selector, {
+    checked: selector.includes("OnlyFilter") || selector === "#missingDurationFilter",
+    value: "", attributes: {}, listeners: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+    addEventListener(name, callback) { this.listeners[name] = callback; },
+  }]));
+  const context = { $: selector => nodes[selector] };
+  const source = app.slice(app.indexOf("function updateQuickCollectionFilters("), app.indexOf("function render(options"));
+  const functions = runInNewContext(`${source}\n({ updateQuickCollectionFilters, bindQuickCollectionFilters })`, context);
+  context.render = () => functions.updateQuickCollectionFilters();
+  functions.bindQuickCollectionFilters();
+  functions.updateQuickCollectionFilters();
+  for (const selector of ["#missingDurationFilter", "#unavailableOnlyFilter", "#deferredOnlyFilter"]) {
+    assert.equal(nodes[selector].checked, false);
+  }
+  assert.equal(nodes["#quickFavoritesFilter"].attributes["aria-pressed"], "true");
+  nodes["#quickFavoritesFilter"].listeners.click();
+  assert.equal(nodes["#favoritesOnlyFilter"].checked, false);
+  nodes["#quickQueuedFilter"].listeners.click();
+  assert.equal(nodes["#statusFilter"].value, "queued");
+  assert.equal(nodes["#quickQueuedFilter"].attributes["aria-pressed"], "true");
+  nodes["#statusFilter"].value = "liked";
+  functions.updateQuickCollectionFilters();
+  assert.equal(nodes["#quickQueuedFilter"].attributes["aria-pressed"], "false");
 });
 
 test("dynamic dialogs preserve their form and actions outside the scrollable content", () => {
