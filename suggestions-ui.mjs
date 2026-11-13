@@ -1,7 +1,7 @@
 import { CatalogSuggestions, normalized } from "./catalog-suggestions.mjs?v=5";
 import { configureMusicAppLink } from "./music-app-links.mjs?v=4";
-import { bindPauseNotice, clearCheckpoint } from "./music-continuity.mjs?v=12";
-import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=10";
+import { bindPauseNotice, clearCheckpoint } from "./music-continuity.mjs?v=13";
+import { createAlbumComparisonToolbar } from "./music-qol.mjs?v=11";
 import { validateSuggestionCriteria, validateSuggestionRecipes } from "./music-suggestion-recipes.mjs?v=2";
 
 const node = (tag, text = "") => {

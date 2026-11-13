@@ -815,6 +815,7 @@ export function summarizeLastFmTracks(tracks) {
   if (!Array.isArray(tracks)) throw new Error("Cronologia Last.fm non valida.");
   const normalize = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   const artists = new Map();
+  const artistNames = new Map();
   const knownAlbums = new Set();
   let trackCount = 0;
   for (const track of tracks) {
@@ -828,10 +829,22 @@ export function summarizeLastFmTracks(tracks) {
     if (!artist || timestamp === undefined || timestamp === null
         || String(timestamp).trim() === "" || !Number.isFinite(Number(timestamp))) continue;
     trackCount += 1;
-    const key = normalize(artist);
-    const previous = artists.get(key);
-    artists.set(key, { name: previous?.name || artist, plays: (previous?.plays || 0) + 1 });
-    if (album) knownAlbums.add(JSON.stringify([key, normalize(album)]));
+    let entry = artistNames.get(artist);
+    if (!entry) {
+      const key = normalize(artist);
+      let summary = artists.get(key);
+      if (!summary) {
+        summary = { name: artist, plays: 0 };
+        artists.set(key, summary);
+      }
+      entry = { key, summary, albums: new Set() };
+      artistNames.set(artist, entry);
+    }
+    entry.summary.plays += 1;
+    if (album && !entry.albums.has(album)) {
+      entry.albums.add(album);
+      knownAlbums.add(JSON.stringify([entry.key, normalize(album)]));
+    }
   }
   return {
     artists: [...artists.values()].sort((a, b) => b.plays - a.plays || a.name.localeCompare(b.name)),

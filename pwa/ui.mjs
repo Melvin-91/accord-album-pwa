@@ -774,8 +774,9 @@ export function prepareCollectionHistoryRestore(albums, entry, editionLinks = {}
     .sort((left, right) => (left.beforeIndex ?? next.length) - (right.beforeIndex ?? next.length))) {
     next.splice(Math.min(change.beforeIndex ?? next.length, next.length), 0, { ...change.before });
   }
+  const restoredById = new Map(next.map((album) => [album.id, album]));
   for (const change of entry.changes.filter((row) => row.kind === "updated")) {
-    const album = next.find((record) => record.id === change.id);
+    const album = restoredById.get(change.id);
     for (const field of change.fields) {
       if (Object.hasOwn(change.before, field)) album[field] = change.before[field];
       else delete album[field];
@@ -808,7 +809,7 @@ export function prepareCollectionHistoryRestore(albums, entry, editionLinks = {}
   const restoredProvenance = storageUpdates["accord-music-completion-provenance-v1"]
     || storedRecords["accord-music-completion-provenance-v1"] || {};
   for (const id of touched) {
-    const album = next.find((record) => record.id === id);
+    const album = restoredById.get(id);
     for (const category of Object.values(restoredProvenance[id] || {})) {
       if (category?.identity && !sameValue(category.identity, [id, album?.artist, album?.name])) {
         throw new Error(`Il ripristino renderebbe obsoleta la provenienza dati di ${id}.`);

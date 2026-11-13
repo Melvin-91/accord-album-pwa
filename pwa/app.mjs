@@ -1,14 +1,14 @@
-import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=20";
+import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=21";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
   libraryAssociationState, groupEditionRows } from "./music-library-choices.mjs?v=2";
-import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=15";
+import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=16";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
-  openPlaybackServiceDialog } from "./album-association.mjs?v=11";
+  openPlaybackServiceDialog } from "./album-association.mjs?v=12";
 import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
-  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=12";
+  editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=13";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
 import {
   addPlaylistAlbums,
@@ -63,7 +63,7 @@ import {
   validateDocument,
   validateLastFmHistoryDocument,
   writeSpotifyPlaylistItems,
-} from "./core.mjs?v=49";
+} from "./core.mjs?v=50";
 import {
   localCommandResults,
   collectionAuditSummary,
@@ -83,19 +83,19 @@ import {
   runPlatformAccessChecks,
   userFacingStatus, installTechnicalStatusDetails, installDialogLayout, installCollectionLayout, installControlHelp, installSelectWheelGuard,
   reconcileAlbumCards,
-} from "./ui.mjs?v=24";
+} from "./ui.mjs?v=25";
 import { createMusicServiceGate, createTidalTransport, musicAlbumLink, tidalAlbumId } from "./tidal.mjs?v=13";
 import { createQobuzClient } from "./qobuz.mjs?v=11";
 import { configureMusicAppLink, musicLinkTarget } from "./music-app-links.mjs?v=4";
 import {
   createAlbumComparisonToolbar, suggestDurationQueue, localCollectionMatch,
   selectionVisibility, appendListeningActions, reviewManualGenres, artistGenreSuggestions,
-} from "./music-qol.mjs?v=10";
+} from "./music-qol.mjs?v=11";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=14";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=14";
-import { initializeTidalUI } from "./tidal-ui.mjs?v=36";
-import { initializeQobuzUI } from "./qobuz-ui.mjs?v=30";
+  from "./music-completion.mjs?v=15";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=15";
+import { initializeTidalUI } from "./tidal-ui.mjs?v=37";
+import { initializeQobuzUI } from "./qobuz-ui.mjs?v=31";
 import { qobuzAlbumId } from "./qobuz.mjs?v=11";
 
 const musicService = createMusicServiceGate(localStorage);

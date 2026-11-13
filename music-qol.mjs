@@ -1,4 +1,4 @@
-import { validEdition } from "./music-continuity.mjs?v=12";
+import { validEdition } from "./music-continuity.mjs?v=13";
 
 const normalized = (value) => String(value || "").normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
 

@@ -1887,15 +1887,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=122", "style.css?v=43"]) {
+  for (const file of ["app.mjs?v=123", "style.css?v=43"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=49", "ui.mjs?v=24", "tidal.mjs?v=13", "tidal-ui.mjs?v=36", "qobuz-ui.mjs?v=30",
-    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=20",
-    "music-qol.mjs?v=10", "playlist-ui.mjs?v=15",
-    "music-app-links.mjs?v=4", "music-continuity.mjs?v=12", "album-association.mjs?v=11",
-    "music-completion.mjs?v=14", "music-completion-ui.mjs?v=14"]) {
+  for (const file of ["core.mjs?v=50", "ui.mjs?v=25", "tidal.mjs?v=13", "tidal-ui.mjs?v=37", "qobuz-ui.mjs?v=31",
+    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=21",
+    "music-qol.mjs?v=11", "playlist-ui.mjs?v=16",
+    "music-app-links.mjs?v=4", "music-continuity.mjs?v=13", "album-association.mjs?v=12",
+    "music-completion.mjs?v=15", "music-completion-ui.mjs?v=15"]) {
     assert.ok(uiAppSource.includes(file));
     assert.ok(sw.includes(file));
   }
@@ -3273,6 +3273,34 @@ test("selects up to three most popular tracks per album without duplicate tracks
     `spotify:track:${ids[6]}`,
   ]);
   assert.throws(() => topTracksPerAlbum(albumGroups, new Map([[ids[0], 101]])), /Popolarita'/);
+});
+
+test("summarizes repeated history without renormalizing every scrobble", () => {
+  const tracks = Array.from({ length: 128 }, (_, index) => ({
+    artist: index % 2 ? { "#text": "artist" } : { name: " ＡＲＴＩＳＴ " },
+    album: index % 2 ? "live album" : { name: " Live  Album " },
+    date: { uts: String(index) },
+  }));
+  tracks.unshift({ artist: "Artist", album: "Ignored", date: { uts: "" } });
+  tracks.push({ artist: "Artist", album: "Ignored", "@attr": { nowplaying: "true" } });
+  const before = structuredClone(tracks);
+  const normalize = String.prototype.normalize;
+  let normalizations = 0;
+  let history;
+  String.prototype.normalize = function (form) {
+    normalizations += 1;
+    return normalize.call(this, form);
+  };
+  try {
+    history = summarizeLastFmTracks(tracks);
+  } finally {
+    String.prototype.normalize = normalize;
+  }
+  assert.deepEqual(history.artists, [{ name: "ＡＲＴＩＳＴ", plays: 128 }]);
+  assert.equal(history.trackCount, 128);
+  assert.deepEqual([...history.knownAlbums], [JSON.stringify(["artist", "live album"])]);
+  assert.ok(normalizations <= 8, `Repeated history required ${normalizations} normalizations`);
+  assert.deepEqual(tracks, before);
 });
 
 test("excludes suggested albums already scrobbled by any credited artist", () => {

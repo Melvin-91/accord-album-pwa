@@ -2,6 +2,15 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.27.0 · Storico e annullamenti piu' rapidi
+
+Il riepilogo locale dello storico Last.fm riusa i nomi gia' normalizzati:
+su 150.000 ascolti sintetici il calcolo passa da circa 306 a 51 ms.
+L'annullamento massivo di generi e rimozioni non riscansiona la raccolta
+per ogni album: su 5.000 album la preparazione dei generi passa da circa
+1.100 a 17 ms. Risultati, ordine, controlli di conflitto, dati personali e
+sincronizzazione non cambiano.
+
 ### PWA 1.26.0 · Generi e collegamenti TIDAL
 
 Modifica generi usa gli stessi campi principale e secondari per uno o piu'

@@ -679,6 +679,22 @@ test("history refuses to delete a later album or reinsert an already reused ID",
   assert.throws(() => prepareCollectionHistoryRestore(after, removed), /già presente/);
 });
 
+test("bulk history restoration stays within a linear collection-scan budget", () => {
+  let scanned = 0;
+  class MeasuredAlbums extends Array {
+    find(predicate, ...options) {
+      return super.find((...args) => { scanned++; return predicate(...args); }, ...options);
+    }
+  }
+  const before = MeasuredAlbums.from({ length: 256 }, (_, index) => historyAlbum(`album${index}`));
+  const after = before.map(album => ({ ...album, status: "liked" }));
+  const entry = createCollectionHistoryEntry(before, after, "Synthetic bulk change");
+  const restored = prepareCollectionHistoryRestore(after, entry);
+  assert.deepEqual(Array.from(restored.albums), Array.from(before));
+  assert.ok(after.every(album => album.status === "liked"));
+  assert.ok(scanned <= before.length * 4, `Repeated collection scans: ${scanned}`);
+});
+
 test("metadata history is atomic, stale-guarded, and association restore validates identity", () => {
   class Storage {
     values = new Map();

@@ -552,24 +552,24 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
   assert.match(css, /body \{ margin: 0; min-width: 0; \}/);
-  assert.match(html, /v1\.26\.0/); assert.match(sw, /v1\.26\.0/);
+  assert.match(html, /v1\.27\.0/); assert.match(sw, /v1\.27\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /app\.mjs\?v=122/); assert.match(sw, /style\.css\?v=43/);
-  assert.match(sw, /tidal\.mjs\?v=13/); assert.match(sw, /tidal-ui\.mjs\?v=36/);
+  assert.match(sw, /app\.mjs\?v=123/); assert.match(sw, /style\.css\?v=43/);
+  assert.match(sw, /tidal\.mjs\?v=13/); assert.match(sw, /tidal-ui\.mjs\?v=37/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v1\.26\.0/); assert.match(mirrorWorker, /v1\.26\.0/);
+    assert.match(mirrorHtml, /v1\.27\.0/); assert.match(mirrorWorker, /v1\.27\.0/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}malt_metal.ico"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.match(mirrorHtml, /media-src 'self' https:\/\/streaming-qobuz-sec\.akamaized\.net https:\/\/streaming-qobuz-std\.akamaized\.net;/);
-    for (const file of ["app.mjs?v=122", "style.css?v=43", "tidal-ui.mjs?v=36", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=30",
-      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=20", "music-suggestion-recipes.mjs?v=2",
-      "edition-comparison.mjs?v=2", "music-qol.mjs?v=10", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=15",
+    for (const file of ["app.mjs?v=123", "style.css?v=43", "tidal-ui.mjs?v=37", "qobuz.mjs?v=11", "qobuz-ui.mjs?v=31",
+      "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=21", "music-suggestion-recipes.mjs?v=2",
+      "edition-comparison.mjs?v=2", "music-qol.mjs?v=11", "catalog-playlist.mjs?v=5", "playlist-ui.mjs?v=16",
       "music-app-links.mjs?v=4", "qobuz-playback.mjs?v=10", "music-suggestion-filters.mjs?v=3", "service-requests.mjs?v=3",
-      "music-continuity.mjs?v=12", "album-association.mjs?v=11",
-      "music-completion.mjs?v=14", "music-completion-ui.mjs?v=14", "runtime-status.mjs?v=2"]) {
+      "music-continuity.mjs?v=13", "album-association.mjs?v=12",
+      "music-completion.mjs?v=15", "music-completion-ui.mjs?v=15", "runtime-status.mjs?v=2"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
   }
