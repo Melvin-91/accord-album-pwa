@@ -2,6 +2,30 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.0 - Raccolta essenziale
+
+La PWA contiene soltanto raccolta album, ricerca e filtri semplici, stato,
+voto, preferiti locali, aggiunta/rimozione e sincronizzazione GitHub.
+Logo, badge della versione, accento viola e righe compatte sono conservati.
+Le impostazioni raccolgono GitHub, accessi musicali e scelta App/Web.
+Suggerimenti, playlist e strumenti avanzati non sono caricati; i dati
+precedenti rimangono conservati nell'archivio locale.
+
+Il collegamento TIDAL distingue Client ID configurato e sessione autorizzata,
+riutilizzando le sessioni valide. L'aggiunta controlla copie fra cataloghi;
+il confronto manuale e' in Impostazioni > Gestione della raccolta, senza
+un comando in evidenza. Nessuna fusione automatica di note o voti.
+
+Le rimozioni confermate vengono propagate alla raccolta condivisa alla
+sincronizzazione, con anteprima e conflitti per modifiche concorrenti.
+Il marker `deletion_sync: true` richiede un desktop Accord aggiornato per
+propagare le rimozioni anche li'. Nessun invio o aggiornamento automatico.
+Per aggiornare una PWA gia' installata usa il comando dell'app: non
+cancellare i dati del sito, che comprendono anche la raccolta locale.
+
+Le sezioni seguenti documentano le versioni precedenti, non le funzionalita'
+disponibili nella nuova interfaccia essenziale.
+
 ### PWA 1.27.0 · Storico e annullamenti piu' rapidi
 
 Il riepilogo locale dello storico Last.fm riusa i nomi gia' normalizzati:

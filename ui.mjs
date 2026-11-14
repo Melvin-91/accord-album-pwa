@@ -266,13 +266,7 @@ export function installDialogLayout(root) {
   return () => observer.disconnect();
 }
 
-export function reconcileAlbumCards(list, cards) {
-  const retained = new Set(cards);
-  for (const card of [...list.children]) if (!retained.has(card)) card.remove();
-  for (const [index, card] of cards.entries()) {
-    if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
-  }
-}
+export { reconcileAlbumCards } from "./core.mjs?v=51";
 
 export function installCollectionLayout(document) {
   const panel = document.getElementById("collectionPanel");
@@ -1067,21 +1061,7 @@ export function technicalDiagnostics({ stage, httpStatuses = [], counts = {} } =
     stage: stages.has(stage) ? stage : "message", httpStatuses: statuses, counts: safeCounts }, null, 2);
 }
 
-export function redactDiagnostics(value, secrets = []) {
-  let text = String(value);
-  for (const secret of secrets.filter((entry) => typeof entry === "string" && entry.length)) {
-    text = text.split(secret).join("[redatto]");
-  }
-  return text.replace(/https?:\/\/[^\s<>"']+/gi, (url) => {
-    try {
-      const parsed = new URL(url);
-      return `${parsed.origin}${parsed.pathname}${parsed.search ? "?[redatto]" : ""}${parsed.hash ? "#[redatto]" : ""}`;
-    } catch { return "[URL redatto]"; }
-  }).replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, "$1[redatto]")
-    .replace(/\bBearer\s+\S+/gi, "Bearer [redatto]")
-    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+/g, "[redatto]")
-    .replace(/((?:access_token|refresh_token|client_secret|api_key|authorization|token|code_verifier|password)\s*["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi, "$1[redatto]");
-}
+export { redactDiagnostics } from "./core.mjs?v=51";
 
 export function normalizeAccessibility(value = {}) {
   return {

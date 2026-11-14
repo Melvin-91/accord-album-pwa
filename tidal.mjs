@@ -356,9 +356,18 @@ export function createTidalTransport({
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes))
   .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-export function createTidalAuth({ session, transport, crypto = globalThis.crypto, now = () => Date.now() }) {
+export function createTidalAuth({ session, transport, crypto = globalThis.crypto, now = () => Date.now(), scopes = TIDAL_SCOPES }) {
   let refreshing = null;
-  function store(value, clientId) {
+  let revision = 0;
+  function savedSession() {
+    const saved = JSON.parse(session.getItem(TOKEN) || "null");
+    if (saved && (typeof saved.clientId !== "string" || !saved.clientId.trim()
+        || typeof saved.access_token !== "string" || !saved.access_token
+        || !Number.isFinite(saved.expires))) throw new Error("Sessione TIDAL non valida: ricollega l'account.");
+    return saved;
+  }
+  function store(value, clientId, expectedRevision) {
+    if (expectedRevision !== revision) throw new Error("Accesso TIDAL cambiato durante l'autorizzazione.");
     if (typeof value.access_token !== "string" || !value.access_token
         || !Number.isFinite(value.expires_in) || value.expires_in <= 0) throw new Error("Token TIDAL non valido.");
     session.setItem(TOKEN, JSON.stringify({ ...value, clientId, expires: now() + value.expires_in * 1000 }));
@@ -366,8 +375,17 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
     return value.access_token;
   }
   return {
+    clientId() { return savedSession()?.clientId.trim() || ""; },
+    status(clientId) {
+      const saved = savedSession();
+      const matches = !!saved && saved.clientId.trim() === String(clientId).trim();
+      const expired = !!saved && saved.expires <= now() + 60_000;
+      return { connected: matches && (!expired || !!saved.refresh_token), expired, matches };
+    },
     async authorize(clientId, pageUrl) {
-      if (!String(clientId).trim()) throw new Error("Configura il Client ID TIDAL.");
+      if (typeof clientId !== "string") throw new Error("Configura il Client ID TIDAL.");
+      clientId = String(clientId).trim();
+      if (!clientId) throw new Error("Configura il Client ID TIDAL.");
       const redirect = new URL(pageUrl);
       redirect.search = ""; redirect.hash = "";
       if (redirect.protocol !== "https:" && !(redirect.protocol === "http:"
@@ -378,36 +396,44 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
       session.setItem(PENDING, JSON.stringify({ state, verifier, redirect: redirect.href, clientId, at: now() }));
       const url = new URL("https://login.tidal.com/authorize");
       url.search = new URLSearchParams({ response_type: "code", client_id: clientId, redirect_uri: redirect.href,
-        code_challenge_method: "S256", code_challenge: challenge, scope: TIDAL_SCOPES, state });
+        code_challenge_method: "S256", code_challenge: challenge, scope: scopes, state });
       return url.href;
     },
-    async finish(pageUrl) {
+    async finish(pageUrl, configuredClientId = null) {
       const url = new URL(pageUrl), state = url.searchParams.get("state") || "";
       if (!state.startsWith("tidal.")) return false;
       const saved = JSON.parse(session.getItem(PENDING) || "null");
       session.removeItem(PENDING);
       const clean = new URL(url); clean.search = ""; clean.hash = "";
       if (!saved || saved.state !== state || saved.redirect !== clean.href
+          || !Number.isFinite(saved.at) || typeof saved.verifier !== "string" || !saved.verifier
+          || typeof saved.clientId !== "string" || !saved.clientId.trim()
+          || configuredClientId !== null && saved.clientId.trim() !== configuredClientId.trim()
           || now() - saved.at > 10 * 60_000 || now() < saved.at) throw new Error("Vérifica state OAuth TIDAL non riuscita.");
       if (url.searchParams.has("error")) throw new Error("Autorizzazione TIDAL annullata; nessuna operazione eseguita.");
       const code = url.searchParams.get("code");
       if (!code) throw new Error("Codice OAuth TIDAL mancante.");
+      const expectedRevision = revision;
       store(await transport.token({ grant_type: "authorization_code", client_id: saved.clientId,
-        redirect_uri: saved.redirect, code_verifier: saved.verifier, code }), saved.clientId);
+        redirect_uri: saved.redirect, code_verifier: saved.verifier, code }), saved.clientId, expectedRevision);
       return true;
     },
     async access(clientId) {
-      const saved = JSON.parse(session.getItem(TOKEN) || "null");
-      if (!saved) throw new Error("Collega prima TIDAL con il tuo Client ID.");
-      if (saved.clientId !== clientId) throw new Error("Client ID cambiato: salva e ricollega TIDAL.");
+      clientId = String(clientId).trim();
+      const saved = savedSession();
+      if (!saved) throw new Error("Accesso TIDAL non attivo in questa scheda: premi Collega TIDAL nelle impostazioni.");
+      if (saved.clientId.trim() !== clientId) throw new Error("Client ID cambiato: salva e ricollega TIDAL.");
       if (saved.expires > now() + 60_000) return saved.access_token;
       if (!saved.refresh_token) throw new Error("Sessione TIDAL scaduta: ricollega l’account.");
-      if (!refreshing) refreshing = transport.token({ grant_type: "refresh_token", client_id: clientId,
-        refresh_token: saved.refresh_token }).then((value) => store({ ...saved, ...value }, clientId))
-        .finally(() => { refreshing = null; });
+      if (!refreshing) {
+        const expectedRevision = revision;
+        refreshing = transport.token({ grant_type: "refresh_token", client_id: clientId,
+          refresh_token: saved.refresh_token }).then((value) => store({ ...saved, ...value }, clientId, expectedRevision))
+          .finally(() => { refreshing = null; });
+      }
       return refreshing;
     },
-    disconnect() { session.removeItem(TOKEN); session.removeItem(PENDING); transport.clear(); },
+    disconnect() { revision += 1; session.removeItem(TOKEN); session.removeItem(PENDING); transport.clear(); },
   };
 }
 
@@ -434,7 +460,11 @@ export function tidalAlbumRecords(documents) {
     const refs = album.relationships?.artists?.data || [];
     const artist = refs.map((ref) => index.get(`artists:${ref.id}`)?.attributes?.name).filter(Boolean).join(", ");
     if (!artist) return null;
-    return { id: `tidal:${album.id}`, name: album.attributes.title, artist,
+    const title = album.attributes.title, version = typeof album.attributes.version === "string" ? album.attributes.version.trim() : "";
+    const lowerTitle = String(title).trim().toLowerCase(), lowerVersion = version.toLowerCase();
+    const namedVersion = lowerTitle.endsWith(`(${lowerVersion})`) || lowerTitle.endsWith(`- ${lowerVersion}`);
+    const name = version && !namedVersion ? `${title} (${version})` : title;
+    return { id: `tidal:${album.id}`, name, artist,
       url: `https://tidal.com/browse/album/${album.id}`, year: String(album.attributes.releaseDate || "").slice(0, 4),
       status: "queued", rating: null, genres: [], primary_genre: "", collections: [], tags: [], cover_sha256: null };
   }).filter(Boolean);

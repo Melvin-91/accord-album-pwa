@@ -1500,13 +1500,107 @@ export function rankDiscogsSuggestionAlbums(albums) {
   return selected;
 }
 
-export function addPlaylistAlbums(collection, additions) {
+const collectionIdentityText = (value) => String(value || "").normalize("NFKD")
+  .replace(/\p{M}/gu, "").toLowerCase().replace(/&/g, " and ")
+  .replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+const collectionEditionSuffix = /\s*(?:[\[(]\s*(?:(?:\d{2,4}(?:st|nd|rd|th)?\s+)?(?:deluxe|expanded|special|collector'?s|anniversary|remaster(?:ed)?)(?:\s+(?:edition|version|remaster(?:ed)?|\d{4}|bonus tracks?))*|bonus tracks?)\s*[\])]|[-:]\s*(?:\d{4}\s+)?(?:deluxe|expanded|special|remaster(?:ed)?|anniversary)(?:\s+(?:edition|version|remaster(?:ed)?|\d{4}))*|\s+\d{4}\s+remaster(?:ed)?)\s*$/i;
+export function collectionAlbumIdentity(album) {
+  let title = String(album.name || "").trim(), previous;
+  do { previous = title; title = title.replace(collectionEditionSuffix, "").trim(); } while (previous !== title);
+  return { artist: collectionIdentityText(album.artist), title: collectionIdentityText(title),
+    edition: title !== String(album.name || "").trim() };
+}
+
+export function reconcileAlbumCards(list, cards) {
+  const retained = new Set(cards);
+  for (const card of [...list.children]) if (!retained.has(card)) card.remove();
+  for (const [index, card] of cards.entries()) {
+    if (list.children[index] !== card) list.insertBefore(card, list.children[index] || null);
+  }
+}
+
+export function redactDiagnostics(value, secrets = []) {
+  let text = String(value);
+  for (const secret of secrets.filter((entry) => typeof entry === "string" && entry.length)) {
+    text = text.split(secret).join("[redatto]");
+  }
+  return text.replace(/https?:\/\/[^\s<>"']+/gi, (url) => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.origin}${parsed.pathname}${parsed.search ? "?[redatto]" : ""}${parsed.hash ? "#[redatto]" : ""}`;
+    } catch { return "[URL redatto]"; }
+  }).replace(/(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, "$1[redatto]")
+    .replace(/\bBearer\s+\S+/gi, "Bearer [redatto]")
+    .replace(/\b(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]+/g, "[redatto]")
+    .replace(/((?:access_token|refresh_token|client_secret|api_key|authorization|token|code_verifier|password)\s*["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi, "$1[redatto]");
+}
+
+export function archiveAlbumNoteVersions(storage, conflicts, remoteRevision, key = "accord-album-note-conflicts-v1") {
+  const entries = conflicts.flatMap((conflict) => (conflict.fields || []).filter(({ field }) => field === "notes")
+    .map(({ base, local, remote }) => ({
+      albumId: conflict.id, base: { present: base != null, value: base ?? "" },
+      device: { present: local != null, value: local ?? "" }, github: { present: remote != null, value: remote ?? "" },
+      remoteRevision: remoteRevision || "",
+    })));
+  if (!entries.length) return 0;
+  const archive = JSON.parse(storage.getItem(key) || "[]");
+  if (!Array.isArray(archive)) throw new Error("Archivio locale delle versioni delle note non valido.");
+  for (const entry of [...archive, ...entries]) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("Archivio delle note non valido.");
+    for (const version of [entry.base, entry.device, entry.github]) {
+      if (!version || typeof version.present !== "boolean" || typeof version.value !== "string") {
+        throw new Error("Versione delle note non valida.");
+      }
+      if (redactDiagnostics(version.value) !== version.value) throw new Error("Una nota sembra contenere una credenziale: correggila prima di scegliere il conflitto.");
+    }
+  }
+  const signature = (entry) => JSON.stringify([entry.albumId, entry.base, entry.device, entry.github, entry.remoteRevision]);
+  const existing = new Set(archive.map(signature)), additions = [];
+  for (const entry of entries) if (!existing.has(signature(entry))) {
+    additions.push({ ...entry, capturedAt: new Date().toISOString() }); existing.add(signature(entry));
+  }
+  if (additions.length) storage.setItem(key, JSON.stringify([...archive, ...additions]));
+  return additions.length;
+}
+
+export function findCollectionAlbum(collection, candidate, links = {}) {
+  if (!links || typeof links !== "object" || Array.isArray(links)) throw new Error("Associazioni album non valide.");
+  const direct = collection.find((album) => album.id === candidate.id);
+  if (direct) return { album: direct, confidence: "verified" };
+  const provider = candidate.id.startsWith("tidal:") ? "tidal" : candidate.id.startsWith("qobuz:") ? "qobuz" : "spotify";
+  const linked = collection.find((album) => {
+    const link = links[album.id]?.[provider];
+    return link?.id === candidate.id && link.source === JSON.stringify([album.id, album.artist, album.name]);
+  });
+  if (linked) return { album: linked, confidence: "verified" };
+  const identity = collectionAlbumIdentity(candidate);
+  if (!identity.artist || !identity.title) return null;
+  let uncertain = null;
+  for (const album of collection) {
+    const existing = collectionAlbumIdentity(album);
+    if (identity.artist !== existing.artist || identity.title !== existing.title) continue;
+    const differentYear = !!album.year && !!candidate.year && album.year !== candidate.year;
+    if (differentYear && !identity.edition && !existing.edition) uncertain ||= { album, confidence: "uncertain" };
+    else return { album, confidence: "matching" };
+  }
+  return uncertain;
+}
+
+export function addPlaylistAlbums(collection, additions, links = {}) {
   const albums = new Map(collection.map((album) => [validateAlbum(album).id, album]));
+  const key = (album) => {
+    const identity = collectionAlbumIdentity(album);
+    return JSON.stringify([identity.artist, identity.title]);
+  };
+  const identities = new Set(collection.map(key));
+  const associated = new Set(collection.flatMap((album) => Object.values(links[album.id] || {})
+    .filter((link) => link?.source === JSON.stringify([album.id, album.artist, album.name])).map((link) => link.id)));
   let added = 0;
   for (const album of additions) {
     const valid = validateAlbum(album);
-    if (albums.has(valid.id)) continue;
+    if (albums.has(valid.id) || identities.has(key(valid)) || associated.has(valid.id)) continue;
     albums.set(valid.id, valid);
+    identities.add(key(valid));
     added += 1;
   }
   return { albums: [...albums.values()], added, duplicates: additions.length - added };
@@ -1551,7 +1645,7 @@ export function topTracksPerAlbum(albumGroups, popularityById, tracksPerAlbum = 
   return selected;
 }
 
-export function threeWayMerge(base, local, remote, choices = {}) {
+export function threeWayMerge(base, local, remote, choices = {}, { propagateDeletions = false } = {}) {
   const old = mapAlbums(base);
   const here = mapAlbums(local);
   const there = mapAlbums(remote);
@@ -1562,6 +1656,18 @@ export function threeWayMerge(base, local, remote, choices = {}) {
     const previous = old.get(id);
     const left = here.get(id);
     const right = there.get(id);
+    if (propagateDeletions && previous && (!left || !right)) {
+      const survivor = left || right;
+      if (!survivor || JSON.stringify(survivor) === JSON.stringify(previous)) continue;
+      const choice = choices[id]?.album ?? (typeof choices[id] === "string" ? choices[id] : null);
+      if (choice === "local" || choice === "remote") {
+        const selected = choice === "local" ? left : right;
+        if (selected) result.set(id, selected);
+      } else if (choice !== null) throw new Error("Scelta di conflitto non valida.");
+      else conflicts.push({ id, base: previous, local: left || null, remote: right || null,
+        fields: [{ field: "album", base: previous, local: left || null, remote: right || null }] });
+      continue;
+    }
     if (!left) {
       if (right) result.set(id, right);
       continue;

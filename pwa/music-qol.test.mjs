@@ -523,7 +523,8 @@ test("render clears albums excluded by new filters or edits under existing filte
     updateSelectionToolbar: noop, renderCollectionFilterChips: noop, collectionHasFilters: () => false,
     showFeedback: message => assert.fail(message),
   };
-  const prefix = appSection("function render(options = {})", "  const generation = ++coverRenderGeneration;");
+  const prefix = appSection("function renderCollection(options = {})", "  const generation = ++coverRenderGeneration;")
+    .replace("function renderCollection(", "function render(");
   runInNewContext(`${prefix}\n}\n`, context);
   $("#statusFilter").value = "liked";
   runInNewContext("render()", context);

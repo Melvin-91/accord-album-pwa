@@ -1,6 +1,39 @@
 const musicalFields = ["name", "artist", "url", "year", "status", "rating", "genres",
   "primary_genre", "collections", "tags", "notes"];
 
+export function createTimingMetrics({ limit = 256, clock = () => performance.now() } = {}) {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("Il numero di campioni deve essere positivo.");
+  const samples = new Map();
+  function record(name, milliseconds) {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) throw new Error("Durata non valida.");
+    const values = samples.get(name) || [];
+    values.push(milliseconds);
+    if (values.length > limit) values.splice(0, values.length - limit);
+    samples.set(name, values);
+  }
+  return {
+    record,
+    measure(name, callback) {
+      const start = clock();
+      try { return callback(); }
+      finally { record(name, clock() - start); }
+    },
+    summary() {
+      return [...samples].map(([name, values]) => {
+        const sorted = [...values].sort((a, b) => a - b);
+        return { name, count: sorted.length, p50: sorted[Math.floor((sorted.length - 1) / 2)],
+          p95: sorted[Math.ceil(sorted.length * .95) - 1], max: sorted.at(-1) };
+      });
+    },
+  };
+}
+
+export function collectionCardIdentity(album, { provider, target, pinned, favorite, pending,
+  draft, choices, links, grouped, position, removedCover }) {
+  return JSON.stringify([album, provider, target, pinned, favorite, pending, draft,
+    choices, links, grouped, position, removedCover]);
+}
+
 export function musicalRecords(albums) {
   return albums.map((album) => ({ id: album.id, ...Object.fromEntries(musicalFields.map((field) =>
     [field, album[field] ?? (["genres", "collections", "tags"].includes(field) ? [] : field === "rating" ? null : "")])) }));

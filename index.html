@@ -1,592 +1,100 @@
 <!doctype html>
 <html lang="it">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-    <meta name="theme-color" content="#090909">
-    <meta name="description" content="La tua raccolta di album Accord, sincronizzata con il repository GitHub privato.">
-    <meta name="referrer" content="no-referrer">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://coverartarchive.org https://archive.org https://*.archive.org https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; media-src 'self' https://streaming-qobuz-sec.akamaized.net https://streaming-qobuz-std.akamaized.net; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://open.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com https://musicbrainz.org https://ws.audioscrobbler.com https://api.discogs.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-    <link rel="icon" href="./assets/malt_metal.ico" sizes="any">
-    <link rel="icon" type="image/png" sizes="192x192" href="./assets/accord-192.png">
-    <link rel="apple-touch-icon" href="./assets/accord-192.png">
-    <link rel="manifest" href="manifest.json">
-    <link rel="stylesheet" href="style.css?v=43">
-    <title>Accord v1.27.0 · La mia raccolta</title>
-  </head>
-  <body>
-    <header class="topbar">
-      <div class="brand">
-        <img src="./assets/accord-192.png" width="36" height="36" alt="">
-        <div><p class="eyebrow">ACCORD <span class="app-version">App attiva v1.27.0</span></p><h1>La mia raccolta</h1><span id="syncState" class="sync-state" role="status">Solo sul dispositivo</span></div>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#090909">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Accord v1.29.0 · La mia raccolta</title>
+  <link rel="icon" href="./assets/malt_metal.ico">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="./collection.css?v=1">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="./assets/accord-192.png" width="36" height="36" alt="">
+      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.0</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
+    </div>
+    <nav class="header-actions" aria-label="Raccolta">
+      <button id="sync" type="button" class="secondary">Sincronizza</button>
+      <button id="openSettings" type="button" class="secondary">Impostazioni</button>
+      <button id="update" type="button" hidden>Aggiorna PWA</button>
+    </nav>
+  </header>
+  <main id="collection">
+    <p id="feedback" role="status" aria-live="polite"></p>
+    <div class="collection-toolbar"><div><p class="eyebrow">LIBRERIA</p><h2>I tuoi album</h2></div><button id="openAdd" type="button">+ Aggiungi album</button></div>
+    <div id="filters">
+      <label class="search">Cerca nella raccolta<input id="search" type="search" placeholder="Titolo o artista" autocomplete="off"></label>
+      <label>Ascolto<select id="statusFilter">
+        <option value="">Tutti</option><option value="queued">Da ascoltare</option>
+        <option value="listening">In ascolto</option><option value="neutral">Neutri</option>
+        <option value="liked">Mi piace</option><option value="disliked">Non mi piace</option>
+      </select></label>
+      <label class="check"><input id="favoritesFilter" type="checkbox">Solo preferiti</label>
+    </div>
+    <div class="summary"><p id="count"></p><p id="lastSync"></p></div>
+    <p id="empty"></p>
+    <div id="albumList"></div>
+    <button id="moreAlbums" type="button" class="secondary" hidden>Mostra altri album</button>
+  </main>
+  <dialog id="addDialog" aria-labelledby="addTitle">
+    <div class="dialog-heading"><h2 id="addTitle">Aggiungi album</h2><button type="button" data-close="addDialog" aria-label="Chiudi aggiunta album">Chiudi</button></div>
+    <form id="catalogForm">
+      <label>Catalogo<select id="catalogService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
+      <label>Titolo, artista o link album<input id="catalogQuery" type="search" required maxlength="100" autocomplete="off"></label>
+      <button type="submit">Cerca album</button>
+    </form>
+    <p id="catalogStatus" role="status"></p><div id="catalogResults"></div>
+  </dialog>
+  <dialog id="settingsDialog" aria-labelledby="settingsTitle">
+    <div class="dialog-heading"><h2 id="settingsTitle">Impostazioni</h2><button type="button" data-close="settingsDialog">Chiudi</button></div>
+    <section>
+      <h3>Raccolta condivisa · GitHub</h3>
+      <p>Usa il repository privato <strong>accord-music-data</strong>. Il token deve avere permesso Contents in lettura e scrittura. Non viene inviato ai servizi musicali.</p>
+      <form id="githubForm">
+        <label>Proprietario GitHub<input id="owner" maxlength="39" autocomplete="off" required></label>
+        <label>Token GitHub<input id="githubToken" type="password" autocomplete="off"></label>
+        <button type="submit">Salva collegamento GitHub</button>
+      </form>
+      <p class="muted">Il token GitHub resta su questo browser, accessibile agli script della stessa origine. La sincronizzazione parte soltanto quando la richiedi e confermi l'anteprima.</p>
+    </section>
+    <section>
+      <h3>Accesso ai cataloghi musicali</h3>
+      <label>Servizio<select id="settingsService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
+      <p id="serviceStatus" role="status"></p>
+      <label id="clientField">Client ID dell'applicazione<input id="clientId" autocomplete="off"></label>
+      <label id="redirectField">Redirect da registrare nella tua app Spotify<input id="redirectUri" readonly></label>
+      <div data-service="tidal" hidden><p>Il Client ID identifica la tua app TIDAL: non e' l'accesso all'account. Registra come redirect l'indirizzo di questa pagina e premi Collega.</p></div>
+      <div data-service="qobuz" hidden>
+        <label>App ID della sessione web<input id="qobuzAppId" type="password" autocomplete="off"></label>
+        <label>Token della sessione web (non la password)<input id="qobuzToken" type="password" autocomplete="off"></label>
+        <p class="muted">Nel browser Qobuz: Strumenti sviluppatore &gt; Rete &gt; favorite/getUserFavorites. Copia X-App-Id e X-User-Auth-Token. Non condividere il token.</p>
       </div>
-      <div class="header-actions">
-        <button id="syncButton" class="secondary" type="button">Sincronizza</button>
-        <details class="app-menu"><summary>Menu</summary><div class="app-menu-content">
-          <button id="commandButton" class="secondary" type="button" aria-keyshortcuts="Control+k Meta+k" title="Comandi e ricerca locale (Ctrl+K)">Cerca un comando</button>
-          <button id="activityButton" class="secondary" type="button" aria-controls="activityDialog">Attività</button>
-          <button id="settingsButton" class="secondary" type="button" aria-label="Preferenze e collegamenti" title="Preferenze e collegamenti">Impostazioni</button>
-        </div></details>
-      </div>
-    </header>
-
-    <main>
-      <section id="updateBanner" class="notice" role="status" hidden>
-        <p>Nuova versione pronta. Le bozze restano locali; completa o scarta le modifiche prima di aggiornare.</p>
-        <button id="applyUpdateButton" type="button">Riavvia con la nuova versione</button>
-        <button id="deferUpdateButton" type="button">Più tardi</button>
-        <p id="updateStatus"></p>
-      </section>
-      <section class="intro tab-intro">
-        <div><p class="eyebrow">LA TUA MUSICA, IN PRIVATO</p><h2>Album da ritrovare. Musica da scoprire.</h2></div>
-        <p>La raccolta resta sul dispositivo fino alla sincronizzazione GitHub. Ricerca e comandi locali non interrogano i servizi musicali.</p>
-      </section>
-
-      <nav class="view-tabs" role="tablist" aria-label="Sezioni Accord">
-        <button id="collectionTab" class="view-tab" type="button" role="tab" aria-selected="true" aria-controls="collectionPanel" tabindex="0">Raccolta album</button>
-        <button id="suggestionsTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="suggestionsPanel" tabindex="-1">Suggerimenti</button>
-        <button id="playlistBuilderTab" class="view-tab" type="button" role="tab" aria-selected="false" aria-controls="playlistBuilderPanel" tabindex="-1">Crea playlist</button>
-      </nav>
-
-      <section id="collectionPanel" class="tab-panel" role="tabpanel" aria-labelledby="collectionTab" tabindex="0">
-      <section class="playlist-import">
-        <div><p class="eyebrow">LIBRERIA</p><h2>I tuoi album</h2><p>Apri i dettagli per modificare stato, voto, generi, collezioni e tag.</p></div>
-        <div class="playlist-import-actions">
-          <button id="manualAlbumButton" class="primary" type="button">+ Aggiungi album</button>
-          <button id="playlistImportButton" class="secondary" type="button">Importa playlist Spotify…</button>
-          <details id="viewMenu" class="view-menu">
-            <summary>Vista e altro</summary>
-            <div class="view-menu-content">
-              <button id="loadCoversButton" class="secondary" type="button">Carica copertine mancanti online</button>
-              <button id="pickAlbumButton" type="button">Cosa ascolto adesso?</button>
-              <button id="musicChoicesButton" type="button">Associazioni, disponibilita' e rinvii...</button>
-              <button id="durationQueueButton" type="button">Coda per tempo disponibile…</button>
-              <button id="completeDurationsButton" type="button">Completa durate degli album selezionati…</button>
-              <button id="completeMusicButton" type="button">Completa solo questi album…</button>
-              <button id="resumeMusicCompletionButton" type="button">Riprendi completamento dati…</button>
-              <button id="duplicatesButton" type="button">Confronta possibili duplicati</button>
-              <button id="auditCollectionButton" type="button">Controllo qualità locale</button>
-              <button id="collectionHistoryButton" type="button">Cronologia modifiche locali</button>
-              <button id="statisticsButton" type="button">Statistiche locali</button>
-              <button id="syncChangesButton" type="button">Modifiche da sincronizzare</button>
-              <button id="offlineStatusButton" type="button">Disponibilita' offline</button>
-              <button id="coverStorageButton" type="button">Gestisci copertine offline</button>
-              <button id="draftListButton" type="button">Bozze locali</button>
-              <button id="normalizeLabelsButton" type="button">Uniforma etichette locali…</button>
-              <form id="openSpotifyForm" class="qol-actions">
-                <label><span id="openMusicAlbumLabel">Apri link album Spotify · prima cerca sul dispositivo</span>
-                  <input id="openSpotifyInput" type="text" maxlength="2000" autocomplete="off" placeholder="Incolla un link album Spotify">
-                </label>
-                <button type="submit">Apri album / prepara ricerca</button>
-              </form>
-              <button id="backupButton" type="button">Scarica backup locale</button>
-              <button id="verifyBackupButton" type="button">Verifica file backup…</button>
-              <label>File da verificare <input id="verifyBackupInput" type="file" accept=".json,application/json" hidden></label>
-              <label>Ripristina backup locale <input id="restoreBackupInput" type="file" accept=".json,application/json"></label>
-              <p id="backupStatus" class="summary" role="status"></p>
-              <label>Viste salvate <select id="savedCollectionView"><option value="">Scegli vista</option></select></label>
-              <button id="saveCollectionViewButton" type="button">Salva vista corrente</button>
-              <button id="deleteCollectionViewButton" type="button">Elimina vista scelta</button>
-              <label>Visualizzazione <select id="collectionLayout"><option value="comfortable">Schede comode</option><option value="compact">Elenco compatto</option></select></label>
-              <label class="check"><input id="pinnedOnlyInput" type="checkbox"> Solo album fissati</label>
-              <label class="check"><input id="groupEditionsInput" type="checkbox">Raggruppa possibili edizioni</label>
-              <p class="summary">Vista e album fissati restano su questo dispositivo.</p>
-            </div>
-          </details>
-        </div>
-      </section>
-      <div id="tidalCollectionMount"></div>
-
-      <div class="collection-search">
-        <button id="facetBackButton" type="button" hidden>← Torna alla vista precedente</button>
-        <p id="facetSummary" role="status" hidden></p>
-        <label class="search">Cerca nella raccolta · premi Invio per cercare
-          <input id="searchInput" type="search" placeholder="Album, artista o genere · Invio" title="Ctrl+F per cercare · Invio per applicare" aria-keyshortcuts="Control+f Meta+f" autocomplete="off">
-        </label>
-        <button id="resetFiltersButton" class="secondary" type="button" hidden>Azzera filtri</button>
-      </div>
-      <div id="quickCollectionFilters" class="quick-collection-filters" role="group" aria-label="Filtri rapidi">
-        <button id="quickFavoritesFilter" type="button" aria-pressed="false" title="Mostra solo gli album con la stellina, mantenendo gli altri filtri.">Preferiti</button>
-        <button id="quickQueuedFilter" type="button" aria-pressed="false" title="Mostra gli album Da ascoltare; disattiva per tornare a ogni stato.">Da ascoltare</button>
-        <button id="quickUnratedFilter" type="button" aria-pressed="false" title="Mostra gli album senza un tuo voto, mantenendo gli altri filtri.">Senza voto</button>
-      </div>
-      <details id="collectionFilters" class="filter-disclosure">
-      <summary>Filtri e ordinamento <span id="activeFilterCount"></span></summary>
-      <section class="filters" aria-label="Filtri album">
-        <label>Genere principale
-          <select id="primaryGenreFilter"><option value="">Tutti i generi principali</option></select>
-        </label>
-        <label>Generi secondari
-          <select id="secondaryGenreFilter"><option value="">Tutti i generi secondari</option></select>
-        </label>
-        <label>Stato
-          <select id="statusFilter">
-            <option value="">Tutti gli stati</option>
-            <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
-            <option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option>
-          </select>
-        </label>
-        <label>Collezione
-          <select id="collectionFilter"><option value="">Tutte le collezioni</option></select>
-        </label>
-        <label>Tag
-          <select id="tagFilter"><option value="">Tutti i tag</option></select>
-        </label>
-        <label class="check"><input id="unratedFilter" type="checkbox">Senza voto</label>
-        <label class="check" hidden><input id="missingDurationFilter" type="checkbox">Durata mancante</label>
-        <label class="check"><input id="notesPresentFilter" type="checkbox">Note presenti</label>
-        <label class="check" title="Senza un collegamento valido al servizio musicale scelto in alto; gli album nativi sono esclusi."><input id="missingAssociationFilter" type="checkbox">Associazione mancante</label>
-        <label class="check" hidden><input id="unavailableOnlyFilter" type="checkbox">Non disponibili (manuale)</label>
-        <label class="check" hidden><input id="deferredOnlyFilter" type="checkbox">Rimandati</label>
-        <label class="check"><input id="favoritesOnlyFilter" type="checkbox">Album preferiti</label>
-        <button id="reviewMusicAssociations" type="button">Rivedi associazioni irrisolte...</button>
-        <label>Ordina per
-          <select id="sortOrder">
-            <option value="artist">Artista</option><option value="name">Album</option>
-            <option value="year">Anno di uscita</option><option value="rating">Voto</option>
-            <option value="genre">Genere</option><option value="collection">Collezione</option>
-            <option value="manual">Ordine manuale</option>
-            <option value="added">Aggiunti di recente</option><option value="modified">Modificati di recente</option>
-          </select>
-        </label>
-        <label>Lista intelligente
-          <select id="smartCollectionList">
-            <option value="">Tutti gli album</option>
-            <option value="stale_queue">Da ascoltare fermi da 30+ giorni</option>
-            <option value="unrated">Ascoltati senza voto</option>
-            <option value="recent">Modificati su questo dispositivo negli ultimi 7 giorni</option>
-            <option value="favorites_unrated">Piaciuti senza voto</option>
-          </select>
-        </label>
-      </section>
-      <p class="summary">Le date locali non vengono ricostruite per gli album precedenti.</p>
-      </details>
-      <div id="collectionFilterChips" class="qol-actions" aria-label="Filtri locali attivi"></div>
-
-      <p id="collectionSummary" class="summary" aria-live="polite"></p>
-      <button id="unratedSummary" type="button" class="secondary"></button>
-      <details class="collection-storage-details"><summary>Salvataggio, sincronizzazione e offline</summary>
-      <p id="localSyncSummary" class="summary" role="status"></p>
-      <p id="offlineSummary" class="summary" role="status"></p>
-      </details>
-      <p id="qolStorageError" class="inline-error" role="alert" hidden></p>
-      <section id="selectionToolbar" class="selection-toolbar" aria-label="Azioni album selezionati" hidden>
-        <div class="selection-summary">
-        <strong id="selectionCount"></strong>
-        <button id="clearSelectionButton" type="button">Deseleziona</button>
-        </div>
-        <div class="selection-primary">
-        <button id="bulkGenresButton" type="button">Modifica generi</button>
-        <button id="bulkEditButton" type="button">Modifica album...</button>
-        </div>
-        <details class="selection-secondary"><summary>Altre azioni e selezione</summary>
-        <div class="selection-options">
-        <button id="showSelectionButton" type="button">Vedi selezione</button>
-        <button id="dropHiddenSelectionButton" type="button">Togli nascosti</button>
-        <button id="selectVisibleButton" type="button">Seleziona visibili</button>
-        <label>Imposta stato <select id="bulkStatus"><option value="">Scegli stato…</option><option value="queued">Da ascoltare</option><option value="listening">In ascolto</option><option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option></select></label>
-        <button id="applyBulkStatus" type="button">Applica stato</button>
-        <button id="pinSelectedButton" type="button">Fissa selezionati</button>
-        <button id="unpinSelectedButton" type="button">Non fissare</button>
-        <button id="removeSelectedButton" class="danger" type="button">Rimuovi selezionati</button>
-        </div>
-        </details>
-      </section>
-      <p class="summary selection-help">Clic: seleziona un album. Ctrl+clic: aggiungi o togli. Shift+clic: seleziona un intervallo.</p>
-      <p id="manualOrderHint" class="summary manual-order-hint" role="status" hidden></p>
-      <p id="coverSyncNotice" class="notice cover-sync-notice" role="status" hidden></p>
-      <section id="albumList" class="album-list" aria-label="Album"></section>
-      <section id="emptyState" class="empty" hidden><h3 id="emptyHeading">Nessun album trovato</h3><p id="emptyDescription"></p><button id="emptyActionButton" class="primary" type="button">Aggiungi il primo album</button></section>
-      </section>
-
-      <section id="suggestionsPanel" class="tab-panel" role="tabpanel" aria-labelledby="suggestionsTab" tabindex="0" hidden>
-        <section class="suggestions" aria-labelledby="suggestionHeading">
-          <div class="suggestion-intro tab-intro">
-            <div><p class="eyebrow">SCOPERTA MUSICALE</p><h2 id="suggestionHeading">Suggerimenti</h2></div>
-            <p>Scopri album nel servizio musicale scelto, dai tuoi ascolti disponibili o da un album di partenza. La raccolta resta locale fino alla sincronizzazione.</p>
-          </div>
-          <section class="suggestion-source-picker" aria-labelledby="suggestionSourceHeading">
-            <label>Risultati precedenti <select id="suggestionHistory"><option value="">Scegli risultato locale</option></select></label>
-            <button id="clearSuggestionHistory" type="button">Svuota cronologia</button>
-            <button id="restoreSnoozedButton" type="button">Ripristina suggerimenti rimandati</button>
-            <h3 id="suggestionSourceHeading">Da dove partire</h3>
-            <label>Strumento
-              <select id="suggestionTool">
-                <option value="spotify">Spotify</option>
-                <option value="lastfm">Last.fm</option>
-              </select>
-            </label>
-            <p id="suggestionToolHelp" class="summary" role="status" aria-live="polite"></p>
-            <button id="suggestionSearchButton" class="secondary" type="button">Cerca suggerimenti</button>
-          </section>
-          <section class="spotify-suggestions" aria-labelledby="spotifySuggestionHeading">
-            <h3 id="spotifySuggestionHeading">Album in base agli ascolti Spotify</h3>
-            <p>Scopri album ispirati ai tuoi ascolti Spotify.</p>
-            <details class="suggestion-filter-details">
-              <summary>Come funzionano i suggerimenti</summary>
-              <p>Spotify parte dagli artisti e dai brani più ascoltati nel periodo selezionato, cerca artisti affini tramite i generi disponibili e propone i loro album. I filtri per artisti e generi si applicano prima della ricerca; la popolarità dei brani non è un conteggio di ascolti né un voto dell’album.</p>
-              <p>Accord legge solo le classifiche Spotify richieste (fino a 50 artisti e 50 brani), non la cronologia completa. Per usare questa funzione autorizza user-top-read; la cronologia e i filtri restano nel browser. MusicBrainz e Discogs aggiungono catalogo e voti quando disponibili.</p>
-            </details>
-            <div class="spotify-suggestion-controls">
-              <label>Periodo di ascolto
-                <select id="spotifySuggestionPeriod">
-                  <option value="short_term">Ultimo mese</option>
-                  <option value="medium_term" selected>Ultimi 6 mesi</option>
-                  <option value="long_term">Ultimi 12 mesi</option>
-                </select>
-              </label>
-              <label>Escludi artisti ascoltati
-                <select id="spotifySuggestionExclusion">
-                  <option value="none">Nessuna esclusione</option>
-                  <option value="short_term">Ultimo mese</option>
-                  <option value="medium_term" selected>Ultimi 6 mesi</option>
-                  <option value="long_term">Ultimi 12 mesi</option>
-                </select>
-              </label>
-            </div>
-            <details class="suggestion-filter-details">
-              <summary>Filtri artisti e generi</summary>
-              <div class="suggestion-filter-controls">
-              <label>Artisti da escludere
-                <input id="spotifyExcludeArtists" maxlength="500" placeholder="Artista A, Artista B">
-              </label>
-              <label>Generi da includere
-                <input id="spotifyIncludeGenres" maxlength="300" placeholder="Rock, jazz">
-              </label>
-              <label>Modalità generi inclusi
-                <select id="spotifyIncludeGenresMatch">
-                  <option value="exact">Genere esatto</option>
-                  <option value="contains">Contiene il testo</option>
-                </select>
-              </label>
-              <label>Generi da escludere
-                <input id="spotifyExcludeGenres" maxlength="300" placeholder="Generi separati da virgole">
-              </label>
-              <label>Modalità generi esclusi
-                <select id="spotifyExcludeGenresMatch">
-                  <option value="exact">Genere esatto</option>
-                  <option value="contains">Contiene il testo</option>
-                </select>
-              </label>
-              </div>
-            </details>
-            <p id="spotifySuggestionStatus" class="summary" role="status" aria-live="polite"></p>
-            <section id="spotifySuggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti da Spotify"></section>
-          </section>
-          <section class="lastfm-suggestions" aria-labelledby="lastfmSuggestionHeading" hidden>
-            <h3 id="lastfmSuggestionHeading">Album in base agli ascolti Last.fm</h3>
-            <p>Scopri album ispirati ai tuoi ascolti Last.fm.</p>
-            <details class="suggestion-filter-details">
-              <summary>Come funzionano i suggerimenti</summary>
-              <p>Last.fm parte dagli ascolti registrati nel periodo selezionato, cerca artisti affini e propone album del catalogo. Applica le esclusioni e i filtri di genere prima della ricerca; MusicBrainz fornisce catalogo e generi, mentre Discogs ordina le proposte con voti affidabili e Last.fm resta il ripiego. Puoi usare il campione online oppure la cronologia completa esportata esplicitamente da Accord Desktop nel repository privato.</p>
-              <p>Il nome utente e i filtri restano nel profilo del browser. La chiave API viene inviata solo a Last.fm. La cronologia non viene inviata dalla PWA: per usare quella completa, attiva l’opzione in Impostazioni e scarica l’esportazione privata creata esplicitamente da Accord Desktop. Senza archivio sincronizzato la PWA legge fino a 1.000 ascolti per campione. Gli album MusicBrainz sono abbinati a Spotify solo quando li aggiungi; i voti Discogs non sostituiscono il tuo voto personale.</p>
-            </details>
-            <div class="lastfm-suggestion-controls">
-              <label>Nome utente Last.fm
-                <input id="lastfmSuggestionUser" maxlength="64" autocomplete="username" placeholder="Nome utente">
-              </label>
-              <label>Periodo di ascolto
-                <select id="lastfmSuggestionDays">
-                  <option value="7">Ultimi 7 giorni</option>
-                  <option value="30">Ultimi 30 giorni</option>
-                  <option value="90">Ultimi 90 giorni</option>
-                  <option value="365">Ultimi 365 giorni</option>
-                  <option value="all">Tutto lo storico</option>
-                  <option value="custom">Intervallo personalizzato</option>
-                </select>
-              </label>
-              <label>Escludi artisti ascoltati
-                <select id="lastfmSuggestionExclusion">
-                  <option value="none">Nessuna esclusione</option>
-                  <option value="30">Ultimi 30 giorni</option>
-                  <option value="90">Ultimi 3 mesi (90 giorni)</option>
-                  <option value="365">Ultimi 365 giorni</option>
-                  <option value="all">Tutto lo storico</option>
-                </select>
-              </label>
-              <div id="lastfmSuggestionCustomRange" class="lastfm-suggestion-date-range" hidden>
-                <label>Dal
-                  <input id="lastfmSuggestionStart" type="date">
-                </label>
-                <label>Al
-                  <input id="lastfmSuggestionEnd" type="date">
-                </label>
-              </div>
-            </div>
-            <details class="suggestion-filter-details">
-              <summary>Filtri artisti e generi</summary>
-              <div class="suggestion-filter-controls">
-              <label>Artisti da escludere
-                <input id="lastfmExcludeArtists" maxlength="500" placeholder="Artista A, Artista B">
-              </label>
-              <label>Generi da includere
-                <input id="lastfmIncludeGenres" maxlength="300" placeholder="Rock, jazz">
-              </label>
-              <label>Modalità generi inclusi
-                <select id="lastfmIncludeGenresMatch">
-                  <option value="exact">Genere esatto</option>
-                  <option value="contains">Contiene il testo</option>
-                </select>
-              </label>
-              <label>Generi da escludere
-                <input id="lastfmExcludeGenres" maxlength="300" placeholder="Generi separati da virgole">
-              </label>
-              <label>Modalità generi esclusi
-                <select id="lastfmExcludeGenresMatch">
-                  <option value="exact">Genere esatto</option>
-                  <option value="contains">Contiene il testo</option>
-                </select>
-              </label>
-              </div>
-            </details>
-            <p id="suggestionStatus" class="summary" role="status" aria-live="polite"></p>
-            <section id="suggestionAlbums" class="suggestion-albums" aria-label="Album suggeriti"></section>
-          </section>
-        </section>
-      </section>
-
-      <section id="playlistBuilderPanel" class="tab-panel" role="tabpanel" aria-labelledby="playlistBuilderTab" tabindex="0" hidden>
-        <section class="suggestions playlist-builder" aria-labelledby="playlistBuilderHeading">
-          <div class="tab-intro">
-            <div><p class="eyebrow">CREAZIONE SPOTIFY</p><h2 id="playlistBuilderHeading">Crea una playlist</h2></div>
-            <p>Nuovi artisti con lo stesso metodo di Suggerimenti Spotify. Playlist privata, solo dopo conferma.</p>
-          </div>
-          <details class="suggestion-filter-details">
-            <summary>Come funziona</summary>
-            <p id="playlistBuilderExplanation">Accord usa gli stessi input di Suggerimenti Spotify: periodo di ascolto, artisti esclusi, filtri e album già in raccolta. Poi sceglie brani verificati dagli album selezionati anche con Discogs. Per cambiare i risultati modifica le impostazioni nella scheda Suggerimenti Spotify, non Last.fm. Fino a 50 artisti, senza garanzia di raggiungerli: ogni passaggio manuale ha un budget di 40 letture Spotify, inclusi i retry. Se necessario premi Continua anteprima. Nessun ripiego sugli artisti ascoltati; la playlist privata viene creata solo dopo la tua conferma.</p>
-            <label id="playlistUnsupportedRating" title="Non disponibile per la ricerca automatica TIDAL/Qobuz: non viene simulato il filtro Spotify/Discogs. Puoi verificare Discogs manualmente dalla scheda Suggerimenti." hidden><input type="checkbox" disabled>Filtro automatico Spotify / Discogs</label>
-          </details>
-          <div class="playlist-builder-controls">
-            <label>Numero di artisti
-              <input id="playlistArtistCount" type="number" min="1" max="50" step="1" value="5" required>
-            </label>
-            <label>Brani per artista
-              <input id="playlistTracksPerArtist" type="number" min="1" max="10" step="1" value="3" required>
-            </label>
-            <label>Nome playlist
-              <input id="playlistBuilderName" maxlength="100" required autocomplete="off" value="Nuove scoperte">
-            </label>
-            <button id="playlistPreviewButton" class="secondary" type="button">Genera anteprima</button>
-          </div>
-          <details id="playlistReferences" class="suggestion-filter-details" hidden><summary>Artisti di riferimento</summary><p>Escludere un riferimento cambia i punti di partenza, non ammette artisti già ascoltati tra i risultati. Genera prima un'anteprima per caricare i riferimenti.</p><div id="playlistReferenceList" class="playlist-builder-controls"></div></details>
-          <p id="playlistBuilderStatus" class="summary" role="status" aria-live="polite">Collega Spotify per caricare l'anteprima.</p>
-          <details class="suggestion-filter-details" hidden><summary>Dettagli ricerca</summary><p id="playlistBuilderDetails"></p></details>
-          <section id="playlistBuilderPreview" class="suggestion-list" aria-label="Anteprima brani playlist"></section>
-          <button id="playlistCreateButton" class="primary" type="button" disabled>Crea playlist privata</button>
-          <label title="Accord crea sempre playlist private."><input id="playlistPrivate" type="checkbox" checked disabled>Privata</label>
-          <button id="playlistManageButton" class="secondary" type="button">Gestisci playlist…</button>
-          <button id="playlistVerifyButton" class="secondary" type="button" hidden>Verifica esito precedente</button>
-        </section>
-      </section>
-    </main>
-
-    <dialog id="settingsDialog">
-      <form id="settingsForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">IMPOSTAZIONI PRIVATE</p><h2>Preferenze e collegamenti</h2></div><button class="icon-button" value="cancel" formnovalidate aria-label="Chiudi">×</button></div>
-          <fieldset class="preference-group"><legend>Accessibilità · salvata subito sul dispositivo</legend>
-          <label>Dimensione testo <select id="textScaleInput"><option value="normal">Normale</option><option value="large">Grande · 115%</option><option value="larger">Molto grande · 130%</option></select></label>
-          <label>Contrasto <select id="contrastInput"><option value="standard">Standard</option><option value="high">Alto</option></select></label>
-          <label>Densità comandi <select id="densityInput"><option value="touch">Touch · obiettivi ampi</option><option value="compact">Compatta</option></select></label>
-          </fieldset>
-          <details class="preference-group"><summary>Accessi alle piattaforme · verifica all'avvio</summary>
-          <p class="notice">Solo letture sui collegamenti configurati, senza login, importazioni o sincronizzazioni aggiuntive. Gli esiti valgono per questa apertura; i permessi di scrittura non sono attestati.</p>
-          <dl>
-          <dt>GitHub</dt><dd><span data-access-status="github">Non ancora verificato</span></dd>
-          <dt>Spotify</dt><dd><span data-access-status="spotify">Non ancora verificato</span></dd>
-          <dt>TIDAL</dt><dd><span data-access-status="tidal">Non ancora verificato</span></dd>
-          <dt>Qobuz</dt><dd><span data-access-status="qobuz">Non ancora verificato</span></dd>
-          <dt>Last.fm</dt><dd><span data-access-status="lastfm">Non ancora verificato</span></dd>
-          </dl>
-          <button type="button" class="secondary" id="verifyPlatformAccessButton">Verifica accessi</button>
-          </details>
-          <fieldset class="preference-group"><legend>GitHub · sincronizzazione privata</legend>
-          <label>Proprietario GitHub
-            <input id="ownerInput" autocomplete="username" required pattern="[A-Za-z0-9\-]{1,39}" placeholder="nome-utente">
-          </label>
-          <label>Token di accesso GitHub limitato (fine-grained)
-            <input id="tokenInput" type="password" autocomplete="new-password" placeholder="github_pat_…">
-          </label>
-          <p class="notice">Limita il token al repository privato <code>accord-music-data</code> e abilita il permesso Contents in lettura e scrittura. Accord lo salva nel profilo del browser, quindi chiunque possa usare quel profilo potrebbe accedervi. Non inserirlo in URL, file o repository. Il token viene inviato solo a api.github.com.</p>
-          <label class="check"><input id="autoSyncInput" type="checkbox"> Sincronizza all’avvio; le modifiche locali possono essere inviate al repository.</label>
-          <label class="check"><input id="useSyncedLastfmHistoryInput" type="checkbox"> Usa la cronologia Last.fm esportata da Accord Desktop.</label>
-          <p class="notice">Questa opzione scarica in questo browser <code>lastfm-history.json.gz</code> durante la sincronizzazione e la conserva offline. Solo l’azione “Esporta Last.fm” in Desktop invia l’archivio al repository; la PWA non lo modifica.</p>
-          <div class="dialog-actions settings-actions"><button id="forgetSyncedLastfmHistory" class="secondary" type="button">Dimentica copia Last.fm locale</button></div>
-          </fieldset>
-          <fieldset class="preference-group"><legend>Last.fm · chiave di ricerca</legend>
-          <label>Chiave API Last.fm
-            <input id="lastfmApiKeyInput" type="password" autocomplete="new-password" placeholder="Chiave API (32 caratteri)">
-          </label>
-          <div class="dialog-actions settings-actions"><button id="clearLastfmApiKey" class="secondary" type="button">Dimentica chiave</button><button id="saveLastfmApiKey" class="secondary" type="button">Salva chiave</button></div>
-          <p class="notice">Accord conserva la chiave solo in questo profilo del browser, separata dalla raccolta, e la invia esclusivamente a Last.fm. Non viene sincronizzata con GitHub. Puoi creare una chiave su <a href="https://www.last.fm/api/account/create" target="_blank" rel="noreferrer">last.fm/api</a>.</p>
-          </fieldset>
-          <fieldset class="preference-group"><legend>Collegamento Spotify</legend>
-          <label>Client ID dell’app Spotify
-            <input id="spotifyClientIdInput" autocomplete="off" placeholder="Client ID (32 caratteri)">
-          </label>
-          <label>Redirect URI registrato nell’app Spotify
-            <input id="spotifyRedirectUriInput" type="url" autocomplete="url" required>
-          </label>
-          <p class="notice">Registra questo indirizzo di ritorno, inclusa la barra finale, nelle impostazioni dell’app Spotify. È lo stesso nel browser e nella PWA installata. Non inserire un client secret. I token Spotify restano nella sessione del browser e non vengono sincronizzati.</p>
-          <details><summary>ⓘ Dettagli</summary><p class="notice">Il collegamento usa Authorization Code con PKCE.</p></details>
-          </fieldset>
-        </div>
-        <div class="dialog-footer">
-          <div class="dialog-actions settings-actions"><button id="clearCredentials" class="secondary" type="button">Dimentica GitHub</button><button id="disconnectSpotify" class="secondary" type="button">Scollega Spotify</button><button class="primary" value="save">Salva</button></div>
-          <p id="settingsFeedback" class="summary" role="status" hidden></p>
-        </div>
-      </form>
-    </dialog>
-
-    <dialog id="playlistDialog">
-      <form id="playlistForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">IMPORTAZIONE SPOTIFY</p><h2>Album da playlist</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-          <label>Nome, ID o link della playlist
-            <input id="playlistInput" required maxlength="300" autocomplete="off" placeholder="Nome playlist o link open.spotify.com/playlist/…">
-          </label>
-          <p class="notice">Quando cerchi una playlist per nome, Accord controlla solo la prima pagina di risultati. Se inserisci un ID o un link, la ricerca per nome non serve. Spotify richiede l’autorizzazione per leggere le playlist private e collaborative. Gli album completi restano inclusi; i singoli / EP vengono mostrati in una lista e ciascuno parte non selezionato. Spotify non distingue con certezza EP e singoli. Accord salva nella raccolta solo i dati delle release, non i brani o le altre informazioni della playlist. L’importazione non avvia la sincronizzazione con GitHub.</p>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Continua</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="playlistSinglesDialog">
-      <form id="playlistSinglesForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">IMPORTAZIONE SPOTIFY</p><h2>Singoli / EP della playlist</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-          <p id="playlistSinglesSummary" class="notice" role="status" aria-live="polite"></p>
-          <section id="playlistSinglesList" class="conflict-list" aria-label="Seleziona singoli o EP da importare"></section>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="import">Importa selezionati</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="manualAlbumDialog">
-      <form id="manualAlbumSearchForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">RICERCA AVANZATA</p><h2>Aggiungi un album</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-          <div class="manual-search-fields">
-            <label>Album
-              <input id="manualAlbumQuery" maxlength="200" autocomplete="off" placeholder="Titolo album">
-            </label>
-            <label>Artista
-              <input id="manualAlbumArtist" maxlength="200" autocomplete="off" placeholder="Nome artista">
-            </label>
-          </div>
-          <details class="manual-search-options"><summary>Filtri e fonte della ricerca</summary>
-          <label>Fonte album
-            <select id="manualAlbumSource">
-              <option value="lastfm">Last.fm · predefinito</option>
-              <option value="musicbrainz">MusicBrainz</option>
-              <option value="spotify">Spotify · ricerca standard</option>
-            </select>
-          </label>
-          <div class="manual-search-fields">
-            <label>Genere
-              <input id="manualAlbumGenre" maxlength="80" autocomplete="off" placeholder="Es. jazz">
-            </label>
-            <label>Anno o intervallo
-              <input id="manualAlbumYear" maxlength="9" autocomplete="off" placeholder="Es. 1990-1999">
-            </label>
-          </div>
-          <p id="manualAlbumSourceNotice" class="notice">Last.fm consente di cercare per titolo, artista o genere in un’unica richiesta, ma non supporta il filtro per anno.</p>
-          <fieldset>
-            <legend>Includi nella ricerca album</legend>
-            <label class="check"><input id="manualAlbumIncludeLive" type="checkbox" checked> Live</label>
-            <label class="check"><input id="manualAlbumIncludeShort" type="checkbox" checked> Singoli / EP</label>
-            <p class="summary">Filtri sui risultati letti, per tipo dichiarato e titolo. Singoli ed EP sono raggruppati; i tipi non riconosciuti restano visibili.</p>
-          </fieldset>
-          </details>
-          <p id="manualAlbumStatus" class="summary" role="status" aria-live="polite"></p>
-          <section id="manualAlbumResults" class="suggestion-albums" aria-label="Risultati ricerca album"></section>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Chiudi</button><button id="manualAlbumSearchButton" class="primary" value="search">Cerca</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="playlistChoiceDialog">
-      <form id="playlistChoiceForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">PLAYLIST OMONIME</p><h2>Scegli playlist</h2></div><button class="icon-button" value="cancel" aria-label="Chiudi">×</button></div>
-          <label>Playlist Spotify
-            <select id="playlistChoiceSelect" required></select>
-          </label>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla</button><button class="primary" value="choose">Importa</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="conflictDialog">
-      <form id="conflictForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">MODIFICHE SIMULTANEE</p><h2>Risolvi i conflitti</h2></div></div>
-          <p>Ogni album in conflitto è rimasto invariato fino a questa scelta. Seleziona quale versione conservare.</p>
-          <div id="conflictList" class="conflict-list"></div>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel">Annulla sincronizzazione</button><button id="resolveButton" class="primary" value="resolve">Applica scelte</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="messageDialog">
-      <form method="dialog">
-        <div class="dialog-scroll"><div class="dialog-heading"><h2 id="messageTitle"></h2><button class="icon-button" value="close" aria-label="Chiudi">×</button></div>
-        <p id="messageSummary"></p>
-        <details id="messageTechnicalDetails"><summary>ⓘ Dettagli</summary><p id="messageBody"></p></details></div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="primary" value="close">Chiudi</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">
-      <form id="albumDetailsForm" method="dialog">
-        <div class="dialog-scroll">
-          <div class="dialog-heading"><div><p class="eyebrow">DETTAGLI ALBUM</p><h2 id="albumDetailsTitle"></h2><p id="albumDetailsMeta" class="summary"></p></div><button class="icon-button" value="cancel" formnovalidate aria-label="Chiudi dettagli">×</button></div>
-          <div id="albumDetailsFields" class="album-detail-fields"></div>
-          <nav class="qol-actions" aria-label="Navigazione album nella vista corrente"><button id="previousAlbumButton" type="button">← Precedente</button><span id="albumDetailsPosition"></span><button id="nextAlbumButton" type="button">Successivo →</button></nav>
-          <button id="albumDetailsChoices" type="button">Associazione, disponibilita' e rinvio...</button>
-          <p id="albumDetailsError" class="inline-error" role="alert" hidden></p>
-        </div>
-        <div class="dialog-footer"><div class="dialog-actions"><button class="secondary" value="cancel" formnovalidate>Annulla</button><button class="primary" value="save">Salva modifiche</button></div></div>
-      </form>
-    </dialog>
-
-    <dialog id="commandDialog" aria-labelledby="commandTitle">
-      <div class="dialog-heading"><h2 id="commandTitle">Comandi e album</h2><button id="closeCommandButton" class="icon-button" type="button" aria-label="Chiudi comandi">×</button></div>
-      <label class="command-search">Ricerca locale in tutte le sezioni<input id="commandInput" type="search" autocomplete="off" placeholder="Un comando, album o artista…"></label>
-      <p class="summary">Nessuna ricerca online. ↑ ↓ per navigare, Invio per aprire, Esc per chiudere.</p>
-      <div id="commandResults" class="command-results" role="group" aria-label="Risultati locali"></div>
-      <p id="commandStatus" class="summary" role="status"></p>
-    </dialog>
-    <p id="feedbackToast" class="feedback-toast" role="status" hidden></p>
-    <dialog id="activityDialog" aria-labelledby="activityTitle">
-      <div class="dialog-heading"><h2 id="activityTitle">Attività sul dispositivo</h2><button id="closeActivityButton" type="button" aria-label="Chiudi attività">×</button></div>
-      <p id="activityCooldown"></p>
-      <ul id="activityCurrent"></ul>
-      <details><summary>ⓘ Dettagli · messaggi recenti</summary><ul id="activityHistory"></ul></details>
-      <button id="showUpdateButton" type="button" hidden>Mostra aggiornamento disponibile</button>
-    </dialog>
-
-    <template id="albumTemplate">
-      <article class="album-card">
-        <label class="album-selection"><input class="album-select" type="checkbox"><span class="sr-only">Seleziona album</span></label>
-        <div class="cover-frame"><img class="album-cover" alt="" loading="lazy"><span class="cover-placeholder"></span></div>
-        <div class="album-main"><div><div class="album-heading"><h3 class="album-title"></h3><span class="album-sync-indicator" hidden>Da sincronizzare</span><span class="pinned-indicator" hidden>Fissato</span></div><p class="album-meta"></p><p class="album-extra"></p></div><div class="album-actions"><button class="favorite-album" type="button" aria-pressed="false" aria-label="Aggiungi ai preferiti">☆ Preferiti</button><button class="pin-album" type="button" aria-pressed="false">Fissa</button><button class="album-details-button" type="button">Dettagli</button><a class="album-player-link" rel="noopener noreferrer">Apri in Spotify ↗</a><div class="manual-order-controls" hidden><button class="move-album-up" type="button" title="Sposta in alto">↑</button><button class="move-album-down" type="button" title="Sposta in basso">↓</button></div></div></div>
-        <div class="album-fields" hidden>
-        <label class="status-field">Stato
-          <select class="status-input">
-            <option value="queued">Da ascoltare</option><option value="listening">In ascolto</option>
-            <option value="liked">Piaciuto</option><option value="neutral">Neutro</option><option value="disliked">Non piaciuto</option>
-          </select>
-        </label>
-        <label class="genres-field">Generi <input class="genres-input" type="text" maxlength="1619" placeholder="Es. rock, jazz, elettronica"></label>
-        <label class="collections-field">Collezioni <input class="collections-input" type="text" maxlength="1619" placeholder="Separate da virgole"></label>
-        <label class="tags-field">Tag <input class="tags-input" type="text" maxlength="1619" placeholder="Separate da virgole"></label>
-        <label class="rating-field">Il tuo voto
-          <select class="rating-input"><option value="">Nessun voto</option></select>
-        </label>
-        </div>
-      </article>
-    </template>
-    <script type="module" src="app.mjs?v=123"></script>
-  </body>
+      <div class="dialog-actions"><button id="connectService" type="button">Collega servizio</button><button id="disconnectService" type="button" class="secondary">Scollega</button></div>
+      <p class="muted">Gli accessi musicali restano soltanto nella sessione di questa scheda. Un Client ID salvato non significa che l'account sia autorizzato. Non vengono sincronizzati.</p>
+    </section>
+    <section>
+      <h3>Apertura degli album</h3>
+      <label>Apri con<select id="linkTarget"><option value="app">App musicale installata</option><option value="web">Player web nel browser</option></select></label>
+      <p class="muted">App usa il programma installato sul dispositivo. Web apre il servizio nel browser.</p>
+    </section>
+    <details class="collection-tools">
+      <summary>Gestione della raccolta</summary>
+      <p class="muted">Se hai gia' piu' copie dello stesso album, confrontale prima di scegliere quali rimuovere.</p>
+      <button id="duplicates" type="button" class="secondary">Confronta possibili duplicati</button>
+    </details>
+  </dialog>
+  <dialog id="duplicatesDialog" aria-labelledby="duplicatesTitle">
+    <div class="dialog-heading"><h2 id="duplicatesTitle">Confronta i possibili duplicati</h2><button type="button" data-close="duplicatesDialog">Chiudi</button></div>
+    <p>Somiglianze tra cataloghi non dimostrano sempre che sia la stessa registrazione. Controlla anno, edizione e dati prima di scegliere. Nessuna fusione automatica.</p>
+    <div id="duplicateContent"></div>
+    <div class="dialog-actions"><button id="duplicatePrevious" type="button" class="secondary">Gruppo precedente</button><button id="duplicateNext" type="button" class="secondary">Gruppo successivo</button><button id="removeDuplicates" type="button" disabled>Rimuovi copie selezionate</button></div>
+  </dialog>
+  <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
+  <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
+  <script type="module" src="./collection-app.mjs?v=1"></script>
+</body>
 </html>

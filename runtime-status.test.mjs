@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { createUpdateLifecycle, localCollectionStatus, musicalChanges, serviceFailure } from "./runtime-status.mjs";
+import { collectionCardIdentity, createTimingMetrics, createUpdateLifecycle, localCollectionStatus,
+  musicalChanges, serviceFailure } from "./runtime-status.mjs";
 import { commitLocalRestore, createCollectionHistoryEntry, appendCollectionHistory, albumChanges, formatSyncSummary, updateAlbumActivity } from "./ui.mjs";
 import { validateDocument } from "./core.mjs";
 
@@ -11,6 +12,51 @@ const album = { id: "a", name: "One", artist: "Band", url: "https://open.spotify
   year: "2026", status: "queued", rating: null, genres: [], primary_genre: "", collections: [], tags: [], notes: "",
   cover_sha256: null };
 const initial = () => ({ albums: [album], base: [album], manualOrder: ["a"], sortOrder: "artist" });
+
+test("timings are bounded, exact and record failing commands without swallowing errors", () => {
+  let now = 0;
+  const metrics = createTimingMetrics({ limit: 3, clock: () => now });
+  assert.throws(() => metrics.measure("collection.render", () => {
+    now = 400; throw new Error("render failed");
+  }), /render failed/);
+  assert.equal(metrics.summary()[0].max, 400);
+  for (const value of [100, 200, 300, 400]) metrics.record("gui.longtask", value);
+  assert.deepEqual(metrics.summary()[1], { name: "gui.longtask", count: 3, p50: 300, p95: 400, max: 400 });
+  assert.throws(() => metrics.record("gui.longtask", NaN), /Durata/);
+});
+
+test("card reuse invalidates on local state and preserves unaffected albums", () => {
+  const state = { provider: "spotify", target: "app", pinned: false, favorite: false,
+    pending: false, draft: false, choices: {}, links: null, grouped: null, position: null, removedCover: false };
+  const identity = collectionCardIdentity(album, state);
+  assert.equal(collectionCardIdentity({ ...album }, { ...state }), identity);
+  for (const changes of [{ favorite: true }, { pending: true }, { draft: true }, { removedCover: true },
+    { provider: "tidal" }, { target: "web" }, { position: [1, 2] }, { links: { spotify: "b" } },
+    { choices: { unavailable: { spotify: true } } }]) {
+    assert.notEqual(collectionCardIdentity(album, { ...state, ...changes }), identity);
+  }
+  assert.notEqual(collectionCardIdentity({ ...album, status: "liked" }, state), identity);
+});
+
+test("command search includes closed layout panels but excludes genuinely hidden actions and sections", () => {
+  const source = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const beginning = source.indexOf("function localCommandButtonVisible(");
+  const ending = source.indexOf("\nfunction currentMenuCommands(", beginning);
+  const visible = runInNewContext(`${source.slice(beginning, ending)}\nlocalCommandButtonVisible`);
+  const element = (hidden, classes = [], parentElement = null) => ({
+    hidden, parentElement, classList: { contains: value => classes.includes(value) },
+  });
+  const panel = element(false);
+  const options = element(true, ["collection-options"], panel);
+  const page = element(true, ["collection-options-page"], options);
+  const button = element(false, [], page);
+  assert.equal(visible(button), true);
+  button.hidden = true;
+  assert.equal(visible(button), false);
+  button.hidden = false;
+  panel.hidden = true;
+  assert.equal(visible(button), false);
+});
 const memoryStorage = (state = initial()) => {
   const records = new Map([[key, JSON.stringify(state)]]);
   return { records, getItem: (name) => records.get(name) ?? null,

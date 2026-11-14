@@ -1,4 +1,5 @@
 import { initializeCatalogSuggestionsUI } from "./suggestions-ui.mjs?v=21";
+import { archiveAlbumNoteVersions } from "./core.mjs?v=50";
 import { albumSearchMatch } from "./music-suggestion-filters.mjs?v=3";
 import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryChoice, choiceSource,
   changeLibraryChoice, manuallyUnavailable, albumDeferred, deferredSuggestion, localDay,
@@ -6,7 +7,16 @@ import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, libraryCh
 import { initializeCatalogPlaylistUI } from "./playlist-ui.mjs?v=16";
 import { associationUpdates, openAssociationDialog, openEditionAssociationDialog, openEditionChooser,
   openPlaybackServiceDialog } from "./album-association.mjs?v=12";
-import { createUpdateLifecycle, localCollectionStatus, musicalRecords, serviceFailure } from "./runtime-status.mjs?v=2";
+import { collectionCardIdentity, createTimingMetrics, createUpdateLifecycle, localCollectionStatus,
+  musicalRecords, serviceFailure } from "./runtime-status.mjs?v=3";
+
+const timingMetrics = createTimingMetrics();
+if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("longtask")) {
+  const observer = new PerformanceObserver(list => {
+    for (const entry of list.getEntries()) timingMetrics.record("gui.longtask", entry.duration);
+  });
+  observer.observe({ type: "longtask" });
+}
 import { fingerprint, saveCheckpoint, readCheckpoint, validateCheckpoint, clearCheckpoint,
   editionLink, setEditionLink, validEdition, pauseRemaining } from "./music-continuity.mjs?v=13";
 import { musicalAlbumTags } from "./catalog-suggestions.mjs?v=5";
@@ -1296,13 +1306,40 @@ const localCommands = [
   { id: "settings", label: "Apri preferenze e collegamenti" },
   { id: "search", label: "Cerca nella raccolta locale" },
   { id: "reset", label: "Azzera filtri della raccolta" },
+  { id: "history", label: "Cronologia e annullamento delle modifiche locali" },
+  { id: "timings", label: "Tempi e reattività sul dispositivo" },
 ];
+
+function localCommandButtonVisible(button) {
+  for (let node = button; node; node = node.parentElement) {
+    if (node.hidden && !node.classList.contains("collection-options")
+        && !node.classList.contains("collection-options-page")) return false;
+  }
+  return true;
+}
+
+function currentMenuCommands() {
+  return [...document.querySelectorAll("main details button[id]")].filter(button =>
+    localCommandButtonVisible(button)).map(button => {
+    const path = [];
+    for (let menu = button.closest("details"); menu; menu = menu.parentElement.closest("details")) {
+      path.unshift(menu.querySelector(":scope > summary")?.textContent.trim() || "");
+    }
+    return { id: `menu:${button.id}`, label: [...path, button.textContent.trim()].filter(Boolean).join(" / ") };
+  });
+}
 
 function runLocalCommand(result) {
   $("#commandDialog").close();
   if (result.albumId) {
     activateViewTab($("#collectionTab"));
     openAlbumDetails(result.albumId, $("#commandButton"));
+    return;
+  }
+  if (result.id.startsWith("menu:")) {
+    const button = document.getElementById(result.id.slice(5));
+    if (button && !button.matches(":disabled") && localCommandButtonVisible(button)) button.click();
+    else showFeedback("Comando non disponibile nello stato corrente.");
     return;
   }
   const tabs = { collection: "#collectionTab", suggestions: "#suggestionsTab", playlist: "#playlistBuilderTab" };
@@ -1312,6 +1349,8 @@ function runLocalCommand(result) {
   } else if (result.id === "settings") openSettings();
   else if (result.id === "add") $("#manualAlbumButton").click();
   else if (result.id === "import") $("#playlistImportButton").click();
+  else if (result.id === "history") $("#collectionHistoryButton").click();
+  else if (result.id === "timings") $("#activityButton").click();
   else {
     activateViewTab($("#collectionTab"));
     if (result.id === "reset") resetCollectionFilters();
@@ -1320,12 +1359,13 @@ function runLocalCommand(result) {
 }
 
 function renderLocalCommands() {
-  const results = localCommandResults($("#commandInput").value, localCommands, state.albums);
+  const results = localCommandResults($("#commandInput").value, [...localCommands, ...currentMenuCommands()], state.albums);
   $("#commandResults").replaceChildren();
   for (const result of results) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = `${result.albumId ? "Album · " : ""}${result.label}`;
+    if (result.id?.startsWith("menu:")) button.disabled = document.getElementById(result.id.slice(5))?.matches(":disabled");
     button.addEventListener("click", () => runLocalCommand(result));
     $("#commandResults").append(button);
   }
@@ -1476,6 +1516,10 @@ function bindQuickCollectionFilters() {
 }
 
 function render(options = {}) {
+  return timingMetrics.measure("collection.render", () => renderCollection(options));
+}
+
+function renderCollection(options = {}) {
   updateAssociationButton();
   finishManualDrag(false);
   ensureManualOrder();
@@ -1508,6 +1552,7 @@ function render(options = {}) {
     showFeedback(`Impossibile filtrare la raccolta: ${error.message}`, true);
     return;
   }
+  const favoriteIds = new Set(collectionPreferences.favoriteIds || []);
   const filteredAlbums = filterAlbums(state.albums, {
     search: appliedCollectionSearch,
     primaryGenre: $("#primaryGenreFilter").value,
@@ -1516,7 +1561,7 @@ function render(options = {}) {
     collection: $("#collectionFilter").value,
     tag: $("#tagFilter").value,
     order: sortOrder,
-  }).filter((album) => (!$("#favoritesOnlyFilter").checked || (collectionPreferences.favoriteIds || []).includes(album.id))
+  }).filter((album) => (!$("#favoritesOnlyFilter").checked || favoriteIds.has(album.id))
     && smartAlbumMatch($("#smartCollectionList").value, album, qol.changedAt)
     && (!collectionSelectionOnly || selectedAlbumIds.has(album.id))
     && localCollectionMatch(album, {
@@ -1557,11 +1602,11 @@ function render(options = {}) {
   const previousCovers = new Map([...$("#albumList").children]
     .filter((card) => card.classList.contains("has-cover"))
     .map((card) => [card.dataset.albumId, card.querySelector(".cover-frame")]));
-  const changedAlbumIds = new Set(options.changedAlbumIds || []);
   const previousCards = new Map([...$("#albumList").children].map(card => [card.dataset.albumId, card]));
-  const sameOrder = [...previousCards.keys()].join("\n") === albums.map(album => album.id).join("\n");
-  const canReuseCards = changedAlbumIds.size && !options.remoteCovers && !$("#groupEditionsInput").checked
-    && (!manualSorting || sameOrder);
+  const changedAlbumIds = new Set(options.changedAlbumIds || []);
+  const canReuseCards = !options.remoteCovers;
+  const removedIds = removedCoverIds();
+  const linkTarget = musicLinkTarget();
   const scrollTop = $("#albumList").scrollTop;
   const cards = [];
   $("#collectionSummary").textContent = `${albums.length} album · ${state.albums.length} nella raccolta`;
@@ -1576,13 +1621,20 @@ function render(options = {}) {
   updateCollectionCoverNotice();
   for (const [index, album] of albums.entries()) {
     const previousCard = previousCards.get(album.id);
-    if (canReuseCards && !changedAlbumIds.has(album.id) && previousCard?._albumIdentity === JSON.stringify(album)) {
+    const identity = collectionCardIdentity(album, {
+      provider: musicService.service, target: linkTarget, pinned: pins.has(album.id),
+      favorite: favoriteIds.has(album.id), pending: pendingSyncIds.has(album.id),
+      draft: Boolean(qol.drafts[`edit:${album.id}`]), choices: libraryChoice(libraryChoices, album),
+      links: editionLinks[album.id], grouped: $("#groupEditionsInput").checked ? editionGroups.get(album.id) : null,
+      position: manualSorting ? [index, albums.length] : null, removedCover: removedIds.has(album.id),
+    });
+    if (canReuseCards && previousCard?._renderIdentity === identity) {
       previousCard.querySelector(".album-select").checked = selectedAlbumIds.has(album.id);
       cards.push(previousCard);
       continue;
     }
     const card = template.content.firstElementChild.cloneNode(true);
-    card._albumIdentity = JSON.stringify(album);
+    card._renderIdentity = identity;
     card.dataset.albumId = album.id;
     const selection = card.querySelector(".album-select");
     selection.checked = selectedAlbumIds.has(album.id);
@@ -1594,7 +1646,7 @@ function render(options = {}) {
       if (!event.target.closest(`${interactiveAlbumTarget}, label, summary`)) selectAlbumCard(album.id, event);
     });
     const pinned = pins.has(album.id);
-    const favorite = (collectionPreferences.favoriteIds || []).includes(album.id);
+    const favorite = favoriteIds.has(album.id);
     const favoriteButton = card.querySelector(".favorite-album");
     favoriteButton.textContent = favorite ? "★ Preferito" : "☆ Preferiti";
     favoriteButton.setAttribute("aria-pressed", String(favorite));
@@ -1646,7 +1698,7 @@ function render(options = {}) {
       ? "Premi Sincronizza per scaricare"
       : musicService.service === "tidal" ? "Copertina TIDAL non caricata · usa Vista > Altre azioni"
         : options.remoteCovers ? "Cerco una copertina online…" : "Copertina non disponibile offline";
-    if (!options.remoteCovers && previousCovers.has(album.id) && !removedCoverIds().has(album.id)) {
+    if (!options.remoteCovers && previousCovers.has(album.id) && !removedIds.has(album.id)) {
       card.querySelector(".cover-frame").replaceWith(previousCovers.get(album.id));
       card.classList.add("has-cover");
     }
@@ -6981,55 +7033,7 @@ function chooseConflicts(conflicts) {
 }
 
 function archiveAlbumNoteConflicts(conflicts, remoteRevision) {
-  const entries = conflicts.flatMap((conflict) => (conflict.fields || [])
-    .filter(({ field }) => field === "notes")
-    .map(({ base, local, remote }) => ({
-      albumId: conflict.id,
-      base: { present: base !== null, value: base ?? "" },
-      device: { present: local !== null, value: local ?? "" },
-      github: { present: remote !== null, value: remote ?? "" },
-      remoteRevision: remoteRevision || "",
-    })));
-  if (!entries.length) return 0;
-  for (const entry of entries) {
-    for (const version of [entry.base, entry.device, entry.github]) {
-      if (redactDiagnostics(version.value) !== version.value) {
-        throw new Error("Una nota sembra contenere una credenziale; rimuovila prima di archiviarla e scegliere il conflitto.");
-      }
-    }
-  }
-  let archive;
-  try { archive = JSON.parse(localStorage.getItem(ALBUM_NOTE_CONFLICT_ARCHIVE_KEY) || "[]"); }
-  catch (error) {
-    throw new Error(`Archivio locale delle versioni delle note non leggibile; nessuna scelta applicata: ${error.message}`);
-  }
-  if (!Array.isArray(archive) || archive.some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
-    throw new Error("Archivio locale delle versioni delle note non valido; nessuna scelta applicata.");
-  }
-  for (const entry of archive) {
-    for (const version of [entry.base, entry.device, entry.github]) {
-      if (!version || typeof version.present !== "boolean" || typeof version.value !== "string"
-          || redactDiagnostics(version.value) !== version.value) {
-        throw new Error("Archivio locale delle versioni delle note non valido o contenente credenziali.");
-      }
-    }
-  }
-  const signature = (entry) => JSON.stringify(entry);
-  const existing = new Set(archive.map(({ albumId, base, device, github, remoteRevision }) =>
-    signature({ albumId, base, device, github, remoteRevision })));
-  const additions = [];
-  for (const entry of entries) {
-    const key = signature(entry);
-    if (!existing.has(key)) {
-      additions.push({ ...entry, capturedAt: new Date().toISOString() });
-      existing.add(key);
-    }
-  }
-  if (additions.length) {
-    try { localStorage.setItem(ALBUM_NOTE_CONFLICT_ARCHIVE_KEY, JSON.stringify([...archive, ...additions])); }
-    catch (error) { throw new Error(`Impossibile conservare entrambe le versioni delle note localmente: ${error.message}`); }
-  }
-  return additions.length;
+  return archiveAlbumNoteVersions(localStorage, conflicts, remoteRevision, ALBUM_NOTE_CONFLICT_ARCHIVE_KEY);
 }
 
 async function sync(choices = {}) {
@@ -7614,6 +7618,9 @@ const busyActivitySelectors = ["#syncButton", "#playlistPreviewButton", "#sugges
 const activityStatusNodes = [...document.querySelectorAll("[role='status'], [role='alert'], #suggestionStatus, #manualAlbumStatus")]
   .filter((node) => !["updateBanner", "updateStatus"].includes(node.id));
 function renderActivity() {
+  $("#activityTimings").textContent = "Tempi locali (ms), ultimi 256 campioni per tipo. Nessun dato personale.\n"
+    + timingMetrics.summary().map(value => `${value.name}: ${value.count} campioni · `
+      + `mediana ${value.p50.toFixed(1)} · p95 ${value.p95.toFixed(1)} · massimo ${value.max.toFixed(1)}`).join("\n");
   const deadline = Number(localStorage.getItem("accord-spotify-rate-limit-until-v1"));
   $("#activityCooldown").textContent = deadline > Date.now()
     ? `Spotify in attesa fino a ${new Date(deadline).toLocaleTimeString()}. Nessun tentativo anticipato.`

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { archiveAlbumNoteVersions } from "./core.mjs";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -184,8 +185,10 @@ test("favorite toggle persists before render, preserves pins and restores keyboa
   assert.equal(renders, 2);
   assert.equal(focused, 2);
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-  assert.match(html, /class="album-actions"><button class="favorite-album"[^]*aria-pressed="false"/);
-  assert.match(html, /id="favoritesOnlyFilter"/);
+  const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
+  assert.match(active, /store\.favorite\(album\.id\)/);
+  assert.match(active, /preventScroll: true/);
+  assert.match(html, /id="favoritesFilter"/);
 });
 
 test("accessibility and portable preferences allow only local non-secret settings", () => {
@@ -652,7 +655,7 @@ test("shared offline navigation uses only the active version shell without reque
   let requests = 0, stored = 0, response;
   const shell = { body: "current shell" };
   const version = readFileSync(new URL("./index.html", import.meta.url), "utf8")
-    .match(/<span class="app-version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
+    .match(/<span[^>]*id="version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
   assert.ok(version);
   runInNewContext(readFileSync(new URL("./sw.js", import.meta.url), "utf8"), {
     URL,
@@ -765,14 +768,15 @@ test("explicit update action persists view and preview before activation, never 
 });
 
 test("activity center reads the shared Spotify deadline locally and bounds its in-memory event history", () => {
-  const nodes = { "#activityCooldown": {}, "#activityCurrent": { replaceChildren() {} },
+  const nodes = { "#activityTimings": {}, "#activityCooldown": {}, "#activityCurrent": { replaceChildren() {} },
     "#activityHistory": { replaceChildren() {} }, "#activityDialog": { open: false }, "#syncButton": { disabled: true, textContent: "Sincronizza" } };
   const events = [];
   let reads = 0;
   const context = { localStorage: { getItem: (key) => {
     assert.equal(key, "accord-spotify-rate-limit-until-v1"); reads += 1; return Date.now() + 60000;
   } }, activityStatusNodes: [], busyActivitySelectors: ["#syncButton"], activityEntries: events,
-    safeDiagnostics: (value) => value,
+    safeDiagnostics: (value) => value, timingMetrics: { summary: () => [
+      { name: "collection.render", count: 1, p50: 20, p95: 20, max: 20 }] },
     document: { createElement: fakeQolElement }, $: (selector) => nodes[selector],
     fetch: () => { throw new Error("Unexpected network"); },
     setInterval: () => { throw new Error("Unexpected polling"); } };
@@ -783,6 +787,7 @@ test("activity center reads the shared Spotify deadline locally and bounds its i
   functions.renderActivity();
   assert.equal(reads, 1);
   assert.match(nodes["#activityCooldown"].textContent, /Spotify in attesa fino a/);
+  assert.match(nodes["#activityTimings"].textContent, /collection.render: 1 campioni/);
 });
 
 test("accessibility application updates controls and document attributes without network", () => {
@@ -1749,7 +1754,7 @@ test("reset clears all local filters including pinned-only without changing save
 
 test("one music service controls the association button and the missing-association filter", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-  assert.ok(html.includes('id="missingAssociationFilter"'));
+  assert.ok(!html.includes('id="missingAssociationFilter"'), "Advanced association filter is not part of the basic PWA");
   assert.ok(!html.includes('id="serviceFilter"'));
   assert.ok(!uiAppSource.includes("#serviceFilter"));
   const button = {};
@@ -1760,7 +1765,7 @@ test("one music service controls the association button and the missing-associat
     musicService.service = provider; update();
     assert.equal(button.textContent, `Associa tutti a ${name}`);
   }
-  assert.ok(appFunction("function render(", "\nfunction ").includes("updateAssociationButton();"));
+  assert.ok(appFunction("function renderCollection(", "\nasync function renderCovers").includes("updateAssociationButton();"));
 });
 
 test("contextual selection actions are hidden until an album is selected", () => {
@@ -1805,7 +1810,7 @@ test("local cover rendering never enqueues catalog work, while explicit loading 
 test("PWA release version matches the title, visible badge and offline cache", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
-  const version = html.match(/<span class="app-version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
+  const version = html.match(/<span[^>]*id="version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
   assert.ok(version, "The header must show a semantic release version");
   assert.ok(html.includes(`<title>Accord v${version} · La mia raccolta</title>`));
   assert.ok(sw.includes(`const CACHE = "accord-album-pwa-v${version}";`));
@@ -1813,7 +1818,7 @@ test("PWA release version matches the title, visible badge and offline cache", (
 
 test("installable shell links resolve locally and are present in the offline cache", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-  const app = readFileSync(new URL("./app.mjs", import.meta.url), "utf8");
+  const app = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
   const manifest = JSON.parse(readFileSync(new URL("./manifest.json", import.meta.url), "utf8"));
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const stylesheet = html.match(/<link rel="stylesheet" href="([^"]+)"/)?.[1];
@@ -1886,35 +1891,21 @@ test("actual Last.fm completion rechecks shared cooldown after pacing before cou
 test("offline shell versions include every local module and responsive dialogs keep native modality", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
-  const css = readFileSync(new URL("./style.css", import.meta.url), "utf8");
-  for (const file of ["app.mjs?v=123", "style.css?v=43"]) {
+  const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
+  const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
+  for (const file of ["collection-app.mjs?v=1", "collection.css?v=1"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=50", "ui.mjs?v=25", "tidal.mjs?v=13", "tidal-ui.mjs?v=37", "qobuz-ui.mjs?v=31",
-    "qobuz.mjs?v=11", "catalog-suggestions.mjs?v=5", "suggestions-ui.mjs?v=21",
-    "music-qol.mjs?v=11", "playlist-ui.mjs?v=16",
-    "music-app-links.mjs?v=4", "music-continuity.mjs?v=13", "album-association.mjs?v=12",
-    "music-completion.mjs?v=15", "music-completion-ui.mjs?v=15"]) {
-    assert.ok(uiAppSource.includes(file));
+  for (const file of ["core.mjs?v=51", "collection-store.mjs?v=1", "collection-sync.mjs?v=1",
+    "music-app-links.mjs?v=4", "collection-services.mjs?v=1"]) {
+    assert.ok(active.includes(file));
     assert.ok(sw.includes(file));
   }
-  assert.ok(readFileSync(new URL("./playlist-ui.mjs", import.meta.url), "utf8").includes("catalog-playlist.mjs?v=5"));
-  assert.ok(sw.includes("catalog-playlist.mjs?v=5"));
-  for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
-    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("music-suggestion-filters.mjs?v=3"));
-  }
-  assert.ok(readFileSync(new URL("./qobuz-ui.mjs", import.meta.url), "utf8").includes("qobuz-playback.mjs?v=10"));
-  assert.ok(readFileSync(new URL("./suggestions-ui.mjs", import.meta.url), "utf8")
-    .includes("music-suggestion-recipes.mjs?v=2"));
-  for (const module of ["tidal-ui.mjs", "qobuz-ui.mjs"]) {
-    assert.ok(readFileSync(new URL(module, import.meta.url), "utf8").includes("edition-comparison.mjs?v=2"));
-  }
-  assert.ok(sw.includes("music-suggestion-filters.mjs?v=3"));
-  assert.match(html, /<dialog id="albumDetailsDialog" aria-labelledby="albumDetailsTitle">/);
-  assert.match(html, /id="selectionToolbar"[^>]+hidden/);
-  assert.match(css, /#albumDetailsDialog[^}]+92dvh/);
-  assert.match(uiAppSource, /albumDetailsDialog"\)\.showModal\(\)/);
+  assert.doesNotMatch(sw, /playlist-ui\.mjs|suggestions-ui\.mjs|music-completion-ui\.mjs/);
+  assert.match(html, /<dialog id="duplicatesDialog" aria-labelledby="duplicatesTitle">/);
+  assert.match(css, /max-height: calc\(100dvh - 40px\)/);
+  assert.match(active, /\.showModal\(\)/);
 });
 
 test("Spotify playlist reuses the real Suggestions candidate, album and Discogs selection path", async () => {
@@ -2930,7 +2921,7 @@ test("field-wise merge preserves independent edits and asks only for true confli
 test("note conflicts are archived locally before choice without collapsing missing and empty notes", () => {
   const values = new Map(), writes = [];
   const context = {
-    ALBUM_NOTE_CONFLICT_ARCHIVE_KEY: "notes-conflicts",
+    ALBUM_NOTE_CONFLICT_ARCHIVE_KEY: "notes-conflicts", archiveAlbumNoteVersions,
     localStorage: {
       getItem: (key) => values.get(key) || null,
       setItem: (key, value) => { values.set(key, value); writes.push(value); },
