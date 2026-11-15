@@ -1,6 +1,6 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=52";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=2";
-import { createCollectionSync } from "./collection-sync.mjs?v=2";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=3";
+import { createCollectionSync } from "./collection-sync.mjs?v=3";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 
 const $ = (id) => document.getElementById(id);
@@ -31,7 +31,7 @@ async function services() {
   return servicesPromise;
 }
 function disable() {
-  document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button, #addDialog input, #addDialog select, #settingsDialog button, #settingsDialog input, #settingsDialog select")
+  document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button, #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   $("collection").setAttribute("aria-busy", String(busy));
   $("cancelCatalogSearch").hidden = !catalogAbort;
@@ -127,26 +127,24 @@ function showDuplicates(index = 0) {
     $("removeDuplicates").disabled = true;
   } else {
     index = Math.min(Math.max(index, 0), groups.length - 1);
-    const group = groups[index], expected = store.state, selected = new Set();
-    $("duplicateContent").append(node("p", `Gruppo ${index + 1} di ${groups.length}. Confronta le copie e seleziona soltanto quelle da rimuovere. Mantieni almeno una copia.`));
-    const grid = node("div", "", { class: "comparison-grid" });
-    group.forEach((album) => {
-      const card = comparison(album, (expected.preferences.favoriteIds || []).includes(album.id));
-      const label = node("label", "Rimuovi questa copia", { class: "check" });
-      const check = node("input", "", { type: "checkbox", "aria-label": `Rimuovi ${providerName(album)} - ${album.name}` });
-      label.prepend(check); card.append(label); grid.append(card);
-      check.addEventListener("change", () => {
-        if (check.checked) selected.add(album.id); else selected.delete(album.id);
-        $("removeDuplicates").disabled = selected.size === 0 || selected.size === group.length;
-      });
-    });
-    $("duplicateContent").append(grid);
+    const group = groups[index], expected = store.state, proposal = store.suggestMerge(group);
+    $("duplicateContent").append(node("p", `Proposta ${index + 1} di ${groups.length}`),
+      node("h3", `${proposal.album.artist} - ${proposal.album.name}`),
+      node("p", `Ho trovato ${group.length} copie. Ti suggerisco di unirle in un solo album, mantenendo la copia ${providerName(proposal.album)} (${proposal.album.year || "anno non indicato"}).`),
+      node("p", `Stato proposto: ${states[proposal.album.status]}. Voto: ${proposal.album.rating ?? "non assegnato"}. Note, generi, collezioni, tag e preferiti vengono conservati; voti e stati diversi restano annotati nelle note.`));
+    const details = node("details"), grid = node("div", "", { class: "comparison-grid" });
+    details.append(node("summary", "Vedi le copie e il risultato proposto"));
+    group.forEach((album) => grid.append(comparison(album, (expected.preferences.favoriteIds || []).includes(album.id))));
+    grid.append(comparison(proposal.album, proposal.favorite));
+    details.append(grid); $("duplicateContent").append(details);
     $("duplicatePrevious").disabled = index === 0; $("duplicateNext").disabled = index === groups.length - 1;
-    $("removeDuplicates").disabled = true;
+    $("removeDuplicates").disabled = false;
     $("duplicatePrevious").onclick = () => showDuplicates(index - 1);
     $("duplicateNext").onclick = () => showDuplicates(index + 1);
     $("removeDuplicates").onclick = () => run(async () => {
-      await confirmRemoval([...selected], expected); showDuplicates(index);
+      store.merge(group, expected);
+      report("Copie unite. Premi Sincronizza per condividere il risultato con l'app.");
+      showDuplicates(index);
     });
   }
   if (!dialog.open) dialog.showModal();
@@ -338,6 +336,7 @@ $("openAdd").addEventListener("click", async () => {
   const client = await services(); $("catalogService").value = client.provider;
   $("catalogStatus").textContent = "Cerca per titolo e artista, oppure incolla un link album.";
     $("addDialog").showModal();
+    $("catalogBody").scrollTop = 0;
   });
   if ($("addDialog").open && !busy) $("catalogQuery").focus();
 });
@@ -348,6 +347,7 @@ $("catalogForm").addEventListener("submit", (event) => {
   event.preventDefault();
   run(async () => {
     const client = await services(), current = ++generation;
+    if (!$("addDialog").open) return;
     const controller = new AbortController();
     catalogAbort = controller; resultAlbums = []; renderResults(); disable();
     report("Ricerca in corso (massimo 45 secondi). Puoi annullarla.");

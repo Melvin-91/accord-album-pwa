@@ -56,7 +56,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       }
       const branch = repository.default_branch, path = (file) => `${root}/contents/${file}?ref=${encodeURIComponent(branch)}`;
       const response = await send(path("albums.json"), {}, true);
-      let albums = [], sha = null, deletionSync = false;
+      let albums = [], deletedAlbums = [], sha = null, deletionSync = false, deletionHistory = false;
       if (response) {
         const metadata = await response.json();
         if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("albums.json non leggibile.");
@@ -72,8 +72,14 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         }
         const document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
         albums = validateDocument(document); sha = metadata.sha; deletionSync = document.deletion_sync === true;
+        deletionHistory = document.deletion_history === true;
+        if (document.deleted_albums !== undefined) deletedAlbums = validateDocument({
+          format: document.format, version: 4, albums: document.deleted_albums });
+        if (deletedAlbums.some((album) => albums.some((live) => live.id === album.id))) {
+          throw new Error("Archivio rimozioni incoerente con gli album presenti. Nessun dato modificato.");
+        }
       }
-      const remote = { albums, sha, branch, deletionSync, covers: new Map(), coversSha: null, archive: new Uint8Array() };
+      const remote = { albums, deletedAlbums, sha, branch, deletionSync, deletionHistory, covers: new Map(), coversSha: null, archive: new Uint8Array() };
       if (withCovers) {
         const metadataResponse = await send(path("covers.bin"), {}, true);
         if (metadataResponse) {
@@ -108,13 +114,19 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
     async sync({ chooseConflicts, confirm }) {
       const connection = client(), before = store.state, remote = await connection.read(true);
       connection.assertCurrent();
-      if (before.syncOwner && before.syncOwner !== connection.settings.owner && before.pendingRemovals.length) {
+      if (before.syncOwner && before.syncOwner !== connection.settings.owner && (before.pendingRemovals.length || before.deletedAlbums.length)) {
         throw new Error("Le rimozioni pendenti appartengono al precedente collegamento GitHub. Ripristina quel proprietario e sincronizza prima di cambiarlo.");
       }
-      if (before.base.length && !remote.sha) throw new Error("albums.json non e' piu' presente. Ripristinalo su GitHub prima di sincronizzare: nessuna cancellazione automatica.");
+      if ((before.base.length || before.deletedAlbums.length) && !remote.sha) throw new Error("albums.json non e' piu' presente. Ripristinalo su GitHub prima di sincronizzare: nessuna cancellazione automatica.");
       const base = new Map((!before.syncOwner || before.syncOwner === connection.settings.owner ? before.base : []).map((album) => [album.id, album]));
       before.pendingRemovals.forEach((album) => { if (!base.has(album.id)) base.set(album.id, album); });
-      const remoteIds = new Set(remote.albums.map((album) => album.id)), links = store.links();
+      const remoteIds = new Set(remote.albums.map((album) => album.id));
+      // A history-aware peer can deliberately restore an ID already absent from our base.
+      const deleted = new Map([...before.deletedAlbums.filter((album) =>
+        !remote.deletionHistory || !remoteIds.has(album.id) || base.has(album.id)), ...remote.deletedAlbums].map((album) => [album.id, album]));
+      for (const album of deleted.values()) if (!base.has(album.id)) base.set(album.id, album);
+      for (const id of before.restoredAlbumIds || []) base.delete(id);
+      const links = store.links();
       const removedIds = new Set(before.pendingRemovals.map((album) => album.id));
       const distinctPairs = new Set((before.distinctAlbumPairs || []).map((pair) => JSON.stringify(pair)));
       for (const album of before.albums) {
@@ -137,7 +149,12 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         if (merged.conflicts.length) throw new Error("Completa tutte le scelte prima di sincronizzare.");
       }
       const outgoing = !equalAlbums(remote.albums, merged.albums), incoming = !equalAlbums(before.albums, merged.albums);
-      if ((outgoing || incoming || !remote.deletionSync) && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums })) return false;
+      const retained = new Set(merged.albums.map((album) => album.id));
+      for (const album of base.values()) if (!retained.has(album.id) && !deleted.has(album.id)) deleted.set(album.id, album);
+      for (const id of retained) deleted.delete(id);
+      const deletedAlbums = [...deleted.values()].sort((a, b) => a.id.localeCompare(b.id));
+      const deletionsChanged = !equalAlbums(remote.deletedAlbums, deletedAlbums);
+      if ((outgoing || incoming || deletionsChanged || !remote.deletionSync || !remote.deletionHistory) && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums })) return false;
       connection.assertCurrent();
       if (store.state !== before) throw new Error("Raccolta cambiata durante l'anteprima. Riapri Sincronizza.");
       const selected = new Map();
@@ -159,13 +176,14 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           await connection.write("covers.bin", archive, remote.coversSha, remote.branch);
           coversWritten = true;
         }
-        if (outgoing || !remote.deletionSync) {
-          const document = { ...createSyncDocument(merged.albums), deletion_sync: true };
+        if (outgoing || deletionsChanged || !remote.deletionSync || !remote.deletionHistory) {
+          const document = { ...createSyncDocument(merged.albums), deletion_sync: true, deletion_history: true, deleted_albums: deletedAlbums };
           await connection.write("albums.json", new TextEncoder().encode(JSON.stringify(document, null, 2)), remote.sha, remote.branch);
           albumsWritten = true;
         }
         connection.assertCurrent();
         store.commit({ ...before, albums: merged.albums, base: merged.albums, pendingRemovals: [],
+          deletedAlbums, restoredAlbumIds: [],
           syncOwner: connection.settings.owner, lastSync: new Date().toISOString() });
       } catch (error) {
         throw new Error(`${error.message}${coversWritten || albumsWritten

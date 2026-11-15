@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
-import { createCollectionStore, duplicateCollectionGroups, COLLECTION_KEY } from "./collection-store.mjs";
+import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
@@ -24,7 +24,7 @@ const storage = (values = {}) => {
 const local = (records, base = records, extras = {}) => storage({ [COLLECTION_KEY]: JSON.stringify({ albums: records, base, ...extras }),
   "accord-album-owner": "owner", "accord-album-token": "synthetic-test-token" });
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status });
-function github(records, { failPut = false, mutateBeforePut, coverArchive } = {}) {
+function github(records, { failPut = false, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true } = {}) {
   const writes = [], reads = [];
   const request = async (url, options = {}) => {
     assert.equal(options.credentials, "omit");
@@ -33,6 +33,12 @@ function github(records, { failPut = false, mutateBeforePut, coverArchive } = {}
       writes.push({ url, payload: JSON.parse(options.body) });
       if (mutateBeforePut) mutateBeforePut();
       if (failPut) throw new Error("Disconnected");
+      if (new URL(url).pathname.endsWith("/albums.json")) {
+        const document = JSON.parse(Buffer.from(writes.at(-1).payload.content, "base64").toString());
+        records = document.albums;
+        deletedAlbums = document.deleted_albums || [];
+        deletionHistory = document.deletion_history === true;
+      }
       return reply({ content: { sha: "next" }, commit: { sha: "commit" } });
     }
     reads.push(url);
@@ -41,7 +47,8 @@ function github(records, { failPut = false, mutateBeforePut, coverArchive } = {}
       return options.headers.Accept.includes("raw") ? new Response(coverArchive) : reply({ type: "file", sha: "covers" });
     }
     if (/albums\.json/.test(url)) return reply({ type: "file", sha: "albums",
-      content: Buffer.from(JSON.stringify({ format: "accord-album-collection", version: 4, albums: records, deletion_sync: true })).toString("base64") });
+      content: Buffer.from(JSON.stringify({ format: "accord-album-collection", version: 4, albums: records,
+        deletion_sync: true, deletion_history: deletionHistory, deleted_albums: deletedAlbums })).toString("base64") });
     return reply({ private: true, default_branch: "main" });
   };
   return { request, writes, reads };
@@ -94,6 +101,37 @@ test("review choices remove only selected copies and preserve the keeper and pen
   assert.throws(() => store.remove([a.id], before), /Raccolta cambiata/);
   assert.equal(createCollectionStore(disk).state.pendingRemovals[0].notes, "Other review");
 });
+test("duplicate suggestions merge reviews, ratings, labels and favorites only after confirmation", () => {
+  const a = album(undefined, { rating: 4, notes: "Keeper review", tags: ["Epic"], status: "liked" });
+  const b = album("tidal:12", { rating: 2, notes: "Other review", tags: ["epic", "Rare"], status: "disliked" });
+  const disk = local([a, b], [a, b], { preferences: { favoriteIds: [a.id, b.id] } });
+  const store = createCollectionStore(disk), before = store.state, group = store.groups()[0];
+  const proposal = store.suggestMerge(group);
+  assert.equal(store.state, before);
+  assert.equal(proposal.album.id, a.id);
+  assert.deepEqual(suggestDuplicateMerge([b, a], [a.id, b.id]), proposal);
+  store.merge(group, before);
+  const merged = store.state.albums[0];
+  assert.equal(store.state.albums.length, 1);
+  assert.equal(merged.rating, 4);
+  assert.match(merged.notes, /Keeper review/); assert.match(merged.notes, /Other review/);
+  assert.match(merged.notes, /2\/5/); assert.match(merged.notes, /Non mi piace/);
+  assert.deepEqual(merged.tags, ["Epic", "Rare"]);
+  assert.deepEqual(store.state.preferences.favoriteIds, [a.id]);
+  assert.deepEqual(store.state.pendingRemovals, [b]);
+  assert.throws(() => store.merge(group, before), /Raccolta cambiata/);
+});
+test("a merge exceeding field limits or failing persistence leaves every original intact", () => {
+  const a = album(undefined, { tags: Array.from({ length: 20 }, (_, i) => `Tag ${i}`) });
+  const b = album("tidal:12", { tags: ["Additional"] }), disk = local([a, b]), store = createCollectionStore(disk);
+  const before = store.state;
+  assert.throws(() => store.merge([a, b]), /20/);
+  assert.equal(store.state, before);
+  const writable = local([album(), album("tidal:12")]), other = createCollectionStore(writable), expected = other.state;
+  writable.setItem = () => { throw new Error("Quota exceeded"); };
+  assert.throws(() => other.merge(expected.albums), /Quota/);
+  assert.equal(other.state, expected);
+});
 test("replacement is atomic and distinct-album confirmation cannot add the same native ID twice", () => {
   const a = album(), b = album("tidal:12", { year: "2010" });
   const store = createCollectionStore(local([a]));
@@ -133,6 +171,64 @@ test("sync confirms removals, keeps remote additions, then advances the local ba
   const document = JSON.parse(Buffer.from(remote.writes[0].payload.content, "base64").toString());
   assert.deepEqual(document.albums, [extra]); assert.equal(document.deletion_sync, true);
   assert.deepEqual(store.state.base, [extra]); assert.deepEqual(store.state.pendingRemovals, []);
+});
+test("shared removal history prevents an old offline copy returning on repeated synchronizations", async () => {
+  const keeper = album(), removed = album("tidal:12");
+  const remote = github([keeper], { deletedAlbums: [removed] });
+  const disk = local([keeper, removed], []), store = createCollectionStore(disk);
+  const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+  const options = { chooseConflicts: () => assert.fail("Unchanged removed copy is not a new album"), confirm: async () => true };
+  await sync.sync(options);
+  await sync.sync(options);
+  assert.deepEqual(store.state.albums, [keeper]);
+  assert.deepEqual(store.state.deletedAlbums, [removed]);
+  assert.equal(remote.writes.length, 0);
+  const observerDisk = local([keeper], [], { deletedAlbums: [removed] });
+  const observer = createCollectionStore(observerDisk);
+  const observerSync = createCollectionSync({ storage: observerDisk, store: observer, covers: coverCache, fetch: remote.request });
+  await observerSync.sync(options);
+  store.add(removed, { distinct: true });
+  await sync.sync(options);
+  assert.equal(store.state.albums.length, 2);
+  assert.deepEqual(store.state.deletedAlbums, []);
+  await sync.sync(options);
+  await observerSync.sync(options);
+  await sync.sync(options);
+  assert.equal(observer.state.albums.length, 2);
+  assert.deepEqual(observer.state.deletedAlbums, []);
+  assert.equal(remote.writes.length, 1);
+});
+test("a legacy writer cannot erase the local removal history or reintroduce an unchanged duplicate", async () => {
+  const a = album(), b = album("tidal:12");
+  const disk = local([a], [a], { deletedAlbums: [b] }), store = createCollectionStore(disk);
+  const remote = github([a, b], { deletionHistory: false });
+  const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+  const options = { chooseConflicts: () => assert.fail("Unchanged deleted copy"), confirm: async () => true };
+  await sync.sync(options); await sync.sync(options);
+  assert.deepEqual(store.state.albums, [a]);
+  assert.deepEqual(store.state.deletedAlbums, [b]);
+  assert.equal(remote.writes.length, 1);
+});
+test("offline edits to a removed duplicate require a decision and cancellation changes nothing", async () => {
+  const a = album(), removed = album("tidal:12"), edited = { ...removed, notes: "Offline review", rating: 5 };
+  const disk = local([a, edited], []), store = createCollectionStore(disk), before = store.state;
+  const remote = github([a], { deletedAlbums: [removed] });
+  const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+  assert.equal(await sync.sync({ chooseConflicts: async (conflicts) => {
+    assert.equal(conflicts[0].fields[0].field, "album");
+    assert.equal(conflicts[0].local.notes, "Offline review"); return null;
+  }, confirm: () => assert.fail("Cancelled before confirmation") }), false);
+  assert.equal(store.state, before); assert.equal(remote.writes.length, 0);
+});
+test("malformed or overlapping removal archives fail before any local or shared mutation", async () => {
+  const a = album(), b = album("tidal:12");
+  for (const deletedAlbums of [[a], [b, b], { invalid: true }]) {
+    const disk = local([a]), store = createCollectionStore(disk), before = store.state;
+    const remote = github([a], { deletedAlbums });
+    const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+    await assert.rejects(sync.sync({ chooseConflicts: () => assert.fail(), confirm: () => assert.fail() }));
+    assert.equal(store.state, before); assert.equal(remote.writes.length, 0);
+  }
 });
 test("cancel and an uncertain write leave the base and pending removals unchanged, without retry", async () => {
   const a = album(), disk = local([a]), store = createCollectionStore(disk);
@@ -517,12 +613,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=3/);
+  assert.match(html, /collection-app\.mjs\?v=4/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.2/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.3/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];

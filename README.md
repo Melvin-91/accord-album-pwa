@@ -2,6 +2,20 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.3 - Unione duplicati e memoria delle rimozioni
+
+Impostazioni > Gestione della raccolta > Cerca duplicati propone di unire
+le copie: basta Conferma unione, con dettagli facoltativi. Note, generi,
+collezioni, tag e preferiti sono conservati; voti e stati discordanti
+rimangono nelle note. Nessuna modifica automatica.
+
+La sincronizzazione ricorda le copie eliminate anche dopo piu' scambi
+fra dispositivi. Le modifiche offline a un album rimosso richiedono una
+scelta; un ripristino esplicito viene condiviso senza cancellarlo nuovamente.
+Aggiornare anche il desktop per usare la stessa memoria delle rimozioni.
+In Aggiungi album l'intestazione con Chiudi resta fuori dall'area scrollabile
+ed e' utilizzabile anche durante la ricerca.
+
 ### PWA 1.29.2 - Accessi persistenti e scorrimento
 
 Gli accessi Spotify, TIDAL e Qobuz rimangono salvati in questo browser

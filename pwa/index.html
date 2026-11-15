@@ -6,16 +6,16 @@
   <meta name="theme-color" content="#090909">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.29.2 · La mia raccolta</title>
+  <title>Accord v1.29.3 · La mia raccolta</title>
   <link rel="icon" href="../assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./collection.css?v=2">
+  <link rel="stylesheet" href="./collection.css?v=3">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <img src="../assets/accord-192.png" width="36" height="36" alt="">
-      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.2</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
+      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.3</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
     </div>
     <nav class="header-actions" aria-label="Raccolta">
       <button id="sync" type="button" class="secondary">Sincronizza</button>
@@ -42,13 +42,15 @@
   </main>
   <dialog id="addDialog" aria-labelledby="addTitle">
     <div class="dialog-heading"><h2 id="addTitle">Aggiungi album</h2><button type="button" data-close="addDialog" aria-label="Chiudi aggiunta album">Chiudi</button></div>
-    <form id="catalogForm">
-      <label>Catalogo<select id="catalogService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
-      <label>Titolo, artista o link album<input id="catalogQuery" type="search" required maxlength="100" autocomplete="off"></label>
-      <button type="submit">Cerca album</button>
-      <button id="cancelCatalogSearch" type="button" class="secondary" hidden>Annulla ricerca</button>
-    </form>
-    <p id="catalogStatus" role="status"></p><div id="catalogResults"></div>
+    <div id="catalogBody" role="region" aria-label="Ricerca e risultati album" tabindex="0">
+      <form id="catalogForm">
+        <label>Catalogo<select id="catalogService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
+        <label>Titolo, artista o link album<input id="catalogQuery" type="search" required maxlength="100" autocomplete="off"></label>
+        <button type="submit">Cerca album</button>
+        <button id="cancelCatalogSearch" type="button" class="secondary" hidden>Annulla ricerca</button>
+      </form>
+      <p id="catalogStatus" role="status"></p><div id="catalogResults"></div>
+    </div>
   </dialog>
   <dialog id="settingsDialog" aria-labelledby="settingsTitle">
     <div class="dialog-heading"><h2 id="settingsTitle">Impostazioni</h2><button type="button" data-close="settingsDialog">Chiudi</button></div>
@@ -84,18 +86,18 @@
     </section>
     <details class="collection-tools">
       <summary>Gestione della raccolta</summary>
-      <p class="muted">Se hai gia' piu' copie dello stesso album, confrontale prima di scegliere quali rimuovere.</p>
-      <button id="duplicates" type="button" class="secondary">Confronta possibili duplicati</button>
+      <p class="muted">Cerca le copie dello stesso album e conferma l'unione proposta.</p>
+      <button id="duplicates" type="button" class="secondary">Cerca duplicati</button>
     </details>
   </dialog>
   <dialog id="duplicatesDialog" aria-labelledby="duplicatesTitle">
-    <div class="dialog-heading"><h2 id="duplicatesTitle">Confronta i possibili duplicati</h2><button type="button" data-close="duplicatesDialog">Chiudi</button></div>
-    <p>Somiglianze tra cataloghi non dimostrano sempre che sia la stessa registrazione. Controlla anno, edizione e dati prima di scegliere. Nessuna fusione automatica.</p>
+    <div class="dialog-heading"><h2 id="duplicatesTitle">Unisci i duplicati</h2><button type="button" data-close="duplicatesDialog">Chiudi</button></div>
+    <p>Ti propongo quali copie unire. Se sono edizioni che vuoi tenere separate, passa alla proposta successiva o chiudi. Nessuna modifica senza la tua conferma.</p>
     <div id="duplicateContent"></div>
-    <div class="dialog-actions"><button id="duplicatePrevious" type="button" class="secondary">Gruppo precedente</button><button id="duplicateNext" type="button" class="secondary">Gruppo successivo</button><button id="removeDuplicates" type="button" disabled>Rimuovi copie selezionate</button></div>
+    <div class="dialog-actions"><button id="duplicatePrevious" type="button" class="secondary">Precedente</button><button id="duplicateNext" type="button" class="secondary">Prossima proposta</button><button id="removeDuplicates" type="button" disabled>Conferma unione</button></div>
   </dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=3"></script>
+  <script type="module" src="./collection-app.mjs?v=4"></script>
 </body>
 </html>

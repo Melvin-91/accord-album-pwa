@@ -59,6 +59,11 @@ dialog::backdrop { background: #000b; }
 .dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .dialog-heading h2 { margin-top: 0; }
 .dialog-heading button { background: #303030; color: inherit; }
+#addDialog { padding: 0; overflow: hidden; }
+#addDialog[open] { display: flex; flex-direction: column; }
+#addDialog > .dialog-heading { flex: 0 0 auto; padding: 22px 22px 0; }
+#addDialog > .dialog-heading button { flex-shrink: 0; }
+#catalogBody { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 22px 22px; }
 dialog p { line-height: 1.5; }
 dialog form, dialog section { display: grid; gap: 14px; }
 dialog section { border-top: 1px solid var(--line); padding: 14px 0; }
@@ -89,5 +94,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
   .artwork { width: 64px; }
   .card-actions { justify-content: flex-start; }
   dialog { padding: 16px; }
+  #addDialog > .dialog-heading { padding: 16px 16px 0; }
+  #catalogBody { padding: 0 16px 16px; }
   #duplicatesDialog > .dialog-actions, #choiceDialog form > .dialog-actions { bottom: -16px; }
 }

@@ -22,12 +22,45 @@ export function duplicateCollectionGroups(records, links = {}) {
   return [...groups.values()].filter((group) => group.length > 1);
 }
 
+export function suggestDuplicateMerge(records, favoriteIds = []) {
+  if (records.length < 2 || new Set(records.map((album) => album.id)).size !== records.length) {
+    throw new Error("Scegli almeno due copie distinte.");
+  }
+  const favorites = new Set(favoriteIds);
+  const score = (album) => (album.cover_sha256 ? 100 : 0) + (favorites.has(album.id) ? 16 : 0)
+    + (album.notes ? 8 : 0) + (album.rating !== null ? 4 : 0) + (album.status !== "queued" ? 2 : 0);
+  const originals = records.map(validateAlbum).sort((a, b) => score(b) - score(a) || (a.id < b.id ? -1 : 1));
+  const keeper = originals[0], merged = { ...keeper };
+  for (const field of ["genres", "collections", "tags"]) {
+    const values = new Map();
+    for (const album of originals) for (const value of album[field]) {
+      if (!values.has(value.toLowerCase())) values.set(value.toLowerCase(), value);
+    }
+    merged[field] = [...values.values()];
+  }
+  if (!merged.primary_genre) merged.primary_genre = originals.find((album) => album.primary_genre)?.primary_genre || merged.genres[0] || "";
+  if (merged.rating === null) merged.rating = originals.find((album) => album.rating !== null)?.rating ?? null;
+  if (merged.status === "queued") merged.status = originals.find((album) => album.status !== "queued")?.status || "queued";
+  const notes = new Map();
+  for (const album of originals) if (album.notes?.trim() && !notes.has(album.notes)) notes.set(album.notes, album.id);
+  const parts = [...notes].map(([note, id]) => notes.size > 1 ? `${id}:\n${note}` : note);
+  const labels = { queued: "Da ascoltare", listening: "In ascolto", liked: "Mi piace", neutral: "Neutro", disliked: "Non mi piace" };
+  for (const album of originals) {
+    if (album.rating !== null && album.rating !== merged.rating) parts.push(`Voto originale (${album.id}): ${album.rating}/5`);
+    if (album.status !== "queued" && album.status !== merged.status) parts.push(`Stato originale (${album.id}): ${labels[album.status]}`);
+  }
+  merged.notes = parts.join("\n\n---\n\n");
+  return { album: validateAlbum(merged), originals, removeIds: originals.slice(1).map((album) => album.id),
+    favorite: originals.some((album) => favorites.has(album.id)) };
+}
+
 export function createCollectionStore(storage) {
   let serialized = storage.getItem(COLLECTION_KEY);
   const raw = serialized === null ? {} : JSON.parse(serialized);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Raccolta locale non leggibile. Nessun dato sovrascritto.");
   let state = { ...raw, albums: albums(raw.albums === undefined ? [] : raw.albums), base: albums(raw.base === undefined ? [] : raw.base),
     pendingRemovals: albums(raw.pendingRemovals === undefined ? [] : raw.pendingRemovals),
+    deletedAlbums: albums(raw.deletedAlbums === undefined ? [] : raw.deletedAlbums),
     syncOwner: raw.syncOwner || storage.getItem("accord-album-owner") || null,
     preferences: raw.preferences === undefined ? JSON.parse(storage.getItem("accord-collection-ui-v1") || "{}") : raw.preferences };
   if (!state.preferences || typeof state.preferences !== "object" || Array.isArray(state.preferences)) {
@@ -55,6 +88,23 @@ export function createCollectionStore(storage) {
     get state() { return state; }, links, assertCurrent, commit,
     duplicate: (candidate) => findCollectionAlbum(state.albums, candidate, links()),
     groups: () => duplicateCollectionGroups(state.albums, links()),
+    suggestMerge: (group) => suggestDuplicateMerge(group, state.preferences.favoriteIds || []),
+    merge(group, expected = state) {
+      if (expected !== state) throw new Error("Raccolta cambiata: cerca di nuovo i duplicati.");
+      const current = group.map((album) => state.albums.find((record) => record.id === album.id));
+      if (current.some((album, index) => !album || JSON.stringify(album) !== JSON.stringify(group[index]))) {
+        throw new Error("Copie cambiate: cerca di nuovo i duplicati.");
+      }
+      const proposal = suggestDuplicateMerge(current, state.preferences.favoriteIds || []);
+      const next = removeFrom(state, proposal.removeIds);
+      const favorites = new Set((state.preferences.favoriteIds || []).filter((id) => !proposal.removeIds.includes(id)));
+      if (proposal.favorite) favorites.add(proposal.album.id);
+      commit({ ...next, albums: next.albums.map((album) => album.id === proposal.album.id ? proposal.album : album),
+        preferences: { ...state.preferences, favoriteIds: [...favorites] },
+        duplicateMergeHistory: [...(state.duplicateMergeHistory || []), { originals: current, merged: proposal.album,
+          at: new Date().toISOString() }] });
+      return proposal;
+    },
     add(candidate, { replaceId = null, distinct = false } = {}) {
       assertCurrent();
       const record = validateAlbum(candidate), found = findCollectionAlbum(state.albums, record, links());
@@ -62,7 +112,9 @@ export function createCollectionStore(storage) {
       let next = replaceId ? removeFrom(state, [replaceId]) : state;
       if (next.albums.some((album) => album.id === record.id)) throw new Error("Questo identificativo e' gia' presente.");
       next = { ...next, albums: [...next.albums, record],
-        pendingRemovals: next.pendingRemovals.filter((album) => album.id !== record.id) };
+        pendingRemovals: next.pendingRemovals.filter((album) => album.id !== record.id),
+        restoredAlbumIds: [...new Set([...(next.restoredAlbumIds || []),
+          ...next.deletedAlbums.filter((album) => album.id === record.id).map((album) => album.id)])] };
       if (distinct && found) next.distinctAlbumPairs = [...(next.distinctAlbumPairs || []),
         [record, found.album].map((album) => JSON.stringify([album.id, album.artist, album.name, album.year])).sort()];
       commit(next);
