@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#090909">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.29.4 · La mia raccolta</title>
+  <title>Accord v1.29.5 · La mia raccolta</title>
   <link rel="icon" href="./assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./collection.css?v=3">
@@ -15,7 +15,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="./assets/accord-192.png" width="36" height="36" alt="">
-      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.4</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
+      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.5</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
     </div>
     <nav class="header-actions" aria-label="Raccolta">
       <button id="sync" type="button" class="secondary">Sincronizza</button>
@@ -55,46 +55,46 @@
   <dialog id="settingsDialog" aria-labelledby="settingsTitle">
     <div class="dialog-heading"><h2 id="settingsTitle">Impostazioni</h2><button type="button" data-close="settingsDialog">Chiudi</button></div>
     <section>
-      <h3>Raccolta condivisa · GitHub</h3>
-      <p>Usa il repository privato <strong>accord-music-data</strong>. Il token deve avere permesso Contents in lettura e scrittura. Non viene inviato ai servizi musicali.</p>
+      <h3>Sincronizzazione</h3>
+      <p>Collega il repository privato <strong>accord-music-data</strong> per condividere la raccolta tra dispositivi.</p>
       <form id="githubForm">
-        <label>Proprietario GitHub<input id="owner" maxlength="39" autocomplete="off" required></label>
-        <label>Token GitHub<input id="githubToken" type="password" autocomplete="off"></label>
-        <button type="submit">Salva collegamento GitHub</button>
+        <label>Account GitHub<input id="owner" maxlength="39" autocomplete="off" required></label>
+        <label>Token di accesso<input id="githubToken" type="password" autocomplete="off"></label>
+        <button type="submit">Salva</button>
       </form>
-      <p class="muted">Il token GitHub resta su questo browser, accessibile agli script della stessa origine. La sincronizzazione parte soltanto quando la richiedi e confermi l'anteprima.</p>
+      <p class="muted">Il token resta in questo browser. La sincronizzazione parte solo quando la richiedi.</p>
     </section>
     <section>
-      <h3>Accesso ai cataloghi musicali</h3>
+      <h3>Servizi musicali</h3>
       <label>Servizio<select id="settingsService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
       <p id="serviceStatus" role="status"></p>
       <label id="clientField">Client ID dell'applicazione<input id="clientId" autocomplete="off"></label>
-      <label id="redirectField">Redirect da registrare nella tua app Spotify<input id="redirectUri" readonly></label>
-      <div data-service="tidal" hidden><p>Il Client ID identifica la tua app TIDAL: non e' l'accesso all'account. Registra come redirect l'indirizzo di questa pagina e premi Collega.</p></div>
+      <label id="redirectField">Indirizzo di ritorno Spotify<input id="redirectUri" readonly></label>
+      <div data-service="tidal" hidden><p>Registra questo indirizzo come redirect nella tua app TIDAL, poi collega.</p></div>
       <div data-service="qobuz" hidden>
-        <label>App ID della sessione web<input id="qobuzAppId" type="password" autocomplete="off"></label>
-        <label>Token della sessione web (non la password)<input id="qobuzToken" type="password" autocomplete="off"></label>
-        <p class="muted">Nel browser Qobuz: Strumenti sviluppatore &gt; Rete &gt; favorite/getUserFavorites. Copia X-App-Id e X-User-Auth-Token. Non condividere il token.</p>
+        <label>App ID<input id="qobuzAppId" type="password" autocomplete="off"></label>
+        <label>Token di sessione<input id="qobuzToken" type="password" autocomplete="off"></label>
+        <p class="muted">Usa il token di sessione Qobuz, non la password.</p>
       </div>
       <div class="dialog-actions"><button id="connectService" type="button">Collega servizio</button><button id="disconnectService" type="button" class="secondary">Scollega</button></div>
-      <p class="muted">Gli accessi musicali restano salvati in questo browser anche quando chiudi l'app. I token sono accessibili agli script della stessa origine e non vengono sincronizzati. Su un dispositivo condiviso premi Scollega dopo l'uso. Se revochi l'accesso o cancelli i dati del sito, dovrai ricollegarti.</p>
+      <p class="muted">Gli accessi restano salvati in questo browser. Scollega il servizio sui dispositivi condivisi.</p>
     </section>
     <section>
       <h3>Apertura degli album</h3>
       <label>Apri con<select id="linkTarget"><option value="app">App musicale installata</option><option value="web">Player web nel browser</option></select></label>
-      <p class="muted">App usa il programma installato sul dispositivo. Web apre il servizio nel browser.</p>
+      <p class="muted">Scegli l'app installata o il player nel browser.</p>
     </section>
     <details class="collection-tools">
-      <summary>Gestione della raccolta</summary>
-      <p class="muted">Cerca le copie dello stesso album e conferma l'unione proposta.</p>
+      <summary>Strumenti avanzati</summary>
+      <p class="muted">Controlla le copie trovate e conferma prima di unirle.</p>
       <button id="duplicates" type="button" class="secondary">Cerca duplicati</button>
     </details>
   </dialog>
   <dialog id="duplicatesDialog" aria-labelledby="duplicatesTitle">
     <div class="dialog-heading"><h2 id="duplicatesTitle">Unisci i duplicati</h2><button type="button" data-close="duplicatesDialog">Chiudi</button></div>
-    <p>Ti propongo quali copie unire. Se sono edizioni che vuoi tenere separate, passa alla proposta successiva o chiudi. Nessuna modifica senza la tua conferma.</p>
+    <p>Controlla la proposta. Conferma per unire le copie; nessuna modifica avviene prima.</p>
     <div id="duplicateContent"></div>
-    <div class="dialog-actions"><button id="duplicatePrevious" type="button" class="secondary">Precedente</button><button id="duplicateNext" type="button" class="secondary">Prossima proposta</button><button id="removeDuplicates" type="button" disabled>Conferma unione</button></div>
+    <div class="dialog-actions"><button id="duplicatePrevious" type="button" class="secondary">Indietro</button><button id="duplicateNext" type="button" class="secondary">Avanti</button><button id="removeDuplicates" type="button" disabled>Unisci copie</button></div>
   </dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>

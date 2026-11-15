@@ -83,8 +83,7 @@ function comparison(album, favorite = false) {
   const facts = node("dl");
   const values = { Servizio: providerName(album), Anno: album.year || "-", Stato: states[album.status],
     Voto: album.rating ?? "-", Preferito: favorite ? "Si" : "No", Generi: album.genres.join(", ") || "-",
-    Collezioni: album.collections.join(", ") || "-", Tag: album.tags.join(", ") || "-",
-    Note: album.notes || "-", ID: album.id };
+    Collezioni: album.collections.join(", ") || "-", Tag: album.tags.join(", ") || "-", Note: album.notes || "-" };
   Object.entries(values).forEach(([label, value]) => facts.append(node("dt", label), node("dd", String(value))));
   const link = node("a", "Apri nel servizio", { href: album.url, target: "_blank", rel: "noopener noreferrer" });
   card.append(facts, link);
@@ -93,12 +92,12 @@ function comparison(album, favorite = false) {
 async function confirmRemoval(ids, expected = store.state) {
   const removed = expected.albums.filter((album) => ids.includes(album.id));
   const answer = await choice("Conferma rimozione", [
-    node("p", "Le copie selezionate saranno rimosse dal dispositivo e, con Sincronizza, dalla raccolta condivisa. Voti, note e altri dati non vengono uniti alle copie mantenute."),
+    node("p", "Le copie scelte saranno rimosse. Voti e note non verranno trasferiti; la raccolta condivisa si aggiorna alla prossima sincronizzazione."),
     ...removed.map((album) => node("p", `${providerName(album)} - ${album.artist} - ${album.name} (${album.year || "-"})`)),
   ], [["cancel", "Annulla"], ["remove", "Rimuovi le copie selezionate"]]);
   if (answer === "remove") {
     store.remove(ids, expected);
-    report("Copie rimosse localmente. Premi Sincronizza per aggiornare la raccolta condivisa.");
+    report("Copie rimosse. Sincronizza per aggiornare gli altri dispositivi.");
   }
 }
 async function cacheCatalogCover(albumId, sourceId = albumId) {
@@ -117,27 +116,27 @@ async function compareCandidate(candidate, found) {
   if (found.confidence === "uncertain" && candidate.id !== found.album.id) actions.push(["distinct", "Sono album diversi: aggiungi"]);
   const answer = await choice("Confronta prima di aggiungere", [
     node("p", found.confidence === "uncertain"
-      ? "Titolo e artista coincidono, ma gli anni differiscono. Potrebbero essere edizioni diverse oppure album distinti."
-      : "Questo album risulta gia' presente. Confronta i dati prima di sostituire una copia."),
+      ? "Titolo e artista coincidono, ma l'anno e' diverso. Controlla se si tratta di un'altra edizione."
+      : "Album gia' presente. Confronta le copie prima di decidere."),
     row,
   ], actions);
   if (store.state !== expected) throw new Error("Raccolta cambiata: riapri il confronto.");
   if (answer === "replace") {
-    const confirmed = await choice("Conferma sostituzione", [node("p",
-      "La nuova copia conservera' i propri dati. Voto, note e altri dati della vecchia copia non saranno trasferiti. La rimozione sara' inviata alla prossima sincronizzazione.")],
+    const confirmed = await choice("Sostituisci copia", [node("p",
+      "Voti e note della vecchia copia non verranno trasferiti. La rimozione sara' sincronizzata.")],
     [["cancel", "Annulla"], ["replace", "Sostituisci"]]);
     if (confirmed === "replace") {
       store.add(candidate, { replaceId: found.album.id });
       const saveError = await cacheCatalogCover(candidate.id);
-      report(saveError ? `Copia sostituita, ma copertina non memorizzata: ${saveError}`
-        : "Copia sostituita localmente. Sincronizza per aggiornare la raccolta condivisa.", Boolean(saveError));
+      report(saveError ? `Copia sostituita, ma copertina non salvata: ${saveError}`
+        : "Copia sostituita. Sincronizza per aggiornare gli altri dispositivi.", Boolean(saveError));
     }
   } else if (answer === "distinct") {
     const duplicate = store.add(candidate, { distinct: true });
     if (duplicate) throw new Error("Lo stesso identificativo non puo' essere aggiunto due volte.");
     const saveError = await cacheCatalogCover(candidate.id);
-    report(saveError ? `Album distinto aggiunto, ma copertina non memorizzata: ${saveError}`
-      : "Album distinto aggiunto dopo il confronto.", Boolean(saveError));
+    report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
+      : "Album aggiunto come copia distinta.", Boolean(saveError));
   } else if (coverError) {
     report(`Album gia' presente; copertina non memorizzata: ${coverError}`, true);
   }
@@ -155,10 +154,10 @@ function showDuplicates(index = 0) {
     const group = groups[index], expected = store.state, proposal = store.suggestMerge(group);
     $("duplicateContent").append(node("p", `Proposta ${index + 1} di ${groups.length}`),
       node("h3", `${proposal.album.artist} - ${proposal.album.name}`),
-      node("p", `Ho trovato ${group.length} copie. Ti suggerisco di unirle in un solo album, mantenendo la copia ${providerName(proposal.album)} (${proposal.album.year || "anno non indicato"}).`),
-      node("p", `Stato proposto: ${states[proposal.album.status]}. Voto: ${proposal.album.rating ?? "non assegnato"}. Note, generi, collezioni, tag e preferiti vengono conservati; voti e stati diversi restano annotati nelle note.`));
+        node("p", `Ho trovato ${group.length} copie. Suggerisco di tenere quella ${providerName(proposal.album)}. Controlla i dettagli, poi conferma.`),
+        node("p", "Conservo note e preferiti; voti e stati diversi vengono annotati."));
     const details = node("details"), grid = node("div", "", { class: "comparison-grid" });
-    details.append(node("summary", "Vedi le copie e il risultato proposto"));
+    details.append(node("summary", "Confronta le copie"));
     group.forEach((album) => grid.append(comparison(album, (expected.preferences.favoriteIds || []).includes(album.id))));
     grid.append(comparison(proposal.album, proposal.favorite));
     details.append(grid); $("duplicateContent").append(details);
@@ -168,7 +167,7 @@ function showDuplicates(index = 0) {
     $("duplicateNext").onclick = () => showDuplicates(index + 1);
     $("removeDuplicates").onclick = () => run(async () => {
       store.merge(group, expected);
-      report("Copie unite. Premi Sincronizza per condividere il risultato con l'app.");
+      report("Copie unite. Sincronizza per aggiornare gli altri dispositivi.");
       showDuplicates(index);
     });
   }
@@ -194,9 +193,9 @@ const coverObserver = new IntersectionObserver((entries) => {
         urls.set(id, source);
       }
       const image = entry.target, placeholder = image.parentElement.querySelector("span");
-      image.onload = () => { placeholder.hidden = true; };
-      image.onerror = () => { image.hidden = true; };
-      image.src = source; image.hidden = false;
+      image.onload = () => { image.classList.add("loaded"); placeholder.hidden = true; };
+      image.onerror = () => { image.classList.remove("loaded"); };
+      image.src = source;
     }).catch((error) => report(error.message, true));
   }
 }, { rootMargin: "200px" });
@@ -205,7 +204,7 @@ function albumCard(album, favorite) {
   const artwork = node("div", "", { class: "artwork" });
   artwork.append(node("span", album.name.slice(0, 1).toUpperCase(), { "aria-hidden": "true" }));
   const image = node("img", "", { alt: `Copertina di ${album.name}`, loading: "lazy", width: "240", height: "240",
-    referrerpolicy: "no-referrer", "data-id": album.id, "data-hash": album.cover_sha256 || "", hidden: "" });
+    referrerpolicy: "no-referrer", "data-id": album.id, "data-hash": album.cover_sha256 || "" });
   artwork.append(image); queueMicrotask(() => coverObserver.observe(image));
   const favoriteButton = node("button", favorite ? "Preferito" : "Preferito +", { type: "button",
     class: "favorite", "aria-pressed": String(favorite), "aria-label": `Preferito: ${album.name}` });
@@ -270,7 +269,7 @@ function render() {
   $("empty").textContent = store.state.albums.length ? "Nessun album corrisponde ai filtri." : "La raccolta e' vuota. Aggiungi un album oppure sincronizza con GitHub.";
   $("moreAlbums").hidden = filtered.length <= visibleLimit;
   $("lastSync").textContent = store.state.lastSync ? `Ultima sincronizzazione: ${new Date(store.state.lastSync).toLocaleString("it")}` : "Le modifiche restano sul dispositivo finche' sincronizzi.";
-  $("headerSyncState").textContent = store.state.lastSync ? "Raccolta collegata a GitHub" : "Raccolta sul dispositivo";
+  $("headerSyncState").textContent = store.state.lastSync ? "Raccolta condivisa" : "Raccolta sul dispositivo";
 }
 function renderResults() {
   $("catalogResults").replaceChildren();
@@ -284,7 +283,7 @@ function renderResults() {
       const remote = await sync.checkAddition(album);
       if (remote) {
         const saveError = await cacheCatalogCover(remote.album.id, album.id);
-        const answer = await choice("Album gia' nella raccolta condivisa", [
+        const answer = await choice("Album gia' presente", [
           comparison(remote.album), node("p", saveError
             ? `Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente. La copertina non e' stata memorizzata: ${saveError}`
             : "Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente.")],
@@ -296,8 +295,8 @@ function renderResults() {
       if (found) await compareCandidate(album, found);
       else {
         const saveError = await cacheCatalogCover(album.id);
-        report(saveError ? `Album aggiunto, ma copertina non memorizzata: ${saveError}`
-          : "Album aggiunto localmente. Sincronizza per inviarlo alla raccolta condivisa.", Boolean(saveError));
+        report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
+          : "Album aggiunto. Sincronizza per condividerlo.", Boolean(saveError));
       }
       renderResults();
     }));
@@ -308,20 +307,31 @@ async function performSync() {
   report("Lettura della raccolta condivisa...");
   const completed = await sync.sync({
     async chooseConflicts(conflicts) {
-      const content = [node("p", "Scegli soltanto per i dati in conflitto. Una rimozione contrapposta a una modifica richiede la tua conferma.")], controls = [];
+      const content = [node("p", "Scegli quale versione mantenere per ogni modifica.")], controls = [];
+      const labels = { album: "Album", status: "Stato", rating: "Voto", genres: "Generi",
+        collections: "Collezioni", tags: "Tag", notes: "Note", favorite: "Preferito", pinned: "In evidenza" };
+      const valueText = (value, fieldName) => {
+        if (value === null || value === undefined || value === "") return "Vuoto";
+        if (Array.isArray(value)) return value.length ? value.join(", ") : "Vuoto";
+        if (typeof value === "boolean") return value ? "Si" : "No";
+        if (typeof value === "object") return value.artist && value.name ? `${value.artist} - ${value.name}` : "Modifica album";
+        if (fieldName === "status" && Object.hasOwn(states, value)) return states[value];
+        if (fieldName === "rating" && typeof value === "number") return `${value} / 5`;
+        return String(value);
+      };
       conflicts.forEach((conflict) => {
         const album = conflict.local || conflict.remote || conflict.base;
         content.push(node("h3", `${album.artist} - ${album.name}`));
         conflict.fields.forEach((field) => {
-          const label = node("label", field.field === "album" ? "Rimozione o modifica" : field.field);
+          const label = node("label", labels[field.field] || field.field);
           const value = node("select");
-          value.append(node("option", "Scegli...", { value: "" }), node("option", "Mantieni il dispositivo", { value: "local" }),
-            node("option", "Usa la raccolta GitHub", { value: "remote" }));
-          content.push(node("pre", `Dispositivo: ${JSON.stringify(field.local, null, 2)}\nGitHub: ${JSON.stringify(field.remote, null, 2)}`));
+          value.append(node("option", "Scegli...", { value: "" }),
+            node("option", `Mantieni questo dispositivo: ${valueText(field.local, field.field)}`, { value: "local" }),
+            node("option", `Usa la raccolta condivisa: ${valueText(field.remote, field.field)}`, { value: "remote" }));
           label.append(value); content.push(label); controls.push({ id: conflict.id, field: field.field, value });
         });
       });
-      const answer = await choice("Modifiche in conflitto", content, [["cancel", "Annulla"], ["continue", "Applica scelte"]],
+      const answer = await choice("Scegli cosa mantenere", content, [["cancel", "Annulla"], ["continue", "Continua"]],
         () => controls.every(({ value }) => value.value));
       if (answer !== "continue") return null;
       const choices = {};
@@ -338,7 +348,7 @@ async function performSync() {
           return [`${!right ? "Rimuovi" : !left ? "Aggiungi" : "Aggiorna"}: ${album.artist} - ${album.name} (${providerName(album)})`];
         });
       };
-      const content = [node("p", "Queste sono le modifiche da applicare. Nessuna scrittura viene eseguita prima della conferma."),
+      const content = [node("p", "Controlla le modifiche prima di sincronizzare."),
         node("h3", "Raccolta condivisa"), node("pre", changes(remote).join("\n") || "Nessuna modifica."),
         node("h3", "Questo dispositivo"), node("pre", changes(local).join("\n") || "Nessuna modifica.")];
       return await choice("Conferma sincronizzazione", content, [["cancel", "Annulla"], ["sync", "Sincronizza"]]) === "sync";
@@ -400,12 +410,12 @@ $("catalogForm").addEventListener("submit", (event) => {
       resultAlbums = albums.map(validateAlbum);
       resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
       renderResults();
-      report(`${resultAlbums.length} risultati. Il controllo duplicati viene ripetuto anche al momento dell'aggiunta.`);
+      report(`${resultAlbums.length} risultati. Verifico di nuovo le copie prima di aggiungere.`);
     } catch (error) {
       if (error.name === "AbortError" && controller.signal.aborted) report("Ricerca annullata. Puoi riprovare.");
-      else if (error.name === "TimeoutError") throw new Error("Tempo di attesa superato: il catalogo non ha risposto in tempo. Riprova oppure incolla il link dell'album.");
+      else if (error.name === "TimeoutError") throw new Error("Il catalogo non ha risposto. Riprova o incolla il link dell'album.");
       else if (error.name === "AbortError") throw new Error("Connessione al catalogo interrotta. Nessun album aggiunto: riprova la ricerca.");
-      else if (/TIDAL HTTP (401|403)\b/.test(error.message)) throw new Error(`${error.message} Verifica l'accesso e i permessi nelle impostazioni, poi premi Collega TIDAL.`);
+      else if (/TIDAL HTTP (401|403)\b/.test(error.message)) throw new Error("Accesso TIDAL non valido. Verifica le impostazioni e ricollega il servizio.");
       else throw error;
     } finally { catalogAbort = null; }
   });
@@ -417,7 +427,7 @@ $("openSettings").addEventListener("click", () => run(async () => {
   const client = await services();
   $("owner").value = localStorage.getItem("accord-album-owner") || "";
   $("githubToken").value = "";
-  $("githubToken").placeholder = localStorage.getItem("accord-album-token") ? "Token gia' salvato; vuoto non cambia" : "Token con permesso Contents";
+  $("githubToken").placeholder = localStorage.getItem("accord-album-token") ? "Gia' salvato; vuoto non cambia" : "Token di accesso";
   $("settingsService").value = client.provider;
   $("linkTarget").value = localStorage.getItem(MUSIC_LINK_TARGET_KEY) === "web" ? "web" : "app";
   await serviceSettings(); $("settingsDialog").showModal();
@@ -427,26 +437,26 @@ $("githubForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const saved = mutate(() => {
     const owner = $("owner").value.trim(), token = $("githubToken").value.trim();
-    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) throw new Error("Proprietario GitHub non valido.");
-    if (!token && !localStorage.getItem("accord-album-token")) throw new Error("Inserisci il token GitHub.");
+    if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/.test(owner)) throw new Error("Account GitHub non valido.");
+    if (!token && !localStorage.getItem("accord-album-token")) throw new Error("Inserisci il token di accesso.");
     if (token && /[\r\n]/.test(token)) throw new Error("Token GitHub non valido.");
     localStorage.setItem("accord-album-owner", owner);
     if (token) localStorage.setItem("accord-album-token", token);
     localStorage.setItem("accord-album-autosync", "0");
     $("githubToken").value = "";
   });
-  if (saved) report("Impostazioni GitHub salvate. Premi Sincronizza per verificare e collegare la raccolta.");
+  if (saved) report("Collegamento salvato. Sincronizza per completarlo.");
 });
 $("connectService").addEventListener("click", () => run(async () => {
   const client = await services(), provider = $("settingsService").value;
   const url = await client.connect(provider, { clientId: $("clientId").value, appId: $("qobuzAppId").value, token: $("qobuzToken").value });
   $("qobuzAppId").value = ""; $("qobuzToken").value = "";
   if (url) location.assign(url);
-  else { await serviceSettings(); report("Accesso Qobuz verificato e salvato su questo dispositivo."); }
+  else { await serviceSettings(); report("Qobuz collegato."); }
 }));
 $("disconnectService").addEventListener("click", () => run(async () => {
   const client = await services(); client.disconnect($("settingsService").value);
-  await serviceSettings(); report("Accesso salvato rimosso da questo browser. Il Client ID configurato e' conservato.");
+  await serviceSettings(); report("Servizio scollegato.");
 }));
 $("linkTarget").addEventListener("change", () => {
   try { localStorage.setItem(MUSIC_LINK_TARGET_KEY, $("linkTarget").value); render(); }
@@ -462,7 +472,7 @@ window.addEventListener("storage", (event) => {
 const callback = new URL(location.href);
 if (callback.searchParams.has("code") || callback.searchParams.has("error")) {
   run(async () => {
-    try { await (await services()).finish(location.href); report("Servizio musicale collegato. Accesso salvato su questo dispositivo."); }
+    try { await (await services()).finish(location.href); report("Servizio musicale collegato."); }
     finally { history.replaceState(null, "", `${location.pathname}${location.hash}`); }
   });
 }
@@ -475,7 +485,7 @@ if ("serviceWorker" in navigator) {
     }));
     $("update").addEventListener("click", () => run(async () => {
       store.assertCurrent();
-      const answer = await choice("Aggiorna PWA", [node("p", "Le modifiche salvate restano sul dispositivo. I testi non inviati nei moduli verranno persi.")],
+      const answer = await choice("Aggiorna PWA", [node("p", "I dati salvati restano. I campi non salvati verranno persi.")],
         [["cancel", "Annulla"], ["update", "Aggiorna"]]);
       if (answer === "update" && registration.waiting) {
         navigator.serviceWorker.addEventListener("controllerchange", () => location.reload(), { once: true });

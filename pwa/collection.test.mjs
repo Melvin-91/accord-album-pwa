@@ -653,7 +653,7 @@ test("the active shell contains only collection workflows and precaches its comp
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.4/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.5/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];
@@ -661,4 +661,13 @@ test("the active shell contains only collection workflows and precaches its comp
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
   }
   assert.doesNotMatch(sw, /tidal-ui\.mjs|playlist-ui\.mjs|suggestions-ui\.mjs|music-completion-ui\.mjs/);
+});
+test("lazy cover images stay observable until their image has loaded", () => {
+  const app = readFileSync(new URL("collection-app.mjs", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("collection.css", import.meta.url), "utf8");
+  const image = app.match(/const image = node\("img"[\s\S]*?\);/)[0];
+  assert.doesNotMatch(image, /\bhidden:/);
+  assert.match(app, /image\.classList\.add\("loaded"\)/);
+  assert.match(styles, /\.artwork img \{[^}]*visibility:\s*hidden/);
+  assert.match(styles, /\.artwork img\.loaded \{[^}]*visibility:\s*visible/);
 });

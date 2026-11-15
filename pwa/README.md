@@ -2,6 +2,14 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.5 · Raccolta più semplice e copertine
+
+Le azioni quotidiane restano in primo piano; le altre sono raccolte nelle
+impostazioni. Testi, confronto duplicati e conferme di sincronizzazione sono
+più brevi. Le copertine si mostrano correttamente quando la scheda entra in
+vista. La versione desktop mantiene gli strumenti avanzati in un unico
+menu e riduce i controlli ripetuti.
+
 ### PWA 1.29.4 - Copertine in raccolta
 
 Le schede mostrano le copertine già sincronizzate e quelle dei nuovi album

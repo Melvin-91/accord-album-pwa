@@ -132,24 +132,24 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     settings(provider) {
       if (provider === "tidal") {
         const clientId = tidalClientId(), status = tidalAuth.status(clientId);
-        return { clientId, connected: status.connected, text: status.connected ? "TIDAL collegato. Accesso salvato su questo dispositivo."
+        return { clientId, connected: status.connected, text: status.connected ? "TIDAL collegato."
           : !clientId ? "Inserisci il Client ID, poi premi Collega TIDAL."
-            : !status.matches && tidalAuth.clientId() ? "Client ID diverso dalla sessione: ricollega TIDAL."
-              : status.expired ? "Accesso scaduto: ricollega TIDAL. Il Client ID e' gia' salvato."
-                : "Client ID salvato. Premi Collega TIDAL per autorizzare l'accesso." };
+            : !status.matches && tidalAuth.clientId() ? "Client ID diverso: ricollega TIDAL."
+              : status.expired ? "Accesso scaduto: ricollega TIDAL."
+                : "Client ID salvato. Collega TIDAL." };
       }
       if (provider === "qobuz") {
         const connected = !!session.getItem(QOBUZ_SESSION);
-        return { connected, text: connected ? "Qobuz collegato. Accesso salvato su questo dispositivo."
-          : "Inserisci App ID e token della sessione web Qobuz, poi verifica l'accesso." };
+        return { connected, text: connected ? "Qobuz collegato."
+          : "Inserisci App ID e token di sessione, poi collega Qobuz." };
       }
       const settings = spotifySettings();
       const bound = session.getItem("accord-spotify-token-client-id");
       const connected = (!bound || bound === settings.clientId) && !!session.getItem("accord-spotify-access-token")
         && (Number(session.getItem("accord-spotify-token-expires")) > Date.now() + 60_000
           || !!session.getItem("accord-spotify-refresh-token"));
-      return { ...settings, connected, text: connected ? "Spotify collegato. Accesso salvato su questo dispositivo."
-        : settings.clientId ? "Client ID salvato. Premi Collega Spotify per autorizzare l'accesso."
+      return { ...settings, connected, text: connected ? "Spotify collegato."
+        : settings.clientId ? "Client ID salvato. Collega Spotify."
           : "Inserisci il Client ID della tua applicazione Spotify." };
     },
     async connect(provider, values = {}) {
