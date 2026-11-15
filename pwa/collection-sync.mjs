@@ -1,5 +1,5 @@
 import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive, encodeCoverArchive,
-  findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=51";
+  findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=52";
 
 const API = "https://api.github.com";
 export function githubCollectionSettings(storage) {

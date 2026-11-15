@@ -1,4 +1,4 @@
-import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=51";
+import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=52";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
 const albums = (records) => validateDocument({ format: "accord-album-collection", version: 4, albums: records });

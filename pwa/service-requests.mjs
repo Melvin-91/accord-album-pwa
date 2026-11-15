@@ -2,6 +2,16 @@
 const storageQueues = new WeakMap(), memoryQueues = new Map();
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export function abortable(result, signal) {
+  if (!signal) return result;
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Interrotto", "AbortError"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(result).then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
 export function retryMilliseconds(value, now = Date.now()) {
   const numeric = typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*$/.test(value) ? Number(value) : NaN;
   const until = Number.isFinite(numeric) ? now + Math.max(1, numeric) * 1000 : Date.parse(value || "");
@@ -11,8 +21,9 @@ export function retryMilliseconds(value, now = Date.now()) {
 export function createServiceRequests({
   service, storage = globalThis.localStorage, now = () => Date.now(), sleep = defaultSleep,
   jitter = Math.random,
-  lock = (name, run) => globalThis.navigator?.locks?.request
-    ? globalThis.navigator.locks.request(name, run) : run(),
+  lock = (name, run, signal) => globalThis.navigator?.locks?.request
+    ? signal ? globalThis.navigator.locks.request(name, { signal }, run)
+      : globalThis.navigator.locks.request(name, run) : run(),
 }) {
   const queues = storage
     ? storageQueues.get(storage) || storageQueues.set(storage, new Map()).get(storage) : memoryQueues;
@@ -49,7 +60,7 @@ export function createServiceRequests({
         const until = now() + ms;
         while (until > now()) {
           guard();
-          await sleep(Math.min(100, until - now()));
+          await abortable(sleep(Math.min(100, until - now())), signal);
         }
         guard();
       };
@@ -92,16 +103,10 @@ export function createServiceRequests({
       };
       const result = state.queue.then(() => {
         guard();
-        return lock(`accord-${service}-request-v1`, run);
+        return lock(`accord-${service}-request-v1`, run, signal);
       });
       state.queue = result.catch(() => {});
-      if (!signal) return result;
-      return new Promise((resolve, reject) => {
-        const abort = () => reject(signal.reason ?? new DOMException("Interrotto", "AbortError"));
-        if (signal.aborted) abort();
-        else signal.addEventListener("abort", abort, { once: true });
-        result.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-      });
+      return abortable(result, signal);
     },
   };
 }

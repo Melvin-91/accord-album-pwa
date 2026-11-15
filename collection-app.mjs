@@ -1,6 +1,6 @@
-import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=51";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=1";
-import { createCollectionSync } from "./collection-sync.mjs?v=1";
+import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=52";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=2";
+import { createCollectionSync } from "./collection-sync.mjs?v=2";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 
 const $ = (id) => document.getElementById(id);
@@ -12,15 +12,20 @@ const node = (tag, text = "", attributes = {}) => {
   Object.entries(attributes).forEach(([key, item]) => value.setAttribute(key, item));
   return value;
 };
-let store, sync, servicesPromise, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
+let store, sync, servicesPromise, catalogAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
 const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = new Map();
 function report(message, error = false) {
   $("feedback").textContent = message;
   $("feedback").classList.toggle("error", error);
   $("feedback").setAttribute("role", error ? "alert" : "status");
+  if ($("addDialog").open) {
+    $("catalogStatus").textContent = message;
+    $("catalogStatus").classList.toggle("error", error);
+    $("catalogStatus").setAttribute("role", error ? "alert" : "status");
+  }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=1")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=2")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -29,6 +34,8 @@ function disable() {
   document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button, #addDialog input, #addDialog select, #settingsDialog button, #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   $("collection").setAttribute("aria-busy", String(busy));
+  $("cancelCatalogSearch").hidden = !catalogAbort;
+  $("cancelCatalogSearch").disabled = !catalogAbort;
 }
 async function run(action) {
   if (busy || !store) return;
@@ -341,13 +348,26 @@ $("catalogForm").addEventListener("submit", (event) => {
   event.preventDefault();
   run(async () => {
     const client = await services(), current = ++generation;
-    $("catalogStatus").textContent = "Ricerca in corso...";
-    const albums = await client.search($("catalogQuery").value);
-    if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
-    resultAlbums = albums.map(validateAlbum); renderResults();
-    $("catalogStatus").textContent = `${resultAlbums.length} risultati. Il controllo duplicati viene ripetuto anche al momento dell'aggiunta.`;
+    const controller = new AbortController();
+    catalogAbort = controller; resultAlbums = []; renderResults(); disable();
+    report("Ricerca in corso (massimo 45 secondi). Puoi annullarla.");
+    try {
+      const albums = await client.search($("catalogQuery").value, { signal: controller.signal });
+      if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
+      resultAlbums = albums.map(validateAlbum); renderResults();
+      report(`${resultAlbums.length} risultati. Il controllo duplicati viene ripetuto anche al momento dell'aggiunta.`);
+    } catch (error) {
+      if (error.name === "AbortError" && controller.signal.aborted) report("Ricerca annullata. Puoi riprovare.");
+      else if (error.name === "TimeoutError") throw new Error("Tempo di attesa superato: il catalogo non ha risposto in tempo. Riprova oppure incolla il link dell'album.");
+      else if (error.name === "AbortError") throw new Error("Connessione al catalogo interrotta. Nessun album aggiunto: riprova la ricerca.");
+      else if (/TIDAL HTTP (401|403)\b/.test(error.message)) throw new Error(`${error.message} Verifica l'accesso e i permessi nelle impostazioni, poi premi Collega TIDAL.`);
+      else throw error;
+    } finally { catalogAbort = null; }
   });
 });
+$("cancelCatalogSearch").addEventListener("click", () => catalogAbort?.abort());
+$("addDialog").addEventListener("close", () => catalogAbort?.abort());
+$("addDialog").addEventListener("cancel", () => catalogAbort?.abort());
 $("openSettings").addEventListener("click", () => run(async () => {
   const client = await services();
   $("owner").value = localStorage.getItem("accord-album-owner") || "";

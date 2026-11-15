@@ -1,6 +1,7 @@
-import { createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=51";
-import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumId } from "./tidal.mjs?v=14";
-import { createQobuzClient, qobuzCredentials } from "./qobuz.mjs?v=11";
+import { createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=52";
+import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumId, tidalResources } from "./tidal.mjs?v=15";
+import { createQobuzClient, qobuzCredentials } from "./qobuz.mjs?v=12";
+import { abortable } from "./service-requests.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -10,7 +11,8 @@ const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, 
 export function createCollectionServices({ storage, session, pageUrl, fetch: request = globalThis.fetch }) {
   const gate = createMusicServiceGate(storage);
   let accountRevision = 0, spotifyRefreshing = null;
-  const lock = (name, run) => globalThis.navigator?.locks?.request ? navigator.locks.request(name, run) : run();
+  const lock = (name, run, signal) => globalThis.navigator?.locks?.request
+    ? signal ? navigator.locks.request(name, { signal }, run) : navigator.locks.request(name, run) : run();
   const tidal = createTidalTransport({ storage, fetch: request, active: () => gate.service === "tidal",
     revision: () => accountRevision, lock });
   const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read" });
@@ -46,14 +48,15 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
     if (value.refresh_token) session.setItem("accord-spotify-refresh-token", value.refresh_token);
     return value.access_token;
   }
-  async function spotifyToken(params) {
+  async function spotifyToken(params, signal) {
     const response = await spotify.fetch("https://accounts.spotify.com/api/token", { method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(params),
-      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" }, false);
+      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal }, false);
     if (!response.ok) throw new Error(`Accesso Spotify HTTP ${response.status}: ricollega nelle impostazioni.`);
-    return response.json();
+    return abortable(response.json(), signal);
   }
-  async function spotifyAccess() {
+  async function spotifyAccess(signal) {
+    signal?.throwIfAborted();
     const { clientId } = spotifySettings(), bound = session.getItem("accord-spotify-token-client-id");
     if (bound && bound !== clientId) throw new Error("Client ID Spotify cambiato: ricollega l'account.");
     const access = session.getItem("accord-spotify-access-token");
@@ -62,23 +65,24 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
     if (!clientId || !refresh) throw new Error("Accesso Spotify non attivo in questa scheda: premi Collega Spotify nelle impostazioni.");
     if (!spotifyRefreshing) {
       const revision = accountRevision;
-      spotifyRefreshing = spotifyToken({ grant_type: "refresh_token", refresh_token: refresh, client_id: clientId })
-        .then((value) => storeSpotify(value, clientId, revision)).finally(() => { spotifyRefreshing = null; });
+      spotifyRefreshing = spotifyToken({ grant_type: "refresh_token", refresh_token: refresh, client_id: clientId }, signal)
+        .then((value) => { signal?.throwIfAborted(); return storeSpotify(value, clientId, revision); })
+        .finally(() => { spotifyRefreshing = null; });
     }
-    return spotifyRefreshing;
+    return abortable(spotifyRefreshing, signal);
   }
-  async function spotifyRead(path, token) {
+  async function spotifyRead(path, token, signal) {
     const response = await spotify.fetch(`https://api.spotify.com/v1/${path}`, {
       headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" }, true);
+      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal }, true);
     if (!response.ok) throw new Error(`Spotify HTTP ${response.status}. Verifica l'accesso nelle impostazioni.`);
-    return response.json();
+    return abortable(response.json(), signal);
   }
-  function qobuz() {
+  function qobuz(signal) {
     const value = JSON.parse(session.getItem(QOBUZ_SESSION) || "null");
     if (!value) throw new Error("Collega Qobuz nelle impostazioni.");
     const revision = accountRevision, epoch = gate.epoch;
-    return createQobuzClient({ ...qobuzCredentials(value.appId, value.token), storage, fetch: request, lock,
+    return createQobuzClient({ ...qobuzCredentials(value.appId, value.token), storage, fetch: request, lock, signal,
       active: () => revision === accountRevision && gate.epoch === epoch && gate.service === "qobuz" });
   }
   return {
@@ -173,27 +177,43 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
     },
-    async search(query) {
+    async search(query, { signal: externalSignal } = {}) {
       query = query.trim();
       if (!query || query.length > 100) throw new Error("Inserisci titolo, artista o link album (massimo 100 caratteri).");
+      const timeout = AbortSignal.timeout(45_000);
+      const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
+      signal.throwIfAborted();
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision;
       let records;
       if (provider === "qobuz") {
-        const client = qobuz();
+        const client = qobuz(signal);
         records = /^https:|^qobuz:/i.test(query) ? [(await client.album(query)).album]
           : (await client.search(query)).rows.map((row) => row.album);
       } else if (provider === "tidal") {
-        const token = await tidalAuth.access(tidalClientId());
-        const profile = await tidal.request("users/me", token), countryCode = profile.data?.attributes?.country;
+        const token = await tidalAuth.access(tidalClientId(), { signal });
+        const profile = await tidal.request("users/me", token, { signal }), countryCode = profile.data?.attributes?.country;
         if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
         const include = "albums.artists";
         const path = /^https:|^tidal:|^\d+$/i.test(query)
           ? `albums?${new URLSearchParams({ "filter[id]": tidalAlbumId(query), countryCode, include: "artists" })}`
-          : await tidal.searchPath(query, "albums", token, { countryCode, include });
-        const page = await tidal.pages(path, token, { maxPages: 1, maxItems: 50 });
-        records = tidalAlbumRecords(page.documents);
+          : await tidal.searchPath(query, "albums", token, { countryCode, include, signal });
+        const page = await tidal.pages(path, token, { maxPages: 1, maxItems: 50, signal });
+        const ids = tidalResources(page.documents).filter((item) => item.type === "albums")
+          .map((item) => tidalAlbumId(item.id)).slice(0, 50);
+        const present = new Set(tidalAlbumRecords(page.documents).map((album) => album.id.slice(6)));
+        const missing = ids.filter((id) => !present.has(id));
+        for (let start = 0; start < missing.length; start += 20) {
+          const params = new URLSearchParams({ "filter[id]": missing.slice(start, start + 20).join(","),
+            countryCode, include: "artists" });
+          page.documents.push(await tidal.request(`albums?${params}`, token, { signal }));
+        }
+        const wanted = new Set(ids.map((id) => `tidal:${id}`));
+        records = tidalAlbumRecords(page.documents).filter((album) => wanted.has(album.id));
+        if (records.length !== wanted.size || page.count && !wanted.size) {
+          throw new Error("Metadati degli album TIDAL incompleti. Nessun album aggiunto: riprova la ricerca o il link.");
+        }
       } else {
-        const token = await spotifyAccess();
+        const token = await spotifyAccess(signal);
         let id = null;
         if (/^https:|^spotify:/i.test(query)) {
           const uri = query.match(/^spotify:album:([A-Za-z0-9]{22})$/);
@@ -205,10 +225,11 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
           }
           if (!id) throw new Error("Link album Spotify non valido.");
         }
-        const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: query, type: "album", limit: "30" })}`, token);
+        const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: query, type: "album", limit: "30" })}`, token, signal);
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
         records = spotifyAlbumSearchRecords(id ? [result] : result.albums.items);
       }
+      signal.throwIfAborted();
       gate.assert(provider, epoch);
       if (revision !== accountRevision) throw new Error("Account cambiato: risultati scartati.");
       return records;

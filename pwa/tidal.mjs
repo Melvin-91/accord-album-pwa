@@ -1,6 +1,6 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
 import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=4";
-import { createServiceRequests } from "./service-requests.mjs?v=3";
+import { abortable, createServiceRequests } from "./service-requests.mjs?v=4";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";
 
@@ -114,18 +114,11 @@ export function createTidalTransport({
   async function response(url, options, beforeSend) {
     const currentRevision = revision();
     return requests.send(async () => {
-      const controller = new AbortController();
-      const abort = () => controller.abort();
       options.signal?.throwIfAborted();
-      options.signal?.addEventListener("abort", abort, { once: true });
-      const timeout = setTimeout(abort, 30_000);
-      try {
-        return await request(url, { ...options, signal: controller.signal, redirect: "error", credentials: "omit",
-          referrerPolicy: "no-referrer", cache: "no-store" });
-      } finally {
-        clearTimeout(timeout);
-        options.signal?.removeEventListener("abort", abort);
-      }
+      const timeout = AbortSignal.timeout(30_000);
+      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+      return abortable(request(url, { ...options, signal, redirect: "error", credentials: "omit",
+        referrerPolicy: "no-referrer", cache: "no-store" }), signal);
     }, { read: options.method === "GET", signal: options.signal, beforeSend,
       check: () => {
         if (!active() || revision() !== currentRevision) throw new Error("Servizio cambiato: risposta TIDAL scartata.");
@@ -135,7 +128,7 @@ export function createTidalTransport({
     const url = tidalApiUrl(path, method).href;
     guard();
     const key = `${token}|${url}`;
-    if (method === "GET" && pending.has(key)) return pending.get(key);
+    if (method === "GET" && pending.has(key)) return abortable(pending.get(key), signal);
     const task = async () => {
       const entry = cache.get(key);
       if (method === "GET" && entry && entry.until > now()) return structuredClone(entry.data);
@@ -187,7 +180,8 @@ export function createTidalTransport({
       }
       if (result.status === 204) return {};
       if (result.status === 304 && !entry) throw new Error("TIDAL: risposta 304 senza cache.");
-      const data = result.status === 304 ? entry.data : await result.json();
+      const data = result.status === 304 ? entry.data : await abortable(result.json(), signal);
+      signal?.throwIfAborted();
       if (method === "GET") {
         const policy = result.headers.get("Cache-Control") || entry?.policy || "";
         const maxAge = /(?:^|,)\s*max-age="?(\d+)"?/i.exec(policy);
@@ -242,7 +236,7 @@ export function createTidalTransport({
         + "Scegli l'edizione nel catalogo: corrispondenza assente o ambigua.");
       return { album: candidates[0], original, country: countryCode };
     },
-    async searchPath(query, kind, token, { countryCode, include } = {}) {
+    async searchPath(query, kind, token, { countryCode, include, signal } = {}) {
       if (typeof query !== "string" || !query.trim() || query.length > 256
           || !["albums", "artists", "tracks", "playlists"].includes(kind)) {
         throw new Error("Ricerca TIDAL non valida.");
@@ -250,7 +244,7 @@ export function createTidalTransport({
       const params = new URLSearchParams({ "filter[query]": query.trim() });
       if (countryCode) params.set("countryCode", countryCode);
       if (include) params.set("include", include);
-      const document = await requestJson(`searchResults?${params}`, token);
+      const document = await requestJson(`searchResults?${params}`, token, { signal });
       if (!Array.isArray(document.data) || document.data.length !== 1
           || document.data[0]?.type !== "searchResults"
           || typeof document.data[0].id !== "string" || !document.data[0].id) {
@@ -259,16 +253,16 @@ export function createTidalTransport({
       params.delete("filter[query]");
       return `searchResults/${encodeURIComponent(document.data[0].id)}/relationships/${kind}?${params}`;
     },
-    async token(parameters) {
+    async token(parameters, { signal } = {}) {
       const result = await response("https://auth.tidal.com/v1/oauth2/token", {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(parameters),
+        body: new URLSearchParams(parameters), signal,
       });
       if (!result.ok) throw new Error(`Autorizzazione TIDAL HTTP ${result.status}.`);
-      return result.json();
+      return abortable(result.json(), signal);
     },
     clear() { cache.clear(); },
-    async pages(path, token, { maxPages = 5, maxItems = 250, onPage } = {}) {
+    async pages(path, token, { maxPages = 5, maxItems = 250, onPage, signal } = {}) {
       const documents = [], seen = new Set();
       let next = tidalApiUrl(path).href, complete = true, count = 0, pageCount = 0;
       const pathname = new URL(next).pathname;
@@ -276,7 +270,8 @@ export function createTidalTransport({
         const url = tidalApiUrl(next);
         if (url.pathname !== pathname || seen.has(url.href)) throw new Error("Paginazione TIDAL non sicura o ciclica.");
         seen.add(url.href);
-        const document = await requestJson(url.href, token);
+        signal?.throwIfAborted();
+        const document = await requestJson(url.href, token, { signal });
         const size = Array.isArray(document.data) ? document.data.length : document.data ? 1 : 0;
         pageCount += 1;
         if (onPage) await onPage(document);
@@ -418,7 +413,8 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
         redirect_uri: saved.redirect, code_verifier: saved.verifier, code }), saved.clientId, expectedRevision);
       return true;
     },
-    async access(clientId) {
+    async access(clientId, { signal } = {}) {
+      signal?.throwIfAborted();
       clientId = String(clientId).trim();
       const saved = savedSession();
       if (!saved) throw new Error("Accesso TIDAL non attivo in questa scheda: premi Collega TIDAL nelle impostazioni.");
@@ -428,10 +424,13 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
       if (!refreshing) {
         const expectedRevision = revision;
         refreshing = transport.token({ grant_type: "refresh_token", client_id: clientId,
-          refresh_token: saved.refresh_token }).then((value) => store({ ...saved, ...value }, clientId, expectedRevision))
+          refresh_token: saved.refresh_token }, { signal }).then((value) => {
+            signal?.throwIfAborted();
+            return store({ ...saved, ...value }, clientId, expectedRevision);
+          })
           .finally(() => { refreshing = null; });
       }
-      return refreshing;
+      return abortable(refreshing, signal);
     },
     disconnect() { revision += 1; session.removeItem(TOKEN); session.removeItem(PENDING); transport.clear(); },
   };

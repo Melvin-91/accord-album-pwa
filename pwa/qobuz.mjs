@@ -1,4 +1,4 @@
-import { createServiceRequests } from "./service-requests.mjs?v=3";
+import { abortable, createServiceRequests } from "./service-requests.mjs?v=4";
 export const QOBUZ_API = "https://www.qobuz.com/api.json/0.2/";
 export const QOBUZ_PAGE_SIZE = 100;
 
@@ -109,23 +109,16 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
     let response;
     try {
       response = await requests.send(async () => {
-        const controller = new AbortController();
-        const abort = () => controller.abort();
         signal?.throwIfAborted();
-        signal?.addEventListener("abort", abort, { once: true });
-        const timeout = setTimeout(abort, 30_000);
-        try {
-          return await request(url.href, {
+        const timeout = AbortSignal.timeout(30_000);
+        const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+        return abortable(request(url.href, {
             method: write ? "POST" : "GET",
             headers: { "X-App-Id": auth.appId, "X-User-Auth-Token": auth.token, Accept: "application/json" },
             ...(write ? { body: new URLSearchParams(data) } : {}),
-            signal: controller.signal, credentials: "omit", redirect: "error", cache: "no-store",
+            signal: requestSignal, credentials: "omit", redirect: "error", cache: "no-store",
             referrerPolicy: "no-referrer",
-          });
-        } finally {
-          clearTimeout(timeout);
-          signal?.removeEventListener("abort", abort);
-        }
+          }), requestSignal);
       }, { read: !write, signal, check, beforeSend: !write ? beforeRead : undefined });
     } catch (error) {
       check();
@@ -138,8 +131,11 @@ export function createQobuzClient({ appId, token, fetch: request = (...args) => 
       + (response.status === 429 ? " Pausa Retry-After condivisa attiva." : "")
       + (write ? " Verifica lo stato remoto prima di riprovare." : ""));
     let result;
-    try { result = await response.json(); }
-    catch { throw new Error("Risposta Qobuz non leggibile." + (write ? " Verifica lo stato remoto." : "")); }
+    try { result = await abortable(response.json(), signal); }
+    catch {
+      signal?.throwIfAborted();
+      throw new Error("Risposta Qobuz non leggibile." + (write ? " Verifica lo stato remoto." : ""));
+    }
     if (!write) check();
     const verifiedWrite = ["favorite/create", "favorite/delete", "playlist/delete"].includes(path)
       ? result?.status === "success"

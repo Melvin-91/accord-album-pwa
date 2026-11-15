@@ -2,6 +2,15 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.1 - Correzione della ricerca album
+
+Gli errori della ricerca sono visibili nella finestra di aggiunta, invece
+di lasciare "Ricerca in corso" con il messaggio nascosto dietro il dialogo.
+La ricerca si puo' annullare e termina entro 45 secondi anche in attesa di
+un'altra scheda, di un refresh o del corpo della risposta.
+I risultati TIDAL contenenti soltanto identificativi vengono completati
+con i metadati dello stesso catalogo prima di consentire l'aggiunta.
+
 ### PWA 1.29.0 - Raccolta essenziale
 
 La PWA contiene soltanto raccolta album, ricerca e filtri semplici, stato,

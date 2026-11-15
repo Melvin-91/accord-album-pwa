@@ -757,7 +757,7 @@ test("Qobuz audio uses a local bundle and stops when the service changes", async
   const overrides = {
     document: { createElement: (tag) => new Node(tag), getElementById: () => root, querySelector: () => root },
     localStorage: local, sessionStorage: session, confirm: () => true,
-    navigator: { locks: { request: async (_name, run) => run() } },
+    navigator: { locks: { request: async (_name, options, run) => (run ?? options)() } },
     fetch: async (url, options) => {
       calls.push({ url, options });
       if (new URL(url).pathname.endsWith("/track/getFileUrl")) {
@@ -834,7 +834,7 @@ test("Qobuz plays selected occurrences in order and advances locally", async () 
   const overrides = {
     document: { createElement: (tag) => new Node(tag), getElementById: () => root, querySelector: () => root },
     localStorage: local, sessionStorage: session, confirm: () => true,
-    navigator: { locks: { request: async (_name, run) => run() } },
+    navigator: { locks: { request: async (_name, options, run) => (run ?? options)() } },
     fetch: async (url) => {
       if (new URL(url).pathname.endsWith("/track/getFileUrl")) {
         trackIds.push(new URL(url).searchParams.get("track_id"));
@@ -895,7 +895,7 @@ test("Qobuz shuffle and repeat affect the local queue without changing the curre
   const overrides = {
     document: { createElement: (tag) => new Node(tag), getElementById: () => root, querySelector: () => root },
     localStorage: local, sessionStorage: session, confirm: () => true,
-    navigator: { locks: { request: async (_name, run) => run() } },
+    navigator: { locks: { request: async (_name, options, run) => (run ?? options)() } },
     fetch: async (url) => {
       if (new URL(url).pathname.endsWith("/track/getFileUrl")) {
         trackIds.push(new URL(url).searchParams.get("track_id"));

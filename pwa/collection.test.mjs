@@ -186,6 +186,120 @@ test("configured Client ID alone is never described as a connected TIDAL account
   assert.equal(services.settings("tidal").connected, false);
   assert.match(services.settings("tidal").text, /Client ID salvato/);
 });
+const tidalSearchFixture = (respond) => {
+  const disk = storage({ "accord-music-service-v1": "tidal" });
+  const session = storage({ "accord-tidal-token-v1": JSON.stringify({
+    clientId: "search-test-client", access_token: "search-test-token", expires: Date.now() + 3600000 }) });
+  const calls = [];
+  const document = { data: [{ type: "albums", id: "12",
+    attributes: { title: "Search Album", releaseDate: "2020-01-01" },
+    relationships: { artists: { data: [{ type: "artists", id: "1" }] } } }],
+    included: [{ type: "artists", id: "1", attributes: { name: "Test Artist" } }] };
+  const services = createCollectionServices({ storage: disk, session, pageUrl: "https://example.test/pwa/",
+    fetch: async (url, options) => {
+      calls.push({ url: new URL(url), options });
+      assert.equal(options.credentials, "omit");
+      assert.equal(options.redirect, "error");
+      assert.equal(options.headers.Authorization, "Bearer search-test-token");
+      if (respond) {
+        const response = respond(calls.at(-1), document);
+        if (response) return response;
+      }
+      const path = new URL(url).pathname;
+      if (path.endsWith("/users/me")) return reply({ data: { attributes: { country: "IT" } } });
+      if (path.endsWith("/searchResults")) return reply({ data: [{ type: "searchResults", id: "opaque-result" }] });
+      return reply(document);
+    } });
+  return { services, disk, session, calls, document };
+};
+test("TIDAL collection search resolves the official search identifier and returns addable albums", async () => {
+  const f = tidalSearchFixture();
+  const records = await f.services.search("Search Album");
+  assert.equal(validateAlbum(records[0]).id, "tidal:12");
+  assert.deepEqual(f.calls.map(({ url }) => url.pathname),
+    ["/v2/users/me", "/v2/searchResults", "/v2/searchResults/opaque-result/relationships/albums"]);
+  assert.equal(f.calls[2].url.searchParams.get("countryCode"), "IT");
+});
+test("TIDAL search hydrates identifier-only results instead of silently dropping albums", async () => {
+  const f = tidalSearchFixture(({ url }) => url.pathname.endsWith("/relationships/albums")
+    ? reply({ data: [{ type: "albums", id: "12" }] }) : null);
+  const records = await f.services.search("Search Album");
+  assert.equal(records[0].artist, "Test Artist");
+  assert.equal(f.calls.at(-1).url.pathname, "/v2/albums");
+  assert.equal(f.calls.at(-1).url.searchParams.get("filter[id]"), "12");
+  assert.equal(f.calls.at(-1).url.searchParams.get("include"), "artists");
+});
+test("TIDAL search authentication failures stop without extra calls or collection changes", async () => {
+  const f = tidalSearchFixture(() => reply({}, 401));
+  await assert.rejects(f.services.search("Search Album"), /TIDAL HTTP 401/);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.disk.getItem(COLLECTION_KEY), null);
+});
+test("cancelling a TIDAL refresh does not save a late token or start a catalog request", async () => {
+  const disk = storage({ "accord-music-service-v1": "tidal" });
+  const saved = JSON.stringify({ clientId: "search-test-client", access_token: "expired-test-token",
+    refresh_token: "test-refresh-token", expires: 1 });
+  const session = storage({ "accord-tidal-token-v1": saved }), controller = new AbortController();
+  let release, calls = 0;
+  const services = createCollectionServices({ storage: disk, session, pageUrl: "https://example.test/pwa/",
+    fetch: async (url, options) => {
+      calls++;
+      assert.equal(url, "https://auth.tidal.com/v1/oauth2/token");
+      assert.equal(options.method, "POST");
+      return new Promise((resolve) => { release = resolve; });
+    } });
+  const pending = services.search("Search Album", { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  release(reply({ access_token: "late-test-token", expires_in: 3600 }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 1);
+  assert.equal(session.getItem("accord-tidal-token-v1"), saved);
+});
+test("TIDAL search cancellation releases a queued browser lock and a subsequent search succeeds", async (t) => {
+  const saved = Object.getOwnPropertyDescriptor(navigator, "locks");
+  let blocked = true;
+  Object.defineProperty(navigator, "locks", { configurable: true, value: {
+    request: (_name, options, run) => blocked ? new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+    }) : run(),
+  } });
+  t.after(() => saved ? Object.defineProperty(navigator, "locks", saved) : delete navigator.locks);
+  const f = tidalSearchFixture(), controller = new AbortController();
+  const pending = f.services.search("Search Album", { signal: controller.signal });
+  await new Promise((resolve) => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(pending, { name: "AbortError" });
+  assert.equal(f.calls.length, 0);
+  blocked = false;
+  assert.equal((await f.services.search("Search Album"))[0].id, "tidal:12");
+});
+test("the 45-second search deadline covers both a stalled fetch and a stalled JSON body", async (t) => {
+  const originalTimeout = AbortSignal.timeout;
+  for (const stage of ["fetch", "body"]) {
+    const deadline = new AbortController(), durations = [];
+    const mock = t.mock.method(AbortSignal, "timeout", (duration) => {
+      if (duration !== 45_000) return originalTimeout(duration);
+      durations.push(duration); return deadline.signal;
+    });
+    let release;
+    const f = tidalSearchFixture((_call, document) => stage === "fetch"
+      ? new Promise((resolve) => { release = () => resolve(reply(document)); })
+      : { ok: true, status: 200, headers: new Headers(), json: () => new Promise((resolve) => { release = () => resolve(document); }) });
+    const before = f.session.getItem("accord-tidal-token-v1");
+    const pending = f.services.search("Search Album");
+    await new Promise((resolve) => setImmediate(resolve));
+    deadline.abort(new DOMException("Search deadline", "TimeoutError"));
+    await assert.rejects(pending, { name: "TimeoutError" });
+    release();
+    assert.deepEqual(durations, [45_000]);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.session.getItem("accord-tidal-token-v1"), before);
+    assert.equal(f.disk.getItem(COLLECTION_KEY), null);
+    mock.mock.restore();
+  }
+});
 test("TIDAL version distinguishes live recordings even when Live is part of the studio title", () => {
   const records = tidalAlbumRecords([{ data: { type: "albums", id: "12",
     attributes: { title: "Live It Up", version: "Live", releaseDate: "1993-01-01" },
@@ -275,12 +389,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=1/);
+  assert.match(html, /collection-app\.mjs\?v=2/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.1/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];

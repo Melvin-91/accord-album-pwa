@@ -1,3 +1,5 @@
+import { abortable } from "./service-requests.mjs?v=4";
+
 export const ALBUM_STATES = new Set(["queued", "listening", "liked", "neutral", "disliked"]);
 const LEGACY_ALBUM_STATES = { heard: "liked", hidden: "disliked" };
 const ALBUM_FIELDS_V1 = ["id", "name", "artist", "url", "year", "status", "rating", "genres"];
@@ -416,14 +418,15 @@ export function createSpotifyTransport({
     const until = Number(storage.getItem(cooldownKey));
     return Number.isFinite(until) && until > 0 ? until : 0;
   };
-  const waitForCooldown = async (retryRead) => {
+  const waitForCooldown = async (retryRead, signal) => {
     while (true) {
+      signal?.throwIfAborted();
       const remaining = cooldown() - now();
       if (remaining <= 0) return;
       if (!retryRead || remaining > maxWait) {
         throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(remaining / 1000)} secondi.`);
       }
-      await wait(remaining);
+      await abortable(wait(remaining), signal);
     }
   };
   const retryAfter = (response) => {
@@ -436,9 +439,9 @@ export function createSpotifyTransport({
     return Number.isFinite(date) ? Math.max(1000, date - now()) : 5000;
   };
   const transientDelay = (retry) => 500 * (2 ** retry) + Math.floor(random() * 250);
-  const waitForSlot = async (retryRead) => {
+  const waitForSlot = async (retryRead, signal) => {
     while (true) {
-      await waitForCooldown(retryRead);
+      await waitForCooldown(retryRead, signal);
       const saved = storage.getItem(requestAtKey);
       if (saved !== null && (!saved.trim() || !Number.isFinite(Number(saved)) || Number(saved) < 0)) {
         throw new Error("Configurazione intervallo Spotify non valida: rimuovi la chiave accord-spotify-request-at-v1 dai dati del sito e riprova.");
@@ -446,24 +449,27 @@ export function createSpotifyTransport({
       const previous = saved === null ? NaN : Number(saved);
       const remaining = Number.isFinite(previous) ? previous + requestInterval - now() : 0;
       if (remaining <= 0) return;
-      await wait(remaining);
+      await abortable(wait(remaining), signal);
     }
   };
   return {
     async fetch(url, options, retryRead = false, budget = null) {
+      const signal = options.signal;
       const queued = queue.then(() => lock("accord-spotify-api", async () => {
         let rateRetries = 0;
         let transientRetries = 0;
         while (true) {
-          await waitForSlot(retryRead);
+          signal?.throwIfAborted();
+          await waitForSlot(retryRead, signal);
           budget?.attempt();
           storage.setItem(requestAtKey, String(now()));
           let response;
           try {
-            response = await request(url, options);
+            response = await abortable(request(url, options), signal);
           } catch (error) {
+            signal?.throwIfAborted();
             if (!retryRead || transientRetries >= maxRetries) throw error;
-            await wait(transientDelay(transientRetries++));
+            await abortable(wait(transientDelay(transientRetries++)), signal);
             continue;
           }
           if (response.status === 429) {
@@ -471,15 +477,16 @@ export function createSpotifyTransport({
             storage.setItem(cooldownKey, String(Math.max(cooldown(), now() + delay)));
             let quotaExceeded = false;
             try {
-              const error = (await response.clone().json()).error || {};
+              const error = (await abortable(response.clone().json(), signal)).error || {};
               quotaExceeded = String(error.reason || "").toLocaleLowerCase() === "quota_exceeded"
                 || String(error.message || "").toLocaleLowerCase().includes("quota exceeded");
             } catch {
+              signal?.throwIfAborted();
               // Some Accounts responses have no JSON error body.
             }
             if (retryRead && rateRetries < maxRetries && delay <= maxWait && !quotaExceeded) {
               rateRetries += 1;
-              await wait(delay);
+              await abortable(wait(delay), signal);
               continue;
             }
             if (quotaExceeded) {
@@ -488,14 +495,14 @@ export function createSpotifyTransport({
             throw new Error(`Limite richieste Spotify raggiunto; riprova tra ${Math.ceil(delay / 1000)} secondi.`);
           }
           if (retryRead && [500, 502, 503, 504].includes(response.status) && transientRetries < maxRetries) {
-            await wait(transientDelay(transientRetries++));
+            await abortable(wait(transientDelay(transientRetries++)), signal);
             continue;
           }
           return response;
         }
-      }));
+      }, signal));
       queue = queued.then(() => undefined, () => undefined);
-      return queued;
+      return abortable(queued, signal);
     },
   };
 }
