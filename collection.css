@@ -36,7 +36,13 @@ a { color: var(--accent); text-underline-offset: 3px; }
 #feedback.error { color: #ffa6a6; }
 #filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; }
 #filters .search { flex: 1; min-width: 200px; }
-#filters .check { padding: 12px 0; }
+#filters .filter-disclosure { position: relative; flex: none; }
+#filters .filter-disclosure > summary { cursor: pointer; list-style: none; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: .9rem; }
+#filters .filter-disclosure > summary::-webkit-details-marker { display: none; }
+#filters .filter-disclosure > summary::after { content: "+"; margin-left: 12px; color: var(--accent); }
+#filters .filter-disclosure[open] > summary::after { content: "−"; }
+#filters .filter-controls { position: absolute; z-index: 3; top: calc(100% + 6px); right: 0; display: grid; gap: 12px; width: min(320px, calc(100vw - 32px)); padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #141414; box-shadow: 0 12px 32px #000b; }
+#filters .filter-controls .check { padding: 4px 0; }
 .summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
 #albumList { display: grid; gap: 10px; }
 .album-card { display: grid; grid-template-columns: 88px minmax(0, 1fr) 220px 190px; grid-template-areas: "cover title controls actions" "cover artist controls actions" "cover metadata controls actions"; align-items: center; column-gap: 18px; min-width: 0; background: #141414; border: 1px solid #262626; border-radius: 12px; padding: 16px 18px; content-visibility: auto; contain-intrinsic-size: auto 125px; }

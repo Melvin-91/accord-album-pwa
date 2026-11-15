@@ -2,6 +2,11 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.6 · Filtri raccolti
+
+Ricerca e filtri della raccolta restano separati: stato e preferiti sono
+raccolti nel menu “Filtri”, senza perdere la possibilità di combinarli.
+
 ### PWA 1.29.5 · Raccolta più semplice e copertine
 
 Le azioni quotidiane restano in primo piano; le altre sono raccolte nelle
