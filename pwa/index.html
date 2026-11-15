@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#090909">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.29.3 · La mia raccolta</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Accord v1.29.4 · La mia raccolta</title>
   <link rel="icon" href="../assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./collection.css?v=3">
@@ -15,7 +15,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="../assets/accord-192.png" width="36" height="36" alt="">
-      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.3</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
+      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.4</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
     </div>
     <nav class="header-actions" aria-label="Raccolta">
       <button id="sync" type="button" class="secondary">Sincronizza</button>
@@ -98,6 +98,6 @@
   </dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=4"></script>
+  <script type="module" src="./collection-app.mjs?v=5"></script>
 </body>
 </html>

@@ -160,17 +160,36 @@ export function createCollectionCoverCache(indexedDB) {
       const db = await database();
       return new Promise((resolve, reject) => {
         const request = db.transaction("covers").objectStore("covers").get(id);
-        request.onsuccess = () => resolve(request.result ? new Uint8Array(request.result.data) : null);
+        request.onsuccess = () => resolve(request.result?.data ? new Uint8Array(request.result.data) : null);
         request.onerror = () => reject(new Error("Copertina locale non leggibile."));
       });
     },
     async put(id, data) {
       const db = await database();
       return new Promise((resolve, reject) => {
-        const transaction = db.transaction("covers", "readwrite");
-        transaction.objectStore("covers").put({ id, data: data.slice().buffer });
+        const transaction = db.transaction("covers", "readwrite"), objectStore = transaction.objectStore("covers");
+        const request = objectStore.get(id);
+        request.onsuccess = () => objectStore.put({ ...(request.result || { id }), data: data.slice().buffer });
         transaction.oncomplete = () => resolve();
         transaction.onabort = transaction.onerror = () => reject(new Error("Copertina non salvata offline."));
+      });
+    },
+    async getUrl(id) {
+      const db = await database();
+      return new Promise((resolve, reject) => {
+        const request = db.transaction("covers").objectStore("covers").get(id);
+        request.onsuccess = () => resolve(typeof request.result?.url === "string" ? request.result.url : null);
+        request.onerror = () => reject(new Error("Indirizzo copertina non leggibile."));
+      });
+    },
+    async putUrl(id, url) {
+      const db = await database();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction("covers", "readwrite"), objectStore = transaction.objectStore("covers");
+        const request = objectStore.get(id);
+        request.onsuccess = () => objectStore.put({ ...(request.result || { id }), url });
+        transaction.oncomplete = () => resolve();
+        transaction.onabort = transaction.onerror = () => reject(new Error("Indirizzo copertina non salvato."));
       });
     },
   };

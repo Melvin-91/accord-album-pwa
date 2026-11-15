@@ -1,5 +1,5 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=52";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=3";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=4";
 import { createCollectionSync } from "./collection-sync.mjs?v=3";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 
@@ -14,6 +14,17 @@ const node = (tag, text = "", attributes = {}) => {
 };
 let store, sync, servicesPromise, catalogAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
 const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = new Map();
+let resultCoverUrls = new Map();
+function trustedCoverUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value), host = url.hostname.toLowerCase();
+    return url.protocol === "https:" && !url.username && !url.password
+      && (host === "resources.tidal.com" || host === "static.qobuz.com"
+        || host === "scdn.co" || host.endsWith(".scdn.co")
+        || host === "spotifycdn.com" || host.endsWith(".spotifycdn.com"));
+  } catch { return false; }
+}
 function report(message, error = false) {
   $("feedback").textContent = message;
   $("feedback").classList.toggle("error", error);
@@ -25,7 +36,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=3")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=4")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -90,7 +101,15 @@ async function confirmRemoval(ids, expected = store.state) {
     report("Copie rimosse localmente. Premi Sincronizza per aggiornare la raccolta condivisa.");
   }
 }
+async function cacheCatalogCover(albumId, sourceId = albumId) {
+  const coverUrl = resultCoverUrls.get(sourceId);
+  if (!coverUrl) return "";
+  try { await covers.putUrl(albumId, coverUrl); }
+  catch (error) { return error.message; }
+  return "";
+}
 async function compareCandidate(candidate, found) {
+  const coverError = found.confidence !== "uncertain" ? await cacheCatalogCover(found.album.id, candidate.id) : "";
   const expected = store.state, row = node("div", "", { class: "comparison-grid" });
   row.append(comparison(found.album, (expected.preferences.favoriteIds || []).includes(found.album.id)), comparison(candidate));
   const actions = [["cancel", "Mantieni la copia in raccolta"]];
@@ -109,12 +128,18 @@ async function compareCandidate(candidate, found) {
     [["cancel", "Annulla"], ["replace", "Sostituisci"]]);
     if (confirmed === "replace") {
       store.add(candidate, { replaceId: found.album.id });
-      report("Copia sostituita localmente. Sincronizza per aggiornare la raccolta condivisa.");
+      const saveError = await cacheCatalogCover(candidate.id);
+      report(saveError ? `Copia sostituita, ma copertina non memorizzata: ${saveError}`
+        : "Copia sostituita localmente. Sincronizza per aggiornare la raccolta condivisa.", Boolean(saveError));
     }
   } else if (answer === "distinct") {
     const duplicate = store.add(candidate, { distinct: true });
     if (duplicate) throw new Error("Lo stesso identificativo non puo' essere aggiunto due volte.");
-    report("Album distinto aggiunto dopo il confronto.");
+    const saveError = await cacheCatalogCover(candidate.id);
+    report(saveError ? `Album distinto aggiunto, ma copertina non memorizzata: ${saveError}`
+      : "Album distinto aggiunto dopo il confronto.", Boolean(saveError));
+  } else if (coverError) {
+    report(`Album gia' presente; copertina non memorizzata: ${coverError}`, true);
   }
   renderResults();
 }
@@ -154,11 +179,24 @@ const coverObserver = new IntersectionObserver((entries) => {
     if (!entry.isIntersecting) continue;
     coverObserver.unobserve(entry.target);
     const { id, hash } = entry.target.dataset;
-    covers.get(id).then((data) => {
-      if (!data || !entry.target.isConnected || entry.target.dataset.hash !== hash) return;
-      const url = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
-      if (urls.has(id)) URL.revokeObjectURL(urls.get(id));
-      urls.set(id, url); entry.target.src = url; entry.target.hidden = false;
+    covers.get(id).then(async (data) => {
+      if (!entry.target.isConnected || entry.target.dataset.hash !== hash) return;
+      let source;
+      if (data) source = URL.createObjectURL(new Blob([data], { type: "image/jpeg" }));
+      else source = await covers.getUrl(id);
+      if (source && !source.startsWith("blob:") && !trustedCoverUrl(source)) return;
+      if (!source || !entry.target.isConnected || entry.target.dataset.hash !== hash) {
+        if (source?.startsWith("blob:")) URL.revokeObjectURL(source);
+        return;
+      }
+      if (source.startsWith("blob:")) {
+        if (urls.has(id)) URL.revokeObjectURL(urls.get(id));
+        urls.set(id, source);
+      }
+      const image = entry.target, placeholder = image.parentElement.querySelector("span");
+      image.onload = () => { placeholder.hidden = true; };
+      image.onerror = () => { image.hidden = true; };
+      image.src = source; image.hidden = false;
     }).catch((error) => report(error.message, true));
   }
 }, { rootMargin: "200px" });
@@ -166,11 +204,9 @@ function albumCard(album, favorite) {
   const card = node("article", "", { class: "album-card", "data-id": album.id });
   const artwork = node("div", "", { class: "artwork" });
   artwork.append(node("span", album.name.slice(0, 1).toUpperCase(), { "aria-hidden": "true" }));
-  if (album.cover_sha256) {
-    const image = node("img", "", { alt: "", loading: "lazy", width: "240", height: "240",
-      "data-id": album.id, "data-hash": album.cover_sha256, hidden: "" });
-    artwork.append(image); queueMicrotask(() => coverObserver.observe(image));
-  }
+  const image = node("img", "", { alt: `Copertina di ${album.name}`, loading: "lazy", width: "240", height: "240",
+    referrerpolicy: "no-referrer", "data-id": album.id, "data-hash": album.cover_sha256 || "", hidden: "" });
+  artwork.append(image); queueMicrotask(() => coverObserver.observe(image));
   const favoriteButton = node("button", favorite ? "Preferito" : "Preferito +", { type: "button",
     class: "favorite", "aria-pressed": String(favorite), "aria-label": `Preferito: ${album.name}` });
   favoriteButton.dataset.control = "favorite";
@@ -247,15 +283,22 @@ function renderResults() {
       if (current) { await compareCandidate(album, current); return; }
       const remote = await sync.checkAddition(album);
       if (remote) {
+        const saveError = await cacheCatalogCover(remote.album.id, album.id);
         const answer = await choice("Album gia' nella raccolta condivisa", [
-          comparison(remote.album), node("p", "Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente.")],
+          comparison(remote.album), node("p", saveError
+            ? `Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente. La copertina non e' stata memorizzata: ${saveError}`
+            : "Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente.")],
         [["cancel", "Chiudi"], ["sync", "Sincronizza"]]);
         if (answer === "sync") await performSync();
         return;
       }
       const found = store.add(album);
       if (found) await compareCandidate(album, found);
-      else report("Album aggiunto localmente. Sincronizza per inviarlo alla raccolta condivisa.");
+      else {
+        const saveError = await cacheCatalogCover(album.id);
+        report(saveError ? `Album aggiunto, ma copertina non memorizzata: ${saveError}`
+          : "Album aggiunto localmente. Sincronizza per inviarlo alla raccolta condivisa.", Boolean(saveError));
+      }
       renderResults();
     }));
     row.append(button); $("catalogResults").append(row);
@@ -354,7 +397,9 @@ $("catalogForm").addEventListener("submit", (event) => {
     try {
       const albums = await client.search($("catalogQuery").value, { signal: controller.signal });
       if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
-      resultAlbums = albums.map(validateAlbum); renderResults();
+      resultAlbums = albums.map(validateAlbum);
+      resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
+      renderResults();
       report(`${resultAlbums.length} risultati. Il controllo duplicati viene ripetuto anche al momento dell'aggiunta.`);
     } catch (error) {
       if (error.name === "AbortError" && controller.signal.aborted) report("Ricerca annullata. Puoi riprovare.");

@@ -1,6 +1,7 @@
 import { createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=52";
-import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
-import { createQobuzClient, qobuzCredentials } from "./qobuz.mjs?v=12";
+import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
+  tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
+import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
@@ -9,6 +10,23 @@ const SPOTIFY_KEYS = ["access-token", "refresh-token", "token-expires", "token-c
 const AUTH_REVISION = "accord-music-auth-revision-v1";
 const SAVED_ACCESS = new Set(["accord-tidal-token-v1", QOBUZ_SESSION,
   ...SPOTIFY_KEYS.map((key) => `accord-spotify-${key}`)]);
+function spotifyCoverUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value), host = url.hostname.toLowerCase();
+    return url.protocol === "https:" && (host === "scdn.co" || host.endsWith(".scdn.co")
+      || host === "spotifycdn.com" || host.endsWith(".spotifycdn.com"))
+      && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
+function tidalCoverUrl(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "resources.tidal.com"
+      && !url.username && !url.password ? url.href : null;
+  } catch { return null; }
+}
 const random = (length) => base64url(crypto.getRandomValues(new Uint8Array(length)));
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 export function createCollectionServices({ storage, session: tabSession, pageUrl, fetch: request = globalThis.fetch }) {
@@ -39,6 +57,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
   const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read",
     revision: accountRevision });
   const spotify = createSpotifyTransport({ storage, fetch: request, lock });
+  const coverUrls = new Map();
   function tidalClientId() {
     let id = (storage.getItem(TIDAL_CLIENT) || "").trim();
     if (!id) {
@@ -207,15 +226,20 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       signal.throwIfAborted();
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       let records;
+      coverUrls.clear();
       if (provider === "qobuz") {
         const client = qobuz(signal);
-        records = /^https:|^qobuz:/i.test(query) ? [(await client.album(query)).album]
-          : (await client.search(query)).rows.map((row) => row.album);
+        const rows = /^https:|^qobuz:/i.test(query) ? [await client.album(query)]
+          : (await client.search(query)).rows;
+        records = rows.map((row) => {
+          if (row.coverUrl) coverUrls.set(row.album.id, qobuzCoverUrl(row.coverUrl));
+          return row.album;
+        });
       } else if (provider === "tidal") {
         const token = await tidalAuth.access(tidalClientId(), { signal });
         const profile = await tidal.request("users/me", token, { signal }), countryCode = profile.data?.attributes?.country;
         if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
-        const include = "albums.artists";
+        const include = "albums.artists,albums.coverArt";
         const path = /^https:|^tidal:|^\d+$/i.test(query)
           ? `albums?${new URLSearchParams({ "filter[id]": tidalAlbumId(query), countryCode, include: "artists" })}`
           : await tidal.searchPath(query, "albums", token, { countryCode, include, signal });
@@ -226,11 +250,12 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         const missing = ids.filter((id) => !present.has(id));
         for (let start = 0; start < missing.length; start += 20) {
           const params = new URLSearchParams({ "filter[id]": missing.slice(start, start + 20).join(","),
-            countryCode, include: "artists" });
+            countryCode, include: "artists,coverArt" });
           page.documents.push(await tidal.request(`albums?${params}`, token, { signal }));
         }
         const wanted = new Set(ids.map((id) => `tidal:${id}`));
         records = tidalAlbumRecords(page.documents).filter((album) => wanted.has(album.id));
+        for (const [id, url] of tidalAlbumArtwork(page.documents)) coverUrls.set(id, url);
         if (records.length !== wanted.size || page.count && !wanted.size) {
           throw new Error("Metadati degli album TIDAL incompleti. Nessun album aggiunto: riprova la ricerca o il link.");
         }
@@ -249,12 +274,25 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         }
         const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: query, type: "album", limit: "30" })}`, token, signal);
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
-        records = spotifyAlbumSearchRecords(id ? [result] : result.albums.items);
+        const entries = id ? [result] : result.albums.items;
+        for (const entry of entries) {
+          const image = (Array.isArray(entry.images) ? entry.images : [])
+            .filter((item) => spotifyCoverUrl(item?.url))
+            .sort((a, b) => Math.abs((a.width || 300) - 300) - Math.abs((b.width || 300) - 300))[0];
+          if (image) coverUrls.set(entry.id, spotifyCoverUrl(image.url));
+        }
+        records = spotifyAlbumSearchRecords(entries.map((album) => ({ item: { type: "track", album } })));
       }
       signal.throwIfAborted();
       gate.assert(provider, epoch);
       if (revision !== accountRevision()) throw new Error("Account cambiato: risultati scartati.");
       return records;
+    },
+    coverUrl(album) {
+      const url = coverUrls.get(album?.id);
+      if (!url) return null;
+      return album.id.startsWith("tidal:") ? tidalCoverUrl(url)
+        : album.id.startsWith("qobuz:") ? qobuzCoverUrl(url) : spotifyCoverUrl(url);
     },
   };
 }

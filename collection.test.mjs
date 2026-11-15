@@ -416,8 +416,12 @@ const tidalSearchFixture = (respond) => {
   const calls = [];
   const document = { data: [{ type: "albums", id: "12",
     attributes: { title: "Search Album", releaseDate: "2020-01-01" },
-    relationships: { artists: { data: [{ type: "artists", id: "1" }] } } }],
-    included: [{ type: "artists", id: "1", attributes: { name: "Test Artist" } }] };
+    relationships: { artists: { data: [{ type: "artists", id: "1" }] },
+      coverArt: { data: [{ type: "artworks", id: "cover-1" }] } } }],
+    included: [{ type: "artists", id: "1", attributes: { name: "Test Artist" } },
+      { type: "artworks", id: "cover-1", attributes: { files: [
+        { href: "https://resources.tidal.com/images/cover/320x320.jpg", meta: { width: 320 } },
+      ] } }] };
   const services = createCollectionServices({ storage: disk, session, pageUrl: "https://example.test/pwa/",
     fetch: async (url, options) => {
       calls.push({ url: new URL(url), options });
@@ -439,8 +443,10 @@ test("TIDAL collection search resolves the official search identifier and return
   const f = tidalSearchFixture();
   const records = await f.services.search("Search Album");
   assert.equal(validateAlbum(records[0]).id, "tidal:12");
+  assert.equal(f.services.coverUrl(records[0]), "https://resources.tidal.com/images/cover/320x320.jpg");
   assert.deepEqual(f.calls.map(({ url }) => url.pathname),
     ["/v2/users/me", "/v2/searchResults", "/v2/searchResults/opaque-result/relationships/albums"]);
+  assert.equal(f.calls[2].url.searchParams.get("include"), "albums.artists,albums.coverArt");
   assert.equal(f.calls[2].url.searchParams.get("countryCode"), "IT");
 });
 test("TIDAL search hydrates identifier-only results instead of silently dropping albums", async () => {
@@ -450,7 +456,36 @@ test("TIDAL search hydrates identifier-only results instead of silently dropping
   assert.equal(records[0].artist, "Test Artist");
   assert.equal(f.calls.at(-1).url.pathname, "/v2/albums");
   assert.equal(f.calls.at(-1).url.searchParams.get("filter[id]"), "12");
-  assert.equal(f.calls.at(-1).url.searchParams.get("include"), "artists");
+  assert.equal(f.calls.at(-1).url.searchParams.get("include"), "artists,coverArt");
+});
+test("Spotify and Qobuz collection search retain approved catalog cover URLs", async () => {
+  const spotifyId = "S".repeat(22), spotifyDisk = storage({
+    "accord-music-service-v1": "spotify", "accord-spotify-client-id": "spotify-client",
+    "accord-spotify-token-client-id": "spotify-client", "accord-spotify-access-token": "spotify-token",
+    "accord-spotify-token-expires": String(Date.now() + 3600000),
+  });
+  const spotify = createCollectionServices({ storage: spotifyDisk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (url) => {
+      assert.match(url, /api\.spotify\.com\/v1\/search/);
+      return reply({ albums: { items: [{ id: spotifyId, name: "Search Album", album_type: "album",
+        artists: [{ name: "Test Artist" }], release_date: "2020-01-01",
+        external_urls: { spotify: `https://open.spotify.com/album/${spotifyId}` },
+        images: [{ url: "https://i.scdn.co/image/cover", width: 640 }] }] } });
+    } });
+  const spotifyAlbums = await spotify.search("Search Album");
+  assert.equal(spotify.coverUrl(spotifyAlbums[0]), "https://i.scdn.co/image/cover");
+
+  const qobuzDisk = storage({ "accord-music-service-v1": "qobuz",
+    "accord-qobuz-session-v1": JSON.stringify({ appId: "qobuz-app", token: "qobuz-token" }) });
+  const qobuz = createCollectionServices({ storage: qobuzDisk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (url) => {
+      assert.match(url, /www\.qobuz\.com\/api\.json\/0\.2\/album\/search/);
+      return reply({ albums: { items: [{ id: 123, title: "Search Album", artist: { name: "Test Artist" },
+        image: { large: "https://static.qobuz.com/images/cover.jpg" }, release_date_original: "2020-01-01" }],
+      total: 1, offset: 0 } });
+    } });
+  const qobuzAlbums = await qobuz.search("Search Album");
+  assert.equal(qobuz.coverUrl(qobuzAlbums[0]), "https://static.qobuz.com/images/cover.jpg");
 });
 test("TIDAL search authentication failures stop without extra calls or collection changes", async () => {
   const f = tidalSearchFixture(() => reply({}, 401));
@@ -613,12 +648,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=4/);
+  assert.match(html, /collection-app\.mjs\?v=5/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.3/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.4/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];

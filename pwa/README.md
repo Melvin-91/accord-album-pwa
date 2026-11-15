@@ -2,6 +2,12 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.4 - Copertine in raccolta
+
+Le schede mostrano le copertine già sincronizzate e quelle dei nuovi album
+aggiunti dai cataloghi Spotify, TIDAL e Qobuz. Le copertine online vengono
+caricate quando servono; quelle già salvate restano disponibili offline.
+
 ### PWA 1.29.2 - Accessi persistenti e scorrimento
 
 Gli accessi Spotify, TIDAL e Qobuz rimangono salvati in questo browser
