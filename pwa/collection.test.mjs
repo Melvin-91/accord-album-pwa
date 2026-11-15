@@ -186,6 +186,133 @@ test("configured Client ID alone is never described as a connected TIDAL account
   assert.equal(services.settings("tidal").connected, false);
   assert.match(services.settings("tidal").text, /Client ID salvato/);
 });
+test("music credentials migrate to persistent storage and survive a new browser session", () => {
+  const credentials = {
+    "accord-tidal-token-v1": JSON.stringify({ clientId: "tidal-client", access_token: "tidal-token",
+      refresh_token: "tidal-refresh", expires: Date.now() + 3600000 }),
+    "accord-qobuz-session-v1": JSON.stringify({ appId: "qobuz-app", token: "qobuz-token" }),
+    "accord-spotify-access-token": "spotify-token", "accord-spotify-refresh-token": "spotify-refresh",
+    "accord-spotify-token-expires": String(Date.now() + 3600000),
+    "accord-spotify-token-client-id": "spotify-client",
+  };
+  const disk = storage({ "accord-spotify-client-id": "spotify-client" }), tab = storage(credentials);
+  const options = { storage: disk, pageUrl: "https://example.test/pwa/",
+    fetch: () => assert.fail("Restoring a connected account must not require a login request") };
+  createCollectionServices({ ...options, session: tab });
+  for (const [key, value] of Object.entries(credentials)) {
+    assert.equal(disk.getItem(key), value);
+    assert.equal(tab.getItem(key), null);
+  }
+  const reopened = createCollectionServices({ ...options, session: storage() });
+  for (const provider of ["tidal", "spotify", "qobuz"]) {
+    assert.equal(reopened.settings(provider).connected, true, provider);
+    reopened.disconnect(provider);
+    assert.equal(createCollectionServices({ ...options, session: storage() }).settings(provider).connected, false, provider);
+  }
+  for (const key of Object.keys(credentials)) assert.equal(disk.getItem(key), null);
+});
+test("an existing persistent credential takes precedence over a stale tab credential", () => {
+  const key = "accord-tidal-token-v1";
+  const token = (access_token) => JSON.stringify({ clientId: "client", access_token, expires: Date.now() + 3600000 });
+  const saved = token("current"), disk = storage({ [key]: saved }), tab = storage({ [key]: token("stale") });
+  createCollectionServices({ storage: disk, session: tab, pageUrl: "https://example.test/pwa/" });
+  assert.equal(disk.getItem(key), saved);
+  assert.equal(tab.getItem(key), null);
+});
+test("OAuth PKCE state stays tab-bound while completed TIDAL and Spotify logins persist", async () => {
+  for (const provider of ["tidal", "spotify"]) {
+    const disk = storage(), tab = storage(), pageUrl = "https://example.test/pwa/";
+    const options = { storage: disk, pageUrl, fetch: async (url) => {
+      assert.match(url, /\/token$/);
+      return reply({ access_token: `${provider}-token`, refresh_token: `${provider}-refresh`, expires_in: 3600 });
+    } };
+    const services = createCollectionServices({ ...options, session: tab });
+    const authorization = new URL(await services.connect(provider, { clientId: `${provider}-client` }));
+    const callback = new URL(pageUrl);
+    callback.searchParams.set("state", authorization.searchParams.get("state"));
+    callback.searchParams.set("code", "test-code");
+    const foreignTab = createCollectionServices({ ...options, session: storage(),
+      fetch: () => assert.fail("No token exchange without matching tab state") });
+    await assert.rejects(foreignTab.finish(callback.href), /OAuth/);
+    assert.equal([...disk.data.keys()].some((key) => /pkce|oauth-state|code-verifier/.test(key)), false);
+    assert.equal(await services.finish(callback.href), true);
+    assert.equal(createCollectionServices({ ...options, session: storage() }).settings(provider).connected, true);
+    assert.equal([...tab.data.keys()].some((key) => /token|pkce|oauth|verifier/.test(key)), false);
+  }
+});
+test("a verified Qobuz connection survives closing the tab and can be disconnected later", async () => {
+  const disk = storage(), tab = storage(), options = { storage: disk, pageUrl: "https://example.test/pwa/",
+    fetch: async () => reply({ albums: { items: [], total: 0 } }) };
+  const services = createCollectionServices({ ...options, session: tab });
+  await services.connect("qobuz", { appId: "test-app", token: "test-token" });
+  assert.equal(tab.getItem("accord-qobuz-session-v1"), null);
+  const reopened = createCollectionServices({ ...options, session: storage() });
+  assert.equal(reopened.settings("qobuz").connected, true);
+  reopened.disconnect("qobuz");
+  assert.equal(services.settings("qobuz").connected, false);
+});
+test("an expired persistent Spotify login refreshes and retains rotated credentials", async () => {
+  const disk = storage({ "accord-spotify-client-id": "spotify-client",
+    "accord-spotify-token-client-id": "spotify-client", "accord-spotify-access-token": "old-token",
+    "accord-spotify-refresh-token": "old-refresh", "accord-spotify-token-expires": "1" });
+  const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (url, options) => {
+      if (url.endsWith("/token")) {
+        assert.equal(options.body.get("refresh_token"), "old-refresh");
+        return reply({ access_token: "new-token", refresh_token: "new-refresh", expires_in: 3600 });
+      }
+      assert.equal(options.headers.Authorization, "Bearer new-token");
+      return reply({ albums: { items: [] } });
+    } });
+  assert.deepEqual(await services.search("Test album"), []);
+  assert.equal(disk.getItem("accord-spotify-refresh-token"), "new-refresh");
+  assert.equal(createCollectionServices({ storage: disk, session: storage(),
+    pageUrl: "https://example.test/pwa/" }).settings("spotify").connected, true);
+});
+test("disconnect in another tab prevents a late TIDAL or Spotify refresh from restoring access", async () => {
+  for (const provider of ["tidal", "spotify"]) {
+    const disk = storage({ "accord-music-service-v1": provider, "accord-spotify-client-id": "test-client",
+      "accord-spotify-token-client-id": "test-client", "accord-spotify-access-token": "old-token",
+      "accord-spotify-refresh-token": "old-refresh", "accord-spotify-token-expires": "1",
+      "accord-tidal-token-v1": JSON.stringify({ clientId: "test-client", access_token: "old-token",
+        refresh_token: "old-refresh", expires: 1 }) });
+    let release;
+    const options = { storage: disk, pageUrl: "https://example.test/pwa/", fetch: async (url) => {
+      assert.match(url, /\/token$/);
+      return new Promise((resolve) => { release = resolve; });
+    } };
+    const services = createCollectionServices({ ...options, session: storage() });
+    const pending = services.search("Test album");
+    await new Promise((resolve) => setImmediate(resolve));
+    createCollectionServices({ ...options, session: storage() }).disconnect(provider);
+    release(reply({ access_token: "late-token", refresh_token: "late-refresh", expires_in: 3600 }));
+    await assert.rejects(pending, /cambiato/);
+    assert.equal(services.settings(provider).connected, false);
+    assert.equal(disk.getItem(provider === "tidal" ? "accord-tidal-token-v1" : "accord-spotify-access-token"), null);
+  }
+});
+test("a reopened TIDAL login refreshes automatically and preserves the refresh token", async () => {
+  const disk = storage({ "accord-music-service-v1": "tidal",
+    "accord-tidal-token-v1": JSON.stringify({ clientId: "test-client", access_token: "expired-token",
+      refresh_token: "saved-refresh", expires: 1 }) });
+  let refreshes = 0;
+  const options = { storage: disk, pageUrl: "https://example.test/pwa/", fetch: async (url, options) => {
+    if (url.endsWith("/token")) {
+      refreshes++;
+      assert.equal(options.body.get("refresh_token"), "saved-refresh");
+      return reply({ access_token: "renewed-token", expires_in: 3600 });
+    }
+    assert.equal(options.headers.Authorization, "Bearer renewed-token");
+    return url.includes("/users/me") ? reply({ data: { attributes: { country: "IT" } } }) : reply({ data: [] });
+  } };
+  const services = createCollectionServices({ ...options, session: storage() });
+  assert.deepEqual(await services.search("tidal:12"), []);
+  assert.equal(refreshes, 1);
+  const saved = JSON.parse(disk.getItem("accord-tidal-token-v1"));
+  assert.equal(saved.refresh_token, "saved-refresh");
+  assert.equal(saved.access_token, "renewed-token");
+  assert.equal(createCollectionServices({ ...options, session: storage() }).settings("tidal").connected, true);
+});
 const tidalSearchFixture = (respond) => {
   const disk = storage({ "accord-music-service-v1": "tidal" });
   const session = storage({ "accord-tidal-token-v1": JSON.stringify({
@@ -255,7 +382,8 @@ test("cancelling a TIDAL refresh does not save a late token or start a catalog r
   release(reply({ access_token: "late-test-token", expires_in: 3600 }));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls, 1);
-  assert.equal(session.getItem("accord-tidal-token-v1"), saved);
+  assert.equal(disk.getItem("accord-tidal-token-v1"), saved);
+  assert.equal(session.getItem("accord-tidal-token-v1"), null);
 });
 test("TIDAL search cancellation releases a queued browser lock and a subsequent search succeeds", async (t) => {
   const saved = Object.getOwnPropertyDescriptor(navigator, "locks");
@@ -287,7 +415,7 @@ test("the 45-second search deadline covers both a stalled fetch and a stalled JS
     const f = tidalSearchFixture((_call, document) => stage === "fetch"
       ? new Promise((resolve) => { release = () => resolve(reply(document)); })
       : { ok: true, status: 200, headers: new Headers(), json: () => new Promise((resolve) => { release = () => resolve(document); }) });
-    const before = f.session.getItem("accord-tidal-token-v1");
+    const before = f.disk.getItem("accord-tidal-token-v1");
     const pending = f.services.search("Search Album");
     await new Promise((resolve) => setImmediate(resolve));
     deadline.abort(new DOMException("Search deadline", "TimeoutError"));
@@ -295,7 +423,7 @@ test("the 45-second search deadline covers both a stalled fetch and a stalled JS
     release();
     assert.deepEqual(durations, [45_000]);
     assert.equal(f.calls.length, 1);
-    assert.equal(f.session.getItem("accord-tidal-token-v1"), before);
+    assert.equal(f.disk.getItem("accord-tidal-token-v1"), before);
     assert.equal(f.disk.getItem(COLLECTION_KEY), null);
     mock.mock.restore();
   }
@@ -389,12 +517,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=2/);
+  assert.match(html, /collection-app\.mjs\?v=3/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.1/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.2/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];

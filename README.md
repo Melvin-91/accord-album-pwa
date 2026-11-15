@@ -2,6 +2,16 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.2 - Accessi persistenti e scorrimento
+
+Gli accessi Spotify, TIDAL e Qobuz rimangono salvati in questo browser
+anche dopo la chiusura dell'app. Scollega rimuove le credenziali locali;
+state OAuth e verificatori PKCE restano temporanei e separati per scheda.
+I token non vengono sincronizzati e sono accessibili agli script della
+stessa origine: scollegare i servizi sui dispositivi condivisi.
+Le finestre scorrono fino all'ultimo risultato senza trascinare la raccolta
+sottostante.
+
 ### PWA 1.29.1 - Correzione della ricerca album
 
 Gli errori della ricerca sono visibili nella finestra di aggiunta, invece

@@ -6,6 +6,7 @@
 :root[data-density=compact] :is(button, select, input:not([type=checkbox])) { min-height: 32px; padding: 6px 9px; }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 0; }
+html:has(dialog[open]) { overflow: hidden; overscroll-behavior: none; }
 main { width: min(1120px, calc(100% - 40px)); margin: 18px auto 60px; }
 .topbar { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 12px max(20px, calc((100vw - 1120px) / 2)); border-bottom: 1px solid #202020; background: #090909; position: sticky; top: 0; z-index: 2; }
 .brand, .header-actions { display: flex; align-items: center; gap: 12px; }
@@ -53,7 +54,7 @@ a { color: var(--accent); text-underline-offset: 3px; }
 .card-actions { grid-area: actions; justify-content: flex-end; font-size: .8125rem; }
 .card-actions button { font-size: .85rem; }
 #moreAlbums { display: block; margin: 24px auto; }
-dialog { background: #171717; color: inherit; border: 1px solid #666; border-radius: 12px; width: min(920px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); padding: 22px; overflow: auto; }
+dialog { background: #171717; color: inherit; border: 1px solid #666; border-radius: 12px; width: min(920px, calc(100vw - 24px)); max-height: calc(100vh - 40px); max-height: calc(100dvh - 40px); padding: 22px; overflow: auto; overscroll-behavior: contain; }
 dialog::backdrop { background: #000b; }
 .dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
 .dialog-heading h2 { margin-top: 0; }

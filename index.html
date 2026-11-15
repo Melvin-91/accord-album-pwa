@@ -6,16 +6,16 @@
   <meta name="theme-color" content="#090909">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.29.1 · La mia raccolta</title>
+  <title>Accord v1.29.2 · La mia raccolta</title>
   <link rel="icon" href="./assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
-  <link rel="stylesheet" href="./collection.css?v=1">
+  <link rel="stylesheet" href="./collection.css?v=2">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <img src="./assets/accord-192.png" width="36" height="36" alt="">
-      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.1</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
+      <div><p class="eyebrow">ACCORD <span class="app-version" id="version">App attiva v1.29.2</span></p><h1>La mia raccolta</h1><span id="headerSyncState" class="sync-state">Solo sul dispositivo</span></div>
     </div>
     <nav class="header-actions" aria-label="Raccolta">
       <button id="sync" type="button" class="secondary">Sincronizza</button>
@@ -75,7 +75,7 @@
         <p class="muted">Nel browser Qobuz: Strumenti sviluppatore &gt; Rete &gt; favorite/getUserFavorites. Copia X-App-Id e X-User-Auth-Token. Non condividere il token.</p>
       </div>
       <div class="dialog-actions"><button id="connectService" type="button">Collega servizio</button><button id="disconnectService" type="button" class="secondary">Scollega</button></div>
-      <p class="muted">Gli accessi musicali restano soltanto nella sessione di questa scheda. Un Client ID salvato non significa che l'account sia autorizzato. Non vengono sincronizzati.</p>
+      <p class="muted">Gli accessi musicali restano salvati in questo browser anche quando chiudi l'app. I token sono accessibili agli script della stessa origine e non vengono sincronizzati. Su un dispositivo condiviso premi Scollega dopo l'uso. Se revochi l'accesso o cancelli i dati del sito, dovrai ricollegarti.</p>
     </section>
     <section>
       <h3>Apertura degli album</h3>
@@ -96,6 +96,6 @@
   </dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=2"></script>
+  <script type="module" src="./collection-app.mjs?v=3"></script>
 </body>
 </html>

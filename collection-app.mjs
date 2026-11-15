@@ -25,7 +25,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=2")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=3")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -397,11 +397,11 @@ $("connectService").addEventListener("click", () => run(async () => {
   const url = await client.connect(provider, { clientId: $("clientId").value, appId: $("qobuzAppId").value, token: $("qobuzToken").value });
   $("qobuzAppId").value = ""; $("qobuzToken").value = "";
   if (url) location.assign(url);
-  else { await serviceSettings(); report("Accesso Qobuz verificato e salvato soltanto in questa scheda."); }
+  else { await serviceSettings(); report("Accesso Qobuz verificato e salvato su questo dispositivo."); }
 }));
 $("disconnectService").addEventListener("click", () => run(async () => {
   const client = await services(); client.disconnect($("settingsService").value);
-  await serviceSettings(); report("Servizio scollegato da questa scheda. Il Client ID configurato e' conservato.");
+  await serviceSettings(); report("Accesso salvato rimosso da questo browser. Il Client ID configurato e' conservato.");
 }));
 $("linkTarget").addEventListener("change", () => {
   try { localStorage.setItem(MUSIC_LINK_TARGET_KEY, $("linkTarget").value); render(); }
@@ -417,7 +417,7 @@ window.addEventListener("storage", (event) => {
 const callback = new URL(location.href);
 if (callback.searchParams.has("code") || callback.searchParams.has("error")) {
   run(async () => {
-    try { await (await services()).finish(location.href); report("Servizio musicale collegato in questa scheda."); }
+    try { await (await services()).finish(location.href); report("Servizio musicale collegato. Accesso salvato su questo dispositivo."); }
     finally { history.replaceState(null, "", `${location.pathname}${location.hash}`); }
   });
 }

@@ -351,7 +351,8 @@ export function createTidalTransport({
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes))
   .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-export function createTidalAuth({ session, transport, crypto = globalThis.crypto, now = () => Date.now(), scopes = TIDAL_SCOPES }) {
+export function createTidalAuth({ session, transport, crypto = globalThis.crypto, now = () => Date.now(),
+  scopes = TIDAL_SCOPES, revision: sharedRevision = () => 0 }) {
   let refreshing = null;
   let revision = 0;
   function savedSession() {
@@ -361,8 +362,10 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
         || !Number.isFinite(saved.expires))) throw new Error("Sessione TIDAL non valida: ricollega l'account.");
     return saved;
   }
-  function store(value, clientId, expectedRevision) {
-    if (expectedRevision !== revision) throw new Error("Accesso TIDAL cambiato durante l'autorizzazione.");
+  function store(value, clientId, expectedRevision, expectedSharedRevision) {
+    if (expectedRevision !== revision || expectedSharedRevision !== sharedRevision()) {
+      throw new Error("Accesso TIDAL cambiato durante l'autorizzazione.");
+    }
     if (typeof value.access_token !== "string" || !value.access_token
         || !Number.isFinite(value.expires_in) || value.expires_in <= 0) throw new Error("Token TIDAL non valido.");
     session.setItem(TOKEN, JSON.stringify({ ...value, clientId, expires: now() + value.expires_in * 1000 }));
@@ -408,25 +411,25 @@ export function createTidalAuth({ session, transport, crypto = globalThis.crypto
       if (url.searchParams.has("error")) throw new Error("Autorizzazione TIDAL annullata; nessuna operazione eseguita.");
       const code = url.searchParams.get("code");
       if (!code) throw new Error("Codice OAuth TIDAL mancante.");
-      const expectedRevision = revision;
+      const expectedRevision = revision, expectedSharedRevision = sharedRevision();
       store(await transport.token({ grant_type: "authorization_code", client_id: saved.clientId,
-        redirect_uri: saved.redirect, code_verifier: saved.verifier, code }), saved.clientId, expectedRevision);
+        redirect_uri: saved.redirect, code_verifier: saved.verifier, code }), saved.clientId, expectedRevision, expectedSharedRevision);
       return true;
     },
     async access(clientId, { signal } = {}) {
       signal?.throwIfAborted();
       clientId = String(clientId).trim();
       const saved = savedSession();
-      if (!saved) throw new Error("Accesso TIDAL non attivo in questa scheda: premi Collega TIDAL nelle impostazioni.");
+      if (!saved) throw new Error("Accesso TIDAL non attivo: premi Collega TIDAL nelle impostazioni.");
       if (saved.clientId.trim() !== clientId) throw new Error("Client ID cambiato: salva e ricollega TIDAL.");
       if (saved.expires > now() + 60_000) return saved.access_token;
       if (!saved.refresh_token) throw new Error("Sessione TIDAL scaduta: ricollega l’account.");
       if (!refreshing) {
-        const expectedRevision = revision;
+        const expectedRevision = revision, expectedSharedRevision = sharedRevision();
         refreshing = transport.token({ grant_type: "refresh_token", client_id: clientId,
           refresh_token: saved.refresh_token }, { signal }).then((value) => {
             signal?.throwIfAborted();
-            return store({ ...saved, ...value }, clientId, expectedRevision);
+            return store({ ...saved, ...value }, clientId, expectedRevision, expectedSharedRevision);
           })
           .finally(() => { refreshing = null; });
       }

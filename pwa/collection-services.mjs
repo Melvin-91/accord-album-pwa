@@ -1,21 +1,43 @@
 import { createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=52";
-import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumId, tidalResources } from "./tidal.mjs?v=15";
+import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
 const SPOTIFY_KEYS = ["access-token", "refresh-token", "token-expires", "token-client-id"];
+const AUTH_REVISION = "accord-music-auth-revision-v1";
+const SAVED_ACCESS = new Set(["accord-tidal-token-v1", QOBUZ_SESSION,
+  ...SPOTIFY_KEYS.map((key) => `accord-spotify-${key}`)]);
 const random = (length) => base64url(crypto.getRandomValues(new Uint8Array(length)));
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-export function createCollectionServices({ storage, session, pageUrl, fetch: request = globalThis.fetch }) {
+export function createCollectionServices({ storage, session: tabSession, pageUrl, fetch: request = globalThis.fetch }) {
+  for (const key of SAVED_ACCESS) {
+    const previous = tabSession.getItem(key);
+    if (previous !== null) {
+      if (storage.getItem(key) === null) storage.setItem(key, previous);
+      tabSession.removeItem(key);
+    }
+  }
+  // Only credentials persist; OAuth state and PKCE verifiers remain tab-bound.
+  const session = {
+    getItem: (key) => (SAVED_ACCESS.has(key) ? storage : tabSession).getItem(key),
+    setItem: (key, value) => (SAVED_ACCESS.has(key) ? storage : tabSession).setItem(key, value),
+    removeItem(key) {
+      if (SAVED_ACCESS.has(key)) storage.removeItem(key);
+      tabSession.removeItem(key);
+    },
+  };
+  const accountRevision = () => storage.getItem(AUTH_REVISION);
+  const changeAccount = () => storage.setItem(AUTH_REVISION, random(16));
   const gate = createMusicServiceGate(storage);
-  let accountRevision = 0, spotifyRefreshing = null;
+  let spotifyRefreshing = null;
   const lock = (name, run, signal) => globalThis.navigator?.locks?.request
     ? signal ? navigator.locks.request(name, { signal }, run) : navigator.locks.request(name, run) : run();
   const tidal = createTidalTransport({ storage, fetch: request, active: () => gate.service === "tidal",
-    revision: () => accountRevision, lock });
-  const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read" });
+    revision: accountRevision, lock });
+  const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read",
+    revision: accountRevision });
   const spotify = createSpotifyTransport({ storage, fetch: request, lock });
   function tidalClientId() {
     let id = (storage.getItem(TIDAL_CLIENT) || "").trim();
@@ -39,7 +61,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       .forEach((key) => session.removeItem(`accord-spotify-${key}`));
   }
   function storeSpotify(value, clientId, revision) {
-    if (revision !== accountRevision) throw new Error("Account cambiato durante l'accesso Spotify.");
+    if (revision !== accountRevision()) throw new Error("Account cambiato durante l'accesso Spotify.");
     if (typeof value.access_token !== "string" || !value.access_token
         || !Number.isFinite(value.expires_in) || value.expires_in <= 0) throw new Error("Sessione Spotify non valida.");
     session.setItem("accord-spotify-access-token", value.access_token);
@@ -62,9 +84,9 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
     const access = session.getItem("accord-spotify-access-token");
     if (access && Number(session.getItem("accord-spotify-token-expires")) > Date.now() + 60_000) return access;
     const refresh = session.getItem("accord-spotify-refresh-token");
-    if (!clientId || !refresh) throw new Error("Accesso Spotify non attivo in questa scheda: premi Collega Spotify nelle impostazioni.");
+    if (!clientId || !refresh) throw new Error("Accesso Spotify non attivo: premi Collega Spotify nelle impostazioni.");
     if (!spotifyRefreshing) {
-      const revision = accountRevision;
+      const revision = accountRevision();
       spotifyRefreshing = spotifyToken({ grant_type: "refresh_token", refresh_token: refresh, client_id: clientId }, signal)
         .then((value) => { signal?.throwIfAborted(); return storeSpotify(value, clientId, revision); })
         .finally(() => { spotifyRefreshing = null; });
@@ -81,9 +103,9 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
   function qobuz(signal) {
     const value = JSON.parse(session.getItem(QOBUZ_SESSION) || "null");
     if (!value) throw new Error("Collega Qobuz nelle impostazioni.");
-    const revision = accountRevision, epoch = gate.epoch;
+    const revision = accountRevision(), epoch = gate.epoch;
     return createQobuzClient({ ...qobuzCredentials(value.appId, value.token), storage, fetch: request, lock, signal,
-      active: () => revision === accountRevision && gate.epoch === epoch && gate.service === "qobuz" });
+      active: () => revision === accountRevision() && gate.epoch === epoch && gate.service === "qobuz" });
   }
   return {
     get provider() { return gate.service; },
@@ -91,15 +113,15 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
     settings(provider) {
       if (provider === "tidal") {
         const clientId = tidalClientId(), status = tidalAuth.status(clientId);
-        return { clientId, connected: status.connected, text: status.connected ? "TIDAL collegato in questa scheda."
+        return { clientId, connected: status.connected, text: status.connected ? "TIDAL collegato. Accesso salvato su questo dispositivo."
           : !clientId ? "Inserisci il Client ID, poi premi Collega TIDAL."
             : !status.matches && tidalAuth.clientId() ? "Client ID diverso dalla sessione: ricollega TIDAL."
               : status.expired ? "Accesso scaduto: ricollega TIDAL. Il Client ID e' gia' salvato."
-                : "Client ID salvato. Premi Collega TIDAL per autorizzare questa scheda." };
+                : "Client ID salvato. Premi Collega TIDAL per autorizzare l'accesso." };
       }
       if (provider === "qobuz") {
         const connected = !!session.getItem(QOBUZ_SESSION);
-        return { connected, text: connected ? "Sessione Qobuz salvata in questa scheda."
+        return { connected, text: connected ? "Qobuz collegato. Accesso salvato su questo dispositivo."
           : "Inserisci App ID e token della sessione web Qobuz, poi verifica l'accesso." };
       }
       const settings = spotifySettings();
@@ -107,19 +129,19 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       const connected = (!bound || bound === settings.clientId) && !!session.getItem("accord-spotify-access-token")
         && (Number(session.getItem("accord-spotify-token-expires")) > Date.now() + 60_000
           || !!session.getItem("accord-spotify-refresh-token"));
-      return { ...settings, connected, text: connected ? "Spotify collegato in questa scheda."
-        : settings.clientId ? "Client ID salvato. Premi Collega Spotify per autorizzare questa scheda."
+      return { ...settings, connected, text: connected ? "Spotify collegato. Accesso salvato su questo dispositivo."
+        : settings.clientId ? "Client ID salvato. Premi Collega Spotify per autorizzare l'accesso."
           : "Inserisci il Client ID della tua applicazione Spotify." };
     },
     async connect(provider, values = {}) {
       gate.select(provider);
       if (provider === "qobuz") {
         const value = qobuzCredentials(values.appId.trim(), values.token.trim());
-        const revision = accountRevision;
+        const revision = accountRevision();
         const client = createQobuzClient({ ...value, storage, fetch: request, lock,
-          active: () => accountRevision === revision && gate.service === "qobuz" });
+          active: () => accountRevision() === revision && gate.service === "qobuz" });
         await client.verifyAccess();
-        accountRevision += 1;
+        changeAccount();
         session.setItem(QOBUZ_SESSION, JSON.stringify(value));
         return null;
       }
@@ -127,7 +149,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       if (!clientId) throw new Error("Inserisci il Client ID prima di collegare.");
       const key = provider === "tidal" ? TIDAL_CLIENT : "accord-spotify-client-id";
       if (storage.getItem(key) !== clientId) {
-        accountRevision += 1;
+        changeAccount();
         if (provider === "tidal") tidalAuth.disconnect(); else clearSpotify();
       }
       storage.setItem(key, clientId);
@@ -145,7 +167,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       return url.href;
     },
     disconnect(provider) {
-      accountRevision += 1;
+      changeAccount();
       if (provider === "tidal") tidalAuth.disconnect();
       else if (provider === "qobuz") session.removeItem(QOBUZ_SESSION);
       else clearSpotify();
@@ -172,7 +194,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       if (callback.searchParams.has("error")) throw new Error("Autorizzazione Spotify annullata.");
       if (!callback.searchParams.get("code") || clientId !== spotifySettings().clientId) throw new Error("Codice OAuth o Client ID Spotify non valido.");
       gate.select("spotify");
-      const revision = accountRevision;
+      const revision = accountRevision();
       storeSpotify(await spotifyToken({ grant_type: "authorization_code", code: callback.searchParams.get("code"),
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
@@ -183,7 +205,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       const timeout = AbortSignal.timeout(45_000);
       const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
       signal.throwIfAborted();
-      const provider = gate.service, epoch = gate.epoch, revision = accountRevision;
+      const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       let records;
       if (provider === "qobuz") {
         const client = qobuz(signal);
@@ -231,7 +253,7 @@ export function createCollectionServices({ storage, session, pageUrl, fetch: req
       }
       signal.throwIfAborted();
       gate.assert(provider, epoch);
-      if (revision !== accountRevision) throw new Error("Account cambiato: risultati scartati.");
+      if (revision !== accountRevision()) throw new Error("Account cambiato: risultati scartati.");
       return records;
     },
   };
