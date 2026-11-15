@@ -1,7 +1,8 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=52";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=4";
-import { createCollectionSync } from "./collection-sync.mjs?v=3";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=6";
+import { createCollectionSync } from "./collection-sync.mjs?v=4";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
+import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 
 const $ = (id) => document.getElementById(id);
 const states = { queued: "Da ascoltare", listening: "In ascolto",
@@ -12,9 +13,10 @@ const node = (tag, text = "", attributes = {}) => {
   Object.entries(attributes).forEach(([key, item]) => value.setAttribute(key, item));
   return value;
 };
-let store, sync, servicesPromise, catalogAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
+let store, sync, servicesPromise, catalogAbort, durationAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
 const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = new Map();
 let resultCoverUrls = new Map();
+let resultMetadata = new Map();
 function trustedCoverUrl(value) {
   if (typeof value !== "string") return false;
   try {
@@ -36,17 +38,43 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=4")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=6")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
 }
 function disable() {
-  document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button, #settingsDialog input, #settingsDialog select")
+  document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   $("collection").setAttribute("aria-busy", String(busy));
   $("cancelCatalogSearch").hidden = !catalogAbort;
   $("cancelCatalogSearch").disabled = !catalogAbort;
+  $("cancelDurations").hidden = !durationAbort;
+  $("cancelDurations").disabled = !durationAbort;
+}
+const durationProvider = (album) => /^tidal:[1-9][0-9]*$/.test(album.id) ? "tidal"
+  : /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id) ? "qobuz"
+    : /^[A-Za-z0-9]{22}$/.test(album.id) ? "spotify" : null;
+const durationText = (milliseconds) => {
+  const minutes = Math.max(1, Math.round(milliseconds / 60_000));
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+};
+async function updateAlbumDuration(album, client, signal) {
+  if (Object.hasOwn(store.durations(), album.id)) return false;
+  const duration = await client.albumDuration(album, { signal });
+  return store.saveMissingDuration(album, duration);
+}
+function fetchAddedDuration(album) {
+  void (async () => {
+    try {
+      const client = await services(), provider = durationProvider(album);
+      if (!provider || provider !== client.provider) throw new Error("Servizio dell'album non attivo.");
+      const saved = await updateAlbumDuration(album, client);
+      if (saved) { render(); report(`Album aggiunto. Durata recuperata per ${album.name}.`); }
+    } catch (error) {
+      report(`Album aggiunto, ma durata non disponibile per ${album.name}: ${error.message}`, true);
+    }
+  })();
 }
 async function run(action) {
   if (busy || !store) return;
@@ -127,6 +155,7 @@ async function compareCandidate(candidate, found) {
     [["cancel", "Annulla"], ["replace", "Sostituisci"]]);
     if (confirmed === "replace") {
       store.add(candidate, { replaceId: found.album.id });
+      fetchAddedDuration(candidate);
       const saveError = await cacheCatalogCover(candidate.id);
       report(saveError ? `Copia sostituita, ma copertina non salvata: ${saveError}`
         : "Copia sostituita. Sincronizza per aggiornare gli altri dispositivi.", Boolean(saveError));
@@ -134,6 +163,7 @@ async function compareCandidate(candidate, found) {
   } else if (answer === "distinct") {
     const duplicate = store.add(candidate, { distinct: true });
     if (duplicate) throw new Error("Lo stesso identificativo non puo' essere aggiunto due volte.");
+    fetchAddedDuration(candidate);
     const saveError = await cacheCatalogCover(candidate.id);
     report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
       : "Album aggiunto come copia distinta.", Boolean(saveError));
@@ -199,7 +229,7 @@ const coverObserver = new IntersectionObserver((entries) => {
     }).catch((error) => report(error.message, true));
   }
 }, { rootMargin: "200px" });
-function albumCard(album, favorite) {
+function albumCard(album, favorite, duration) {
   const card = node("article", "", { class: "album-card", "data-id": album.id });
   const artwork = node("div", "", { class: "artwork" });
   artwork.append(node("span", album.name.slice(0, 1).toUpperCase(), { "aria-hidden": "true" }));
@@ -214,6 +244,7 @@ function albumCard(album, favorite) {
   });
   card.append(artwork, node("h2", album.name), node("p", album.artist),
     node("p", `${album.year || "-"} - ${providerName(album)}`, { class: "muted" }));
+  if (duration) card.append(node("p", `Durata: ${durationText(duration)}`, { class: "muted" }));
   const controls = node("div", "", { class: "album-controls" });
   const statusLabel = node("label", "Ascolto"), status = node("select", "", { "data-control": "status" });
   Object.entries(states).forEach(([value, label]) => status.append(node("option", label, { value })));
@@ -237,6 +268,7 @@ function render() {
   if (!store) return;
   const query = $("search").value.trim().toLocaleLowerCase(), state = $("statusFilter").value;
   const favorites = new Set(store.state.preferences.favoriteIds || []);
+  const durations = store.durations();
   document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
   document.documentElement.dataset.contrast = store.state.preferences.contrast === "high" ? "high" : "standard";
   document.documentElement.dataset.density = store.state.preferences.density === "compact" ? "compact" : "touch";
@@ -245,12 +277,12 @@ function render() {
   filtered.sort((a, b) => a.artist.localeCompare(b.artist, "it") || a.name.localeCompare(b.name, "it"));
   const active = document.activeElement, activeId = active?.closest(".album-card")?.dataset.id, control = active?.dataset.control;
   const wanted = filtered.slice(0, visibleLimit).map((album) => {
-    const signature = JSON.stringify([album, favorites.has(album.id), localStorage.getItem(MUSIC_LINK_TARGET_KEY)]);
+    const signature = JSON.stringify([album, favorites.has(album.id), durations[album.id], localStorage.getItem(MUSIC_LINK_TARGET_KEY)]);
     const old = cards.get(album.id);
     if (!old || old.signature !== signature) {
       const oldImage = old?.element.querySelector("img");
       if (oldImage) coverObserver.unobserve(oldImage);
-      cards.set(album.id, { signature, element: albumCard(album, favorites.has(album.id)) });
+      cards.set(album.id, { signature, element: albumCard(album, favorites.has(album.id), durations[album.id]) });
     }
     return cards.get(album.id).element;
   });
@@ -273,9 +305,15 @@ function render() {
 }
 function renderResults() {
   $("catalogResults").replaceChildren();
+  const options = { includeLive: $("catalogLive").checked, includeSingle: $("catalogSingle").checked,
+    includeEp: $("catalogEp").checked };
   for (const album of resultAlbums) {
+    const metadata = { ...album, ...resultMetadata.get(album.id) };
+    if (!albumSearchMatch(metadata, options)) continue;
+    const { kind, estimated } = shortReleaseKind(metadata);
+    const release = kind ? ` - ${{ single: "Singolo", ep: "EP", short: "Singolo o EP" }[kind]}${estimated ? " (stima)" : ""}` : "";
     const row = node("article", "", { class: "catalog-result" });
-    row.append(node("h3", album.name), node("p", `${album.artist} - ${album.year || "-"} - ${providerName(album)}`));
+    row.append(node("h3", album.name), node("p", `${album.artist} - ${album.year || "-"} - ${providerName(album)}${release}`));
     const duplicate = store.duplicate(album), button = node("button", duplicate ? "Gia' presente: confronta" : "Aggiungi", { type: "button" });
     button.addEventListener("click", () => run(async () => {
       const current = store.duplicate(album);
@@ -294,6 +332,7 @@ function renderResults() {
       const found = store.add(album);
       if (found) await compareCandidate(album, found);
       else {
+        fetchAddedDuration(album);
         const saveError = await cacheCatalogCover(album.id);
         report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
           : "Album aggiunto. Sincronizza per condividerlo.", Boolean(saveError));
@@ -309,7 +348,7 @@ async function performSync() {
     async chooseConflicts(conflicts) {
       const content = [node("p", "Scegli quale versione mantenere per ogni modifica.")], controls = [];
       const labels = { album: "Album", status: "Stato", rating: "Voto", genres: "Generi",
-        collections: "Collezioni", tags: "Tag", notes: "Note", favorite: "Preferito", pinned: "In evidenza" };
+        collections: "Collezioni", tags: "Tag", notes: "Note", favorite: "Preferito", pinned: "In evidenza", duration_ms: "Durata" };
       const valueText = (value, fieldName) => {
         if (value === null || value === undefined || value === "") return "Vuoto";
         if (Array.isArray(value)) return value.length ? value.join(", ") : "Vuoto";
@@ -317,6 +356,7 @@ async function performSync() {
         if (typeof value === "object") return value.artist && value.name ? `${value.artist} - ${value.name}` : "Modifica album";
         if (fieldName === "status" && Object.hasOwn(states, value)) return states[value];
         if (fieldName === "rating" && typeof value === "number") return `${value} / 5`;
+        if (fieldName === "duration_ms" && typeof value === "number") return durationText(value);
         return String(value);
       };
       conflicts.forEach((conflict) => {
@@ -338,7 +378,7 @@ async function performSync() {
       controls.forEach(({ id, field, value }) => { choices[id] ||= {}; choices[id][field] = value.value; });
       return choices;
     },
-    async confirm({ local, remote, albums }) {
+    async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [] }) {
       const changes = (previous) => {
         const next = new Map(albums.map((album) => [album.id, album])), old = new Map(previous.map((album) => [album.id, album]));
         return [...new Set([...old.keys(), ...next.keys()])].flatMap((id) => {
@@ -349,8 +389,10 @@ async function performSync() {
         });
       };
       const content = [node("p", "Controlla le modifiche prima di sincronizzare."),
-        node("h3", "Raccolta condivisa"), node("pre", changes(remote).join("\n") || "Nessuna modifica."),
-        node("h3", "Questo dispositivo"), node("pre", changes(local).join("\n") || "Nessuna modifica.")];
+        node("h3", "Raccolta condivisa"), node("pre", [...changes(remote),
+          ...durationOutgoing.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
+        node("h3", "Questo dispositivo"), node("pre", [...changes(local),
+          ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica.")];
       return await choice("Conferma sincronizzazione", content, [["cancel", "Annulla"], ["sync", "Sincronizza"]]) === "sync";
     },
   });
@@ -381,6 +423,42 @@ $("search").addEventListener("input", () => { visibleLimit = 40; render(); });
 ["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => { visibleLimit = 40; render(); }));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
 $("sync").addEventListener("click", () => run(performSync));
+$("cancelDurations").addEventListener("click", () => durationAbort?.abort());
+$("updateDurations").addEventListener("click", () => run(async () => {
+  const client = await services(), original = client.provider, controller = new AbortController();
+  const known = store.durations();
+  const missing = store.state.albums.filter((album) => !Object.hasOwn(known, album.id));
+  const failed = [], skipped = [], unavailable = new Map();
+  let completed = 0, index = 0;
+  durationAbort = controller; disable();
+  try {
+    for (const album of missing) {
+      if (controller.signal.aborted) break;
+      index += 1;
+      $("durationStatus").textContent = `Durate: ${index} su ${missing.length} · ${album.name}`;
+      const provider = durationProvider(album);
+      if (!provider) { skipped.push(`${album.name}: servizio non identificabile`); continue; }
+      if (unavailable.has(provider)) { failed.push(`${album.name}: ${unavailable.get(provider)}`); continue; }
+      client.select(provider);
+      try {
+        if (await updateAlbumDuration(album, client, controller.signal)) completed += 1;
+      } catch (error) {
+        if (controller.signal.aborted) break;
+        if (/HTTP (401|403|429)\b|collega|attendi|limite|accesso .*non attivo/i.test(error.message)) {
+          unavailable.set(provider, error.message);
+        }
+        failed.push(`${album.name}: ${error.message}`);
+      }
+    }
+  } finally {
+    client.select(original); durationAbort = null; disable();
+  }
+  const details = [...failed, ...skipped];
+  const status = `${controller.signal.aborted ? "Interrotto. " : ""}${completed} durate aggiunte.`
+    + (details.length ? ` Non disponibili (${details.length}): ${details.join("; ")}` : "");
+  $("durationStatus").textContent = status;
+  report(status, details.length > 0);
+}));
 $("duplicates").addEventListener("click", () => {
   try { $("settingsDialog").close(); showDuplicates(); } catch (error) { report(error.message, true); }
 });
@@ -409,6 +487,7 @@ $("catalogForm").addEventListener("submit", (event) => {
       if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
       resultAlbums = albums.map(validateAlbum);
       resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
+      resultMetadata = new Map(resultAlbums.map((album) => [album.id, client.releaseMetadata(album)]));
       renderResults();
       report(`${resultAlbums.length} risultati. Verifico di nuovo le copie prima di aggiungere.`);
     } catch (error) {
@@ -420,6 +499,7 @@ $("catalogForm").addEventListener("submit", (event) => {
     } finally { catalogAbort = null; }
   });
 });
+for (const id of ["catalogLive", "catalogSingle", "catalogEp"]) $(id).addEventListener("change", renderResults);
 $("cancelCatalogSearch").addEventListener("click", () => catalogAbort?.abort());
 $("addDialog").addEventListener("close", () => catalogAbort?.abort());
 $("addDialog").addEventListener("cancel", () => catalogAbort?.abort());
@@ -464,7 +544,7 @@ $("linkTarget").addEventListener("change", () => {
 });
 document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => $(button.dataset.close).close()));
 window.addEventListener("storage", (event) => {
-  if (event.key === MUSIC_LINK_TARGET_KEY) render();
+  if ([MUSIC_LINK_TARGET_KEY, "accord-listening-album-durations-v1", "accord-listening-queue-v1"].includes(event.key)) render();
   if (event.key === null || event.key === "accord-album-pwa-v1") {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }

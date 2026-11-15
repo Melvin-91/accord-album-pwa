@@ -3,6 +3,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
+import { readAlbumDuration } from "./music-completion.mjs?v=2";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -57,7 +58,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
   const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read",
     revision: accountRevision });
   const spotify = createSpotifyTransport({ storage, fetch: request, lock });
-  const coverUrls = new Map();
+  const coverUrls = new Map(), releaseMetadata = new Map();
   function tidalClientId() {
     let id = (storage.getItem(TIDAL_CLIENT) || "").trim();
     if (!id) {
@@ -227,12 +228,14 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       let records;
       coverUrls.clear();
+      releaseMetadata.clear();
       if (provider === "qobuz") {
         const client = qobuz(signal);
         const rows = /^https:|^qobuz:/i.test(query) ? [await client.album(query)]
           : (await client.search(query)).rows;
         records = rows.map((row) => {
           if (row.coverUrl) coverUrls.set(row.album.id, qobuzCoverUrl(row.coverUrl));
+          releaseMetadata.set(row.album.id, row.edition || {});
           return row.album;
         });
       } else if (provider === "tidal") {
@@ -255,6 +258,9 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         }
         const wanted = new Set(ids.map((id) => `tidal:${id}`));
         records = tidalAlbumRecords(page.documents).filter((album) => wanted.has(album.id));
+        for (const resource of tidalResources(page.documents).filter((item) => item.type === "albums")) {
+          releaseMetadata.set(`tidal:${resource.id}`, { album_type: resource.attributes?.albumType });
+        }
         for (const [id, url] of tidalAlbumArtwork(page.documents)) coverUrls.set(id, url);
         if (records.length !== wanted.size || page.count && !wanted.size) {
           throw new Error("Metadati degli album TIDAL incompleti. Nessun album aggiunto: riprova la ricerca o il link.");
@@ -276,6 +282,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
         const entries = id ? [result] : result.albums.items;
         for (const entry of entries) {
+          releaseMetadata.set(entry.id, { album_type: entry.album_type, total_tracks: entry.total_tracks });
           const image = (Array.isArray(entry.images) ? entry.images : [])
             .filter((item) => spotifyCoverUrl(item?.url))
             .sort((a, b) => Math.abs((a.width || 300) - 300) - Math.abs((b.width || 300) - 300))[0];
@@ -293,6 +300,45 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       if (!url) return null;
       return album.id.startsWith("tidal:") ? tidalCoverUrl(url)
         : album.id.startsWith("qobuz:") ? qobuzCoverUrl(url) : spotifyCoverUrl(url);
+    },
+    releaseMetadata(album) { return releaseMetadata.get(album?.id) || {}; },
+    async albumDuration(album, { signal: externalSignal } = {}) {
+      const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
+      const matches = provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(album.id)
+        : provider === "qobuz" ? /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
+          : /^[A-Za-z0-9]{22}$/.test(album.id);
+      if (!matches) throw new Error("Album non disponibile nel servizio selezionato.");
+      const timeout = AbortSignal.timeout(90_000);
+      const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
+      const guard = () => {
+        signal.throwIfAborted();
+        gate.assert(provider, epoch);
+        if (revision !== accountRevision()) throw new Error("Account cambiato: durata scartata.");
+      };
+      let api;
+      if (provider === "qobuz") {
+        api = qobuz(signal);
+      } else if (provider === "spotify") {
+        const token = await spotifyAccess(signal);
+        api = { request: async (path) => { guard(); const result = await spotifyRead(path, token, signal); guard(); return result; } };
+      } else {
+        const token = await tidalAuth.access(tidalClientId(), { signal });
+        const profile = await tidal.request("users/me", token, { signal });
+        const country = profile.data?.attributes?.country;
+        if (!/^[A-Z]{2}$/.test(country || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
+        api = { completionPage: async (path) => {
+          guard();
+          const url = new URL(path, "https://openapi.tidal.com/v2/");
+          url.searchParams.set("countryCode", country);
+          const result = await tidal.request(url.href, token, { signal });
+          guard();
+          return result;
+        } };
+      }
+      guard();
+      const result = await readAlbumDuration(provider, api, album.id, { signal });
+      guard();
+      return result.duration;
     },
   };
 }

@@ -7,6 +7,7 @@ import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
+import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs";
 globalThis.crypto ||= webcrypto;
 
 const album = (id = "A".repeat(22), changes = {}) => validateAlbum({
@@ -24,7 +25,7 @@ const storage = (values = {}) => {
 const local = (records, base = records, extras = {}) => storage({ [COLLECTION_KEY]: JSON.stringify({ albums: records, base, ...extras }),
   "accord-album-owner": "owner", "accord-album-token": "synthetic-test-token" });
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status });
-function github(records, { failPut = false, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true } = {}) {
+function github(records, { failPut = false, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true, durations = null } = {}) {
   const writes = [], reads = [];
   const request = async (url, options = {}) => {
     assert.equal(options.credentials, "omit");
@@ -39,9 +40,17 @@ function github(records, { failPut = false, mutateBeforePut, coverArchive, delet
         deletedAlbums = document.deleted_albums || [];
         deletionHistory = document.deletion_history === true;
       }
+      if (new URL(url).pathname.endsWith("/durations.json")) {
+        durations = JSON.parse(Buffer.from(writes.at(-1).payload.content, "base64").toString()).albums;
+      }
       return reply({ content: { sha: "next" }, commit: { sha: "commit" } });
     }
     reads.push(url);
+    if (/durations\.json/.test(url)) {
+      if (durations === null) return reply({}, 404);
+      return reply({ type: "file", sha: "durations", content: Buffer.from(JSON.stringify(
+        { format: "accord-album-durations", version: 1, albums: durations })).toString("base64") });
+    }
     if (/covers\.bin/.test(url)) {
       if (!coverArchive) return reply({}, 404);
       return options.headers.Accept.includes("raw") ? new Response(coverArchive) : reply({ type: "file", sha: "covers" });
@@ -54,6 +63,15 @@ function github(records, { failPut = false, mutateBeforePut, coverArchive, delet
   return { request, writes, reads };
 }
 const coverCache = { get: async () => null, put: async () => {} };
+
+test("short releases use provider types and mark Spotify track-count estimates", () => {
+  const spotify = { id: "A".repeat(22), album_type: "single", total_tracks: 4 };
+  assert.deepEqual(shortReleaseKind(spotify), { kind: "ep", estimated: true });
+  assert.equal(albumSearchMatch(spotify, { includeEp: false }), false);
+  assert.deepEqual(shortReleaseKind({ ...spotify, total_tracks: 2 }), { kind: "single", estimated: true });
+  assert.deepEqual(shortReleaseKind({ id: "tidal:1", album_type: "single" }), { kind: "single", estimated: false });
+  assert.equal(albumSearchMatch({ ...spotify, total_tracks: 0 }, { includeSingle: false, includeEp: true }), true);
+});
 
 test("cross-catalog checks normalize accents, punctuation and safe edition suffixes, not live recordings", () => {
   const saved = album(undefined, { artist: "Björk", name: "Debut", rating: 4.5, notes: "Keep this review" });
@@ -91,6 +109,149 @@ test("local mutations preserve hidden data and reviews, reject stale storage and
   full.setItem = () => { throw new Error("Quota exceeded"); };
   assert.throws(() => failing.update(saved.id, { rating: 5 }), /Quota/);
   assert.equal(failing.state.albums[0].rating, null);
+});
+test("duration reads preserve existing values and refuse a changed or removed album", () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk);
+  assert.equal(store.saveMissingDuration(saved, 120001), true);
+  assert.equal(store.durations()[saved.id], 120001);
+  assert.equal(store.saveMissingDuration(saved, 42), false);
+  assert.equal(store.durations()[saved.id], 120001);
+  store.remove([saved.id]);
+  assert.throws(() => store.saveMissingDuration(saved, 30), /cambiato/);
+});
+test("durations synchronize across devices and include legacy queue values", async () => {
+  const saved = album(), disk = local([saved]), first = createCollectionStore(disk), remote = github([saved]);
+  disk.setItem("accord-listening-queue-v1", JSON.stringify({ durations: { [saved.id]: 123000 } }));
+  const options = { chooseConflicts: () => assert.fail("Unexpected conflict"), confirm: async (preview) => {
+    assert.ok(preview.durationOutgoing.length || preview.durationIncoming.length); return true;
+  } };
+  await createCollectionSync({ storage: disk, store: first, covers: coverCache, fetch: remote.request }).sync(options);
+  const secondDisk = local([saved]), second = createCollectionStore(secondDisk);
+  await createCollectionSync({ storage: secondDisk, store: second, covers: coverCache, fetch: remote.request }).sync(options);
+  assert.equal(second.durations()[saved.id], 123000);
+  secondDisk.setItem("accord-listening-album-durations-v1", JSON.stringify({ [saved.id]: 222000 }));
+  await createCollectionSync({ storage: secondDisk, store: second, covers: coverCache, fetch: remote.request }).sync(options);
+  await createCollectionSync({ storage: disk, store: first, covers: coverCache, fetch: remote.request }).sync(options);
+  assert.equal(first.durations()[saved.id], 222000);
+});
+test("different durations require a choice and never overwrite a concurrent local change", async () => {
+  const saved = album(), disk = local([saved]);
+  disk.setItem("accord-listening-album-durations-v1", JSON.stringify({ [saved.id]: 100000 }));
+  const store = createCollectionStore(disk);
+  const remoteRow = Object.fromEntries(["id", "artist", "name", "url", "year"].map((key) => [key, saved[key]]));
+  const remote = github([saved], { durations: [{ ...remoteRow, duration_ms: 200000 }] });
+  const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+  assert.equal(await sync.sync({ chooseConflicts: async (conflicts) => {
+    assert.equal(conflicts[0].fields[0].field, "duration_ms"); return null;
+  }, confirm: () => assert.fail("Cancelled") }), false);
+  assert.equal(store.durations()[saved.id], 100000);
+  await assert.rejects(sync.sync({ chooseConflicts: async () => ({ [saved.id]: { duration_ms: "remote" } }),
+    confirm: async () => { disk.setItem("accord-listening-album-durations-v1", JSON.stringify({ [saved.id]: 300000 })); return true; } }),
+  /durate o la coda sono cambiate/);
+  assert.equal(store.durations()[saved.id], 300000);
+  assert.equal(remote.writes.length, 0);
+  await sync.sync({ chooseConflicts: async () => ({ [saved.id]: { duration_ms: "remote" } }), confirm: async () => true });
+  assert.equal(store.durations()[saved.id], 200000);
+});
+test("duration sidecar survives album removal and restoring the same edition", async () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk), remote = github([saved]);
+  store.saveMissingDuration(saved, 123000);
+  const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+  const options = { chooseConflicts: () => assert.fail("Unexpected conflict"), confirm: async () => true };
+  await sync.sync(options);
+  store.remove([saved.id]);
+  await sync.sync(options);
+  store.add(saved);
+  await sync.sync(options);
+  assert.equal(store.durations()[saved.id], 123000);
+});
+test("duration write failure leaves the local base and values unchanged", async () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk), remote = github([saved], { failPut: true });
+  store.saveMissingDuration(saved, 123000);
+  await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), /incerto/);
+  assert.equal(store.durations()[saved.id], 123000);
+  assert.equal(store.state.durationBase, undefined);
+  assert.equal(remote.writes.length, 1);
+});
+test("updated album metadata keeps the duration for the same catalog edition", async () => {
+  const saved = album(), edited = album(undefined, { name: "Corrected title", year: "2021" });
+  const disk = local([edited], [edited]), store = createCollectionStore(disk);
+  const row = Object.fromEntries(["id", "artist", "name", "url", "year"].map((key) => [key, saved[key]]));
+  const remote = github([edited], { durations: [{ ...row, duration_ms: 123000 }] });
+  await createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true });
+  assert.equal(store.durations()[saved.id], 123000);
+  const write = remote.writes.find((entry) => entry.url.includes("durations.json"));
+  assert.equal(JSON.parse(Buffer.from(write.payload.content, "base64").toString()).albums[0].name, edited.name);
+});
+test("malformed duration archives do not change collection or durations", async () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk);
+  store.saveMissingDuration(saved, 123000);
+  const remote = github([saved], { durations: [{ id: saved.id, duration_ms: -1 }] });
+  await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: () => assert.fail() }), /non valido/);
+  assert.equal(store.durations()[saved.id], 123000);
+  assert.equal(remote.writes.length, 0);
+});
+test("a local persistence failure rolls back received durations and leaves the base unchanged", async () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk), before = store.state;
+  const row = Object.fromEntries(["id", "artist", "name", "url", "year"].map((key) => [key, saved[key]]));
+  const remote = github([saved], { durations: [{ ...row, duration_ms: 123000 }] });
+  const setItem = disk.setItem;
+  disk.setItem = (key, value) => {
+    if (key === COLLECTION_KEY) throw new Error("Quota exceeded");
+    setItem(key, value);
+  };
+  await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), /Quota exceeded/);
+  assert.equal(disk.getItem("accord-listening-album-durations-v1"), null);
+  assert.equal(store.state, before);
+});
+test("collection services read complete Spotify album duration and reject an incomplete list", async () => {
+  const saved = album(), disk = storage({ "accord-spotify-client-id": "client",
+    "accord-spotify-token-client-id": "client", "accord-spotify-access-token": "token",
+    "accord-spotify-token-expires": String(Date.now() + 3600000) });
+  let bad = false, calls = 0;
+  const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (url) => {
+      calls += 1;
+      const offset = new URL(url).searchParams.get("offset");
+      if (offset) return reply({ total: 2, offset: 1, items: [{ id: "two", duration_ms: bad ? 0 : 200 }], next: null });
+      return reply({ id: saved.id, total_tracks: 2, tracks: { total: 2, offset: 0,
+        items: [{ id: "one", duration_ms: 100 }],
+        next: `https://api.spotify.com/v1/albums/${saved.id}/tracks?offset=1&limit=1` } });
+    } });
+  assert.equal(await services.albumDuration(saved), 300);
+  bad = true;
+  await assert.rejects(services.albumDuration(saved), /durate non valide/);
+  assert.equal(calls, 4);
+});
+test("collection services read the exact TIDAL and Qobuz editions", async () => {
+  const tidalDisk = storage({ "accord-music-service-v1": "tidal",
+    "accord-tidal-client-id-v1": "client",
+    "accord-tidal-token-v1": JSON.stringify({ clientId: "client", access_token: "token", expires: Date.now() + 3600000 }) });
+  const tidal = createCollectionServices({ storage: tidalDisk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (value) => {
+      const url = new URL(value);
+      if (url.pathname.endsWith("/users/me")) return reply({ data: { attributes: { country: "IT" } } });
+      assert.equal(url.searchParams.get("countryCode"), "IT");
+      if (url.pathname.endsWith("/albums/12")) return reply({ data: { type: "albums", id: "12",
+        attributes: { numberOfTracks: 1 } } });
+      return reply({ data: [{ type: "tracks", id: "1" }],
+        included: [{ type: "tracks", id: "1", attributes: { duration: "PT2M3S" } }] });
+    } });
+  assert.equal(await tidal.albumDuration(album("tidal:12")), 123000);
+  const disk = storage({ "accord-music-service-v1": "qobuz",
+    "accord-qobuz-session-v1": JSON.stringify({ appId: "app", token: "token" }) });
+  const qobuz = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (value) => {
+      const url = new URL(value);
+      assert.equal(url.searchParams.get("album_id"), "abc");
+      return reply({ id: "abc", title: "Album", artist: { name: "Artist" },
+        tracks: { total: 1, offset: 0, items: [{ id: 1, title: "Track", duration: 123 }] } });
+    } });
+  assert.equal(await qobuz.albumDuration(album("qobuz:abc")), 123000);
 });
 test("review choices remove only selected copies and preserve the keeper and pending deletion snapshot", () => {
   const a = album(undefined, { rating: 4, notes: "Keeper" }), b = album("tidal:12", { rating: 2, notes: "Other review" });
@@ -648,16 +809,16 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=5/);
+  assert.match(html, /collection-app\.mjs\?v=8/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.6/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.9/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
-  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];
+  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
   }

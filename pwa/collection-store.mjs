@@ -1,6 +1,8 @@
 import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=52";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
+const DURATIONS_KEY = "accord-listening-album-durations-v1";
+const QUEUE_KEY = "accord-listening-queue-v1";
 const albums = (records) => validateDocument({ format: "accord-album-collection", version: 4, albums: records });
 
 export function duplicateCollectionGroups(records, links = {}) {
@@ -67,8 +69,29 @@ export function createCollectionStore(storage) {
     throw new Error("Preferenze locali non leggibili. Nessun dato sovrascritto.");
   }
   const links = () => JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}");
+  function durations() {
+    const saved = JSON.parse(storage.getItem(DURATIONS_KEY) || "{}");
+    const queue = JSON.parse(storage.getItem(QUEUE_KEY) || "{}");
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)
+        || !queue || typeof queue !== "object" || Array.isArray(queue)
+        || (queue.durations !== undefined && (!queue.durations || typeof queue.durations !== "object"
+          || Array.isArray(queue.durations)))) throw new Error("Durate locali non leggibili.");
+    const result = { ...queue.durations, ...saved };
+    if (Object.values(result).some((value) => !Number.isSafeInteger(value) || value <= 0)) {
+      throw new Error("Durate locali non valide.");
+    }
+    return result;
+  }
   function assertCurrent() {
     if (storage.getItem(COLLECTION_KEY) !== serialized) throw new Error("Raccolta cambiata in un'altra scheda. Ricarica prima di continuare.");
+  }
+  function durationSnapshot() {
+    return { saved: storage.getItem(DURATIONS_KEY), queue: storage.getItem(QUEUE_KEY), values: durations() };
+  }
+  function assertDurationSnapshot(snapshot) {
+    if (storage.getItem(DURATIONS_KEY) !== snapshot.saved || storage.getItem(QUEUE_KEY) !== snapshot.queue) {
+      throw new Error("Le durate o la coda sono cambiate durante la sincronizzazione. Riprova.");
+    }
   }
   function commit(next) {
     assertCurrent();
@@ -85,7 +108,43 @@ export function createCollectionStore(storage) {
     return { ...next, albums: next.albums.filter((album) => !ids.has(album.id)), pendingRemovals: [...pending.values()] };
   }
   return {
-    get state() { return state; }, links, assertCurrent, commit,
+    get state() { return state; }, links, assertCurrent, commit, durations, durationSnapshot, assertDurationSnapshot,
+    commitSync(next, snapshot, entries) {
+      assertCurrent();
+      assertDurationSnapshot(snapshot);
+      const saved = JSON.parse(snapshot.saved || "{}");
+      for (const row of entries) saved[row.id] = row.duration_ms;
+      const value = JSON.stringify(next), durationValue = JSON.stringify(saved);
+      let durationWritten = false;
+      try {
+        if (entries.length) { storage.setItem(DURATIONS_KEY, durationValue); durationWritten = true; }
+        storage.setItem(COLLECTION_KEY, value);
+      } catch (error) {
+        if (durationWritten) {
+          try {
+            if (snapshot.saved === null) storage.removeItem(DURATIONS_KEY);
+            else storage.setItem(DURATIONS_KEY, snapshot.saved);
+          } catch (rollback) {
+            throw new Error(`Salvataggio locale incompleto: ${error.message}. Ripristino durate non riuscito: ${rollback.message}.`);
+          }
+        }
+        throw error;
+      }
+      serialized = value;
+      state = next;
+    },
+    saveMissingDuration(album, duration) {
+      assertCurrent();
+      const current = state.albums.find((item) => item.id === album.id);
+      if (!current || current.artist !== album.artist || current.name !== album.name || current.url !== album.url) {
+        throw new Error("Album cambiato durante la lettura: durata non salvata.");
+      }
+      if (!Number.isSafeInteger(duration) || duration <= 0) throw new Error("Durata non valida.");
+      if (Object.hasOwn(durations(), album.id)) return false;
+      const saved = JSON.parse(storage.getItem(DURATIONS_KEY) || "{}");
+      storage.setItem(DURATIONS_KEY, JSON.stringify({ ...saved, [album.id]: duration }));
+      return true;
+    },
     duplicate: (candidate) => findCollectionAlbum(state.albums, candidate, links()),
     groups: () => duplicateCollectionGroups(state.albums, links()),
     suggestMerge: (group) => suggestDuplicateMerge(group, state.preferences.favoriteIds || []),

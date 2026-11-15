@@ -85,6 +85,24 @@ export function acceptDurationPage(row, page) {
   return total;
 }
 
+export async function readAlbumDuration(provider, api, target, { maxReads = 200, signal } = {}) {
+  if (!["spotify", "tidal", "qobuz"].includes(provider)) throw new Error("Servizio musicale non valido.");
+  if (!Number.isSafeInteger(maxReads) || maxReads < 1) throw new Error("Limite di letture non valido.");
+  const row = { target, cursor: null, seen: [], tracks: [], total: null, pages: 0 };
+  let reads = 0;
+  const consume = () => {
+    signal?.throwIfAborted();
+    if (reads >= maxReads) throw new Error("Durata non disponibile: limite di letture raggiunto.");
+    reads += 1;
+  };
+  while (true) {
+    const page = await readCatalogPage(provider, api, row, consume);
+    signal?.throwIfAborted();
+    const duration = acceptDurationPage(row, page);
+    if (duration !== null) return { duration, total: row.total };
+  }
+}
+
 export function applyCompletion(storage, row, value) {
   const collection = stored(storage, COLLECTION, {});
   const album = collection.albums?.find((item) => item.id === row.album.id);

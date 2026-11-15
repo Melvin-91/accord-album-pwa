@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   COMPLETION_KEY, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY, createCompletionPlan,
-  continueCompletion, acceptDurationPage, applyCompletion, runCompletion, readCatalogPage, isoDurationMs,
+  continueCompletion, acceptDurationPage, applyCompletion, runCompletion, readCatalogPage, readAlbumDuration, isoDurationMs,
 } from "./music-completion.mjs";
 import { setEditionLink } from "./music-continuity.mjs";
 import { createTidalTransport } from "./tidal.mjs";
@@ -85,6 +85,21 @@ test("partial track lists are checkpointed but never published as a full duratio
   await run(storage, json(storage, COMPLETION_KEY), 1, reader);
   assert.deepEqual(calls, [null, 1]);
   assert.equal(json(storage, DURATIONS)[ID], 300);
+});
+
+test("automatic duration requires every verified page", async () => {
+  const responses = () => [
+    { id: ID, total_tracks: 2, tracks: { total: 2, offset: 0,
+      items: [{ id: "one", duration_ms: 100 }],
+      next: `https://api.spotify.com/v1/albums/${ID}/tracks?offset=1&limit=1` } },
+    { total: 2, offset: 1, items: [{ id: "two", duration_ms: 200 }], next: null },
+  ];
+  let pages = responses();
+  assert.deepEqual(await readAlbumDuration("spotify", { request: async () => pages.shift() }, ID),
+    { duration: 300, total: 2 });
+  pages = responses();
+  await assert.rejects(readAlbumDuration("spotify", { request: async () => pages.shift() }, ID, { maxReads: 1 }),
+    /limite di letture/);
 });
 
 test("wrong identity, invalid durations, missing tracks, duplicates and overflows never mutate accepted pages", () => {

@@ -2,6 +2,21 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.9 · Durate condivise
+
+Le durate si sincronizzano tra desktop e PWA insieme alla raccolta. Se due
+durate diverse sono state modificate, scegli quale mantenere.
+
+### PWA 1.29.8 · Durata album
+
+La durata viene cercata quando aggiungi un album. In Impostazioni puoi completare
+le durate mancanti della raccolta e interrompere o riprendere la lettura.
+
+### PWA 1.29.7 · Filtri ricerca album
+
+Live, singoli ed EP sono esclusi inizialmente e attivabili separatamente.
+Spotify distingue singoli ed EP con una stima basata sul numero di brani.
+
 ### PWA 1.29.6 · Filtri raccolti
 
 Ricerca e filtri della raccolta restano separati: stato e preferiti sono
@@ -15,13 +30,13 @@ più brevi. Le copertine si mostrano correttamente quando la scheda entra in
 vista. La versione desktop mantiene gli strumenti avanzati in un unico
 menu e riduce i controlli ripetuti.
 
-### PWA 1.29.4 - Copertine in raccolta
+### PWA 1.29.4 · Copertine in raccolta
 
 Le schede mostrano le copertine già sincronizzate e quelle dei nuovi album
 aggiunti dai cataloghi Spotify, TIDAL e Qobuz. Le copertine online vengono
 caricate quando servono; quelle già salvate restano disponibili offline.
 
-### PWA 1.29.3 - Unione duplicati e memoria delle rimozioni
+### PWA 1.29.3 · Unione duplicati e memoria delle rimozioni
 
 Impostazioni > Gestione della raccolta > Cerca duplicati propone di unire
 le copie: basta Conferma unione, con dettagli facoltativi. Note, generi,
@@ -35,7 +50,7 @@ Aggiornare anche il desktop per usare la stessa memoria delle rimozioni.
 In Aggiungi album l'intestazione con Chiudi resta fuori dall'area scrollabile
 ed e' utilizzabile anche durante la ricerca.
 
-### PWA 1.29.2 - Accessi persistenti e scorrimento
+### PWA 1.29.2 · Accessi persistenti e scorrimento
 
 Gli accessi Spotify, TIDAL e Qobuz rimangono salvati in questo browser
 anche dopo la chiusura dell'app. Scollega rimuove le credenziali locali;
@@ -45,7 +60,7 @@ stessa origine: scollegare i servizi sui dispositivi condivisi.
 Le finestre scorrono fino all'ultimo risultato senza trascinare la raccolta
 sottostante.
 
-### PWA 1.29.1 - Correzione della ricerca album
+### PWA 1.29.1 · Correzione della ricerca album
 
 Gli errori della ricerca sono visibili nella finestra di aggiunta, invece
 di lasciare "Ricerca in corso" con il messaggio nascosto dietro il dialogo.
@@ -54,7 +69,7 @@ un'altra scheda, di un refresh o del corpo della risposta.
 I risultati TIDAL contenenti soltanto identificativi vengono completati
 con i metadati dello stesso catalogo prima di consentire l'aggiunta.
 
-### PWA 1.29.0 - Raccolta essenziale
+### PWA 1.29.0 · Raccolta essenziale
 
 La PWA contiene soltanto raccolta album, ricerca e filtri semplici, stato,
 voto, preferiti locali, aggiunta/rimozione e sincronizzazione GitHub.

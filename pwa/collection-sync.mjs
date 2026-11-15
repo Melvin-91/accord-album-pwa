@@ -1,5 +1,6 @@
 import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive, encodeCoverArchive,
   findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=52";
+import { validateDurationDocument, validateDurationEntries, durationDocument, mergeDurations } from "./duration-sync.mjs?v=1";
 
 const API = "https://api.github.com";
 export function githubCollectionSettings(storage) {
@@ -21,11 +22,12 @@ const hash = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 
 export function createCollectionSync({ storage, store, covers, fetch: request = globalThis.fetch }) {
-  function client() {
+  function client(assertExtra = () => {}) {
     const settings = githubCollectionSettings(storage);
     const root = `${API}/repos/${encodeURIComponent(settings.owner)}/accord-music-data`;
     function assertCurrent() {
       store.assertCurrent();
+      assertExtra();
       const current = githubCollectionSettings(storage);
       if (current.owner !== settings.owner || current.token !== settings.token) throw new Error("Collegamento GitHub cambiato: operazione interrotta.");
     }
@@ -41,7 +43,10 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           ? "Esito dell'invio GitHub incerto. Nessun invio ripetuto: rileggi con Sincronizza prima di riprovare."
           : "GitHub non raggiungibile. Nessuna modifica applicata.");
       }
-      assertCurrent();
+      try { assertCurrent(); } catch (error) {
+        if (options.method === "PUT") throw new Error(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
+        throw error;
+      }
       if (missing && response.status === 404) return null;
       if (!response.ok) throw new Error(`GitHub HTTP ${response.status}. `
         + (response.status >= 500 && options.method === "PUT" ? "Esito incerto: nessun invio ripetuto."
@@ -79,7 +84,8 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           throw new Error("Archivio rimozioni incoerente con gli album presenti. Nessun dato modificato.");
         }
       }
-      const remote = { albums, deletedAlbums, sha, branch, deletionSync, deletionHistory, covers: new Map(), coversSha: null, archive: new Uint8Array() };
+      const remote = { albums, deletedAlbums, sha, branch, deletionSync, deletionHistory, covers: new Map(), coversSha: null, archive: new Uint8Array(),
+        durations: [], durationsSha: null };
       if (withCovers) {
         const metadataResponse = await send(path("covers.bin"), {}, true);
         if (metadataResponse) {
@@ -89,6 +95,23 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           remote.archive = new Uint8Array(await (await send(path("covers.bin"), {
             headers: { Accept: "application/vnd.github.raw+json" } })).arrayBuffer());
           remote.covers = await decodeCoverArchive(remote.archive);
+        }
+        const durationsResponse = await send(path("durations.json"), {}, true);
+        if (durationsResponse) {
+          const metadata = await durationsResponse.json();
+          if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("Archivio durate non leggibile.");
+          let bytes;
+          if (metadata.encoding === "none") {
+            bytes = new Uint8Array(await (await send(path("durations.json"), {
+              headers: { Accept: "application/vnd.github.raw+json" } })).arrayBuffer());
+            const current = await (await send(path("durations.json"))).json();
+            if (current.sha !== metadata.sha) throw new Error("Le durate GitHub sono cambiate durante la lettura. Riprova.");
+          } else {
+            if (typeof metadata.content !== "string" || !metadata.content) throw new Error("Archivio durate non leggibile.");
+            bytes = Uint8Array.from(atob(metadata.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
+          }
+          remote.durations = validateDurationDocument(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+          remote.durationsSha = metadata.sha;
         }
       }
       return remote;
@@ -112,8 +135,14 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       return findCollectionAlbum(remote.albums, album, store.links());
     },
     async sync({ chooseConflicts, confirm }) {
-      const connection = client(), before = store.state, remote = await connection.read(true);
+      const durationSnapshot = store.durationSnapshot();
+      const connection = client(() => store.assertDurationSnapshot(durationSnapshot)), before = store.state, remote = await connection.read(true);
       connection.assertCurrent();
+      const durationState = before.durationBase ?? { owner: connection.settings.owner, albums: [] };
+      if (!durationState || typeof durationState !== "object" || Array.isArray(durationState)
+          || typeof durationState.owner !== "string") throw new Error("Base durate locale non valida.");
+      const durationBase = durationState.owner === connection.settings.owner ? validateDurationEntries(durationState.albums) : [];
+      if (durationBase.length && !remote.durationsSha) throw new Error("L'archivio durate non e' piu' presente su GitHub. Ripristinalo prima di sincronizzare.");
       if (before.syncOwner && before.syncOwner !== connection.settings.owner && (before.pendingRemovals.length || before.deletedAlbums.length)) {
         throw new Error("Le rimozioni pendenti appartengono al precedente collegamento GitHub. Ripristina quel proprietario e sincronizza prima di cambiarlo.");
       }
@@ -148,13 +177,35 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         merged = threeWayMerge([...base.values()], before.albums, remote.albums, choices, options);
         if (merged.conflicts.length) throw new Error("Completa tutte le scelte prima di sincronizzare.");
       }
+      const localIds = new Set(before.albums.map((row) => row.id));
+      const durationLocal = [...before.albums];
+      for (const row of merged.albums) {
+        if (localIds.has(row.id) || !Object.hasOwn(durationSnapshot.values, row.id)) continue;
+        const previous = base.get(row.id) || before.deletedAlbums.find((album) => album.id === row.id);
+        if (!previous || ["id", "url"].some((key) => previous[key] !== row[key])) {
+          throw new Error("Durata locale senza album corrispondente: verifica la raccolta prima di sincronizzare.");
+        }
+        durationLocal.push(row);
+      }
+      let durationMerge = mergeDurations(merged.albums, durationLocal, durationSnapshot.values, remote.durations, durationBase);
+      if (durationMerge.conflicts.length) {
+        const choices = await chooseConflicts(durationMerge.conflicts);
+        if (!choices) return false;
+        durationMerge = mergeDurations(merged.albums, durationLocal, durationSnapshot.values, remote.durations, durationBase, choices);
+        if (durationMerge.conflicts.length) throw new Error("Completa tutte le scelte prima di sincronizzare.");
+      }
       const outgoing = !equalAlbums(remote.albums, merged.albums), incoming = !equalAlbums(before.albums, merged.albums);
       const retained = new Set(merged.albums.map((album) => album.id));
+      const remoteDurations = new Map(remote.durations.map((row) => [row.id, row]));
+      const durationOutgoing = durationMerge.entries.filter((row) => JSON.stringify(remoteDurations.get(row.id)) !== JSON.stringify(row));
+      const durationIncoming = durationMerge.entries.filter((row) => retained.has(row.id)
+        && durationSnapshot.values[row.id] !== row.duration_ms);
       for (const album of base.values()) if (!retained.has(album.id) && !deleted.has(album.id)) deleted.set(album.id, album);
       for (const id of retained) deleted.delete(id);
       const deletedAlbums = [...deleted.values()].sort((a, b) => a.id.localeCompare(b.id));
       const deletionsChanged = !equalAlbums(remote.deletedAlbums, deletedAlbums);
-      if ((outgoing || incoming || deletionsChanged || !remote.deletionSync || !remote.deletionHistory) && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums })) return false;
+      if ((outgoing || incoming || durationOutgoing.length || durationIncoming.length || deletionsChanged || !remote.deletionSync || !remote.deletionHistory)
+          && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums, durationOutgoing, durationIncoming })) return false;
       connection.assertCurrent();
       if (store.state !== before) throw new Error("Raccolta cambiata durante l'anteprima. Riapri Sincronizza.");
       const selected = new Map();
@@ -168,7 +219,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       for (const [id, data] of selected) await covers.put(id, data);
       const archive = await encodeCoverArchive(selected);
       await decodeCoverArchive(archive);
-      let coversWritten = false, albumsWritten = false;
+      let coversWritten = false, albumsWritten = false, durationsWritten = false;
       try {
         connection.assertCurrent();
         if ((selected.size || remote.archive.length) && (archive.length !== remote.archive.length
@@ -181,12 +232,19 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           await connection.write("albums.json", new TextEncoder().encode(JSON.stringify(document, null, 2)), remote.sha, remote.branch);
           albumsWritten = true;
         }
+        if (durationOutgoing.length) {
+          await connection.write("durations.json", new TextEncoder().encode(JSON.stringify(durationDocument(durationMerge.entries), null, 2)),
+            remote.durationsSha, remote.branch);
+          durationsWritten = true;
+        }
         connection.assertCurrent();
-        store.commit({ ...before, albums: merged.albums, base: merged.albums, pendingRemovals: [],
+        store.commitSync({ ...before, albums: merged.albums, base: merged.albums, pendingRemovals: [],
           deletedAlbums, restoredAlbumIds: [],
-          syncOwner: connection.settings.owner, lastSync: new Date().toISOString() });
+          durationBase: { owner: connection.settings.owner, albums: durationMerge.entries },
+          syncOwner: connection.settings.owner, lastSync: new Date().toISOString() }, durationSnapshot,
+        durationMerge.entries.filter((row) => retained.has(row.id)));
       } catch (error) {
-        throw new Error(`${error.message}${coversWritten || albumsWritten
+        throw new Error(`${error.message}${coversWritten || albumsWritten || durationsWritten
           ? " Invio parziale gia' completato su GitHub; copia locale non confermata. Rileggi con Sincronizza." : ""}`);
       }
       return true;
