@@ -102,8 +102,8 @@ import {
   selectionVisibility, appendListeningActions, reviewManualGenres, artistGenreSuggestions,
 } from "./music-qol.mjs?v=11";
 import { readCatalogPage, COMPLETION_EVIDENCE_KEY, COMPLETION_PROVENANCE_KEY }
-  from "./music-completion.mjs?v=15";
-import { openMusicCompletion } from "./music-completion-ui.mjs?v=15";
+  from "./music-completion.mjs?v=16";
+import { openMusicCompletion } from "./music-completion-ui.mjs?v=16";
 import { initializeTidalUI } from "./tidal-ui.mjs?v=37";
 import { initializeQobuzUI } from "./qobuz-ui.mjs?v=31";
 import { qobuzAlbumId } from "./qobuz.mjs?v=11";

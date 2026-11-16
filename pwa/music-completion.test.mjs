@@ -219,7 +219,7 @@ test("TIDAL metadata and tracks are independently budgeted and do not hydrate hi
   setEditionLink(storage, album(), "tidal", { id: "tidal:42", name: "Chosen" });
   const api = { completionPage: async (path) => {
     calls.push(path);
-    return calls.length === 1 ? { data: { type: "albums", id: "42", attributes: { numberOfTracks: 1 } } }
+    return calls.length === 1 ? { data: { type: "albums", id: "42", attributes: { numberOfItems: 1 } } }
       : { data: [{ type: "tracks", id: "7" }], included: [{ type: "tracks", id: "7", attributes: { duration: "PT1M2.003S" } }] };
   } };
   const reader = (row, consume) => readCatalogPage("tidal", api, row, consume);
@@ -227,6 +227,26 @@ test("TIDAL metadata and tracks are independently budgeted and do not hydrate hi
   assert.equal(calls.length, 1); assert.equal(storage.getItem(DURATIONS), null);
   await run(storage, json(storage, COMPLETION_KEY), 1, reader);
   assert.equal(calls.length, 2); assert.equal(json(storage, DURATIONS)[ID], 62003);
+});
+
+test("TIDAL numberOfItems requires every track and valid metadata", async () => {
+  const metadata = { data: { type: "albums", id: "54460298", attributes: { numberOfItems: 2 } } };
+  const first = { data: [{ type: "tracks", id: "1" }],
+    included: [{ type: "tracks", id: "1", attributes: { duration: "PT1M" } }],
+    links: { next: "/albums/54460298/relationships/items?offset=1" } };
+  const last = { data: [{ type: "tracks", id: "2" }],
+    included: [{ type: "tracks", id: "2", attributes: { duration: "PT2M" } }] };
+  let pages = [metadata, first, last];
+  const api = { completionPage: async () => pages.shift() };
+  assert.deepEqual(await readAlbumDuration("tidal", api, "tidal:54460298"), { duration: 180000, total: 2 });
+  pages = [metadata, { ...first, links: {} }];
+  await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /non completo/);
+  for (const value of [null, 0, true, "2"]) {
+    pages = [{ data: { type: "albums", id: "54460298", attributes: { numberOfItems: value } } }];
+    await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /conteggio/i);
+  }
+  pages = [metadata, { data: [{ type: "videos", id: "1" }] }];
+  await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /diversi dai brani/);
 });
 
 test("Qobuz native identities and millisecond conversion retain leading zeroes", async () => {
@@ -323,7 +343,7 @@ test("actual TIDAL cache hits are free and retries cannot exceed the declared HT
     fetch: async (url) => {
       calls += 1;
       if (String(url).endsWith("/albums/42")) return new Response(JSON.stringify({
-        data: { type: "albums", id: "42", attributes: { numberOfTracks: 1 } },
+        data: { type: "albums", id: "42", attributes: { numberOfItems: 1 } },
       }), { headers: { "Cache-Control": "max-age=300" } });
       if (calls === 2) return new Response("{}", { status: 503 });
       return new Response(JSON.stringify({ data: [{ type: "tracks", id: "7", attributes: { duration: "PT3S" } }] }));

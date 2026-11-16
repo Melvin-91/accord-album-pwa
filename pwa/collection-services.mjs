@@ -3,7 +3,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
-import { readAlbumDuration } from "./music-completion.mjs?v=2";
+import { readAlbumDuration } from "./music-completion.mjs?v=3";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";

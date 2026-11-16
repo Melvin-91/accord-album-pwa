@@ -2,6 +2,11 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.10 · Durate TIDAL
+
+Il recupero della durata usa il conteggio degli elementi fornito da TIDAL e
+salva il totale solo dopo aver verificato tutti i brani.
+
 ### PWA 1.29.9 · Durate condivise
 
 Le durate si sincronizzano tra desktop e PWA insieme alla raccolta. Se due

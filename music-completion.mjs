@@ -250,10 +250,10 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
   if (cursor === null) {
     const document = await api.completionPage(`albums/${number}`, countHttp ? consume : undefined);
     if (document.data?.type !== "albums" || String(document.data.id) !== number
-        || !Number.isSafeInteger(document.data.attributes?.numberOfTracks) || document.data.attributes.numberOfTracks <= 0) {
+        || !Number.isSafeInteger(document.data.attributes?.numberOfItems) || document.data.attributes.numberOfItems <= 0) {
       throw new Error("Identita' o conteggio brani TIDAL non confermati.");
     }
-    row.total = document.data.attributes.numberOfTracks;
+    row.total = document.data.attributes.numberOfItems;
     row.cursor = `albums/${number}/relationships/items?include=items`;
     return readCatalogPage(provider, api, row, consume, countHttp);
   }

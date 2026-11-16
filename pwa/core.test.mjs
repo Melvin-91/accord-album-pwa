@@ -1893,16 +1893,16 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=8", "collection.css?v=4"]) {
+  for (const file of ["collection-app.mjs?v=9", "collection.css?v=4"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
   for (const file of ["core.mjs?v=52", "collection-store.mjs?v=6", "collection-sync.mjs?v=4",
-    "music-app-links.mjs?v=4", "collection-services.mjs?v=6", "music-suggestion-filters.mjs?v=4"]) {
+    "music-app-links.mjs?v=4", "collection-services.mjs?v=7", "music-suggestion-filters.mjs?v=4"]) {
     assert.ok(active.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["music-completion.mjs?v=2", "music-continuity.mjs?v=13", "ui.mjs?v=25", "duration-sync.mjs?v=1"]) {
+  for (const file of ["music-completion.mjs?v=3", "music-continuity.mjs?v=13", "ui.mjs?v=25", "duration-sync.mjs?v=1"]) {
     assert.ok(sw.includes(file));
   }
   assert.doesNotMatch(sw, /playlist-ui\.mjs|suggestions-ui\.mjs|music-completion-ui\.mjs/);
