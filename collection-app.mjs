@@ -49,7 +49,7 @@ async function services() {
   return servicesPromise;
 }
 function disable() {
-  document.querySelectorAll("header button, #openAdd, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
+  document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   $("collection").setAttribute("aria-busy", String(busy));
   $("cancelCatalogSearch").hidden = !catalogAbort;
@@ -241,8 +241,9 @@ function albumCard(album, favorite, duration) {
   const image = node("img", "", { alt: `Copertina di ${album.name}`, loading: "lazy", width: "240", height: "240",
     referrerpolicy: "no-referrer", "data-id": album.id, "data-hash": album.cover_sha256 || "" });
   artwork.append(image); queueMicrotask(() => coverObserver.observe(image));
-  const favoriteButton = node("button", favorite ? "Preferito" : "Preferito +", { type: "button",
-    class: "favorite", "aria-pressed": String(favorite), "aria-label": `Preferito: ${album.name}` });
+  const favoriteButton = node("button", "", { type: "button", "data-command-icon": "star",
+    class: "favorite", "aria-pressed": String(favorite), "aria-label": `Preferito: ${album.name}`,
+    title: favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti" });
   favoriteButton.dataset.control = "favorite";
   favoriteButton.addEventListener("click", () => {
     if (mutate(() => store.favorite(album.id))) report("Preferito salvato su questo dispositivo.");
@@ -253,6 +254,15 @@ function albumCard(album, favorite, duration) {
     class: "album-duration", "aria-label": `Durata: ${durationText(duration)}`,
   }));
   card.append(artwork, node("h2", album.name), node("p", album.artist), metadata);
+  const stateLine = node("div", "", { class: "album-state-line" });
+  stateLine.append(node("span", states[album.status]), node("span",
+    album.rating === null ? "Senza voto" : `Voto ${String(album.rating).replace(".", ",")}`));
+  card.append(stateLine);
+  const options = node("details", "", { class: "album-options", name: "collection-album" });
+  options.append(node("summary", "Gestisci album", { "data-control": "options", "data-command-icon": "settings" }));
+  options.addEventListener("toggle", () => {
+    if (options.open && options.isConnected) closeAlbumOptions(options);
+  });
   const controls = node("div", "", { class: "album-controls" });
   const statusLabel = node("label", "Ascolto"), status = node("select", "", { "data-control": "status" });
   Object.entries(states).forEach(([value, label]) => status.append(node("option", label, { value })));
@@ -263,14 +273,21 @@ function albumCard(album, favorite, duration) {
   for (let value = 0.5; value <= 5; value += 0.5) rating.append(node("option", String(value).replace(".", ","), { value }));
   rating.value = album.rating === null ? "" : String(album.rating); ratingLabel.append(rating);
   rating.addEventListener("change", () => mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null })));
-  controls.append(statusLabel, ratingLabel); card.append(controls);
-  const footer = node("div", "", { class: "card-actions" }), open = node("a", "Apri album", { rel: "noopener noreferrer" });
+  controls.append(statusLabel, ratingLabel); options.append(controls);
+  const footer = node("div", "", { class: "card-actions" }), open = node("a", "Apri", {
+    rel: "noopener noreferrer", "aria-label": `Apri album: ${album.name}` });
   configureMusicAppLink(open, album.url, { storage: localStorage,
     query: `${album.artist} ${album.name}`, report: (message) => report(message) });
   const remove = node("button", "Rimuovi", { type: "button", "data-control": "remove", class: "secondary" });
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
-  footer.append(favoriteButton, open, remove); card.append(footer);
+  options.append(remove);
+  footer.append(favoriteButton, open); card.append(footer, options);
   return card;
+}
+function closeAlbumOptions(except = null) {
+  document.querySelectorAll("#albumList .album-options[open]").forEach((details) => {
+    if (details !== except) details.open = false;
+  });
 }
 function render() {
   if (!store) return;
@@ -290,7 +307,9 @@ function render() {
     if (!old || old.signature !== signature) {
       const oldImage = old?.element.querySelector("img");
       if (oldImage) coverObserver.unobserve(oldImage);
-      cards.set(album.id, { signature, element: albumCard(album, favorites.has(album.id), durations[album.id]) });
+      const element = albumCard(album, favorites.has(album.id), durations[album.id]);
+      element.querySelector(".album-options").open = Boolean(old?.element.querySelector(".album-options")?.open);
+      cards.set(album.id, { signature, element });
     }
     return cards.get(album.id).element;
   });
@@ -427,8 +446,18 @@ try {
   render();
 } catch (error) { report(error.message, true); }
 disable();
-$("search").addEventListener("input", () => { visibleLimit = 40; render(); });
-["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => { visibleLimit = 40; render(); }));
+const dockObserver = new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--dock-height", `${Math.ceil($("collectionDock").getBoundingClientRect().height)}px`);
+});
+dockObserver.observe($("collectionDock"));
+$("collectionHome").addEventListener("click", () => {
+  window.scrollTo({ top: 0, behavior: "auto" });
+  $("collectionTitle").focus({ preventScroll: true });
+});
+$("search").addEventListener("input", () => { visibleLimit = 40; closeAlbumOptions(); render(); });
+["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
+  visibleLimit = 40; closeAlbumOptions(); render();
+}));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
 $("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());

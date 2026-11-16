@@ -2,6 +2,21 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.31.0 · Orbita
+
+Spazio musicale centrato, titoli leggeri, copertine protagoniste e dock
+sospeso con Raccolta, Aggiungi album, Sincronizza e Impostazioni.
+Il dock rimane raggiungibile mentre scorri; la pagina riserva il suo
+ingombro reale anche con testo ingrandito e durante un aggiornamento.
+Stato, voto e rimozione sono in **Gestisci album**: si apre un album alla
+volta. Una modifica conserva il pannello aperto e il focus; una nuova
+ricerca o un cambio dei filtri lo richiude. Preferiti e apertura album
+restano immediati. Le finestre modali non fanno scorrere la raccolta sotto.
+
+Non cambiano archivi, account, sincronizzazione, conferme o durata degli
+album. Testo ingrandito, contrasto alto e protezione dalla rotella restano
+disponibili. Il nuovo stile non avvia riproduzione o richieste ai servizi.
+
 ### PWA 1.30.0 · Notte, icone e durate audio
 
 Nuovo stile Notte: blu carbone e rame, copertine piu' ampie su desktop,

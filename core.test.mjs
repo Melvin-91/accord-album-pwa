@@ -1893,7 +1893,7 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=12", "collection.css?v=5"]) {
+  for (const file of ["collection-app.mjs?v=13", "collection.css?v=6"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }

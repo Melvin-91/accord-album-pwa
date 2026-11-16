@@ -553,19 +553,19 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   assert.match(css, /min-width: 0/);
-  assert.match(html, /v1\.30\.0/); assert.match(sw, /v1\.30\.0/);
+  assert.match(html, /v1\.31\.0/); assert.match(sw, /v1\.31\.0/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
-  assert.match(sw, /collection-app\.mjs\?v=12/); assert.match(sw, /collection\.css\?v=5/);
+  assert.match(sw, /collection-app\.mjs\?v=13/); assert.match(sw, /collection\.css\?v=6/);
   assert.match(sw, /tidal\.mjs\?v=16/); assert.doesNotMatch(sw, /tidal-ui\.mjs/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v1\.30\.0/); assert.match(mirrorWorker, /v1\.30\.0/);
+    assert.match(mirrorHtml, /v1\.31\.0/); assert.match(mirrorWorker, /v1\.31\.0/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}malt_metal.ico"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.doesNotMatch(mirrorHtml, /streaming-qobuz/);
-    for (const file of ["collection-app.mjs?v=12", "collection.css?v=5", "command-icons.mjs?v=1", "core.mjs?v=52", "core.mjs?v=53", "tidal.mjs?v=16",
+    for (const file of ["collection-app.mjs?v=13", "collection.css?v=6", "command-icons.mjs?v=1", "core.mjs?v=52", "core.mjs?v=53", "tidal.mjs?v=16",
       "qobuz.mjs?v=12", "music-app-links.mjs?v=4", "service-requests.mjs?v=4",
       "collection-store.mjs?v=6", "collection-sync.mjs?v=4", "duration-sync.mjs?v=1", "collection-services.mjs?v=9", "music-suggestion-filters.mjs?v=4",
       "music-completion.mjs?v=4", "music-continuity.mjs?v=13", "ui.mjs?v=25"]) {
