@@ -1,4 +1,4 @@
-import { createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=52";
+import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=53";
 import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
@@ -30,7 +30,8 @@ function tidalCoverUrl(value) {
 }
 const random = (length) => base64url(crypto.getRandomValues(new Uint8Array(length)));
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-export function createCollectionServices({ storage, session: tabSession, pageUrl, fetch: request = globalThis.fetch }) {
+export function createCollectionServices({ storage, session: tabSession, pageUrl, fetch: request = globalThis.fetch,
+  spotifyTiming = {} }) {
   for (const key of SAVED_ACCESS) {
     const previous = tabSession.getItem(key);
     if (previous !== null) {
@@ -57,7 +58,8 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     revision: accountRevision, lock });
   const tidalAuth = createTidalAuth({ session, transport: tidal, scopes: "user.read search.read",
     revision: accountRevision });
-  const spotify = createSpotifyTransport({ storage, fetch: request, lock });
+  const spotify = createSpotifyTransport({ storage, fetch: request, lock, ...spotifyTiming });
+  const spotifyReader = createSpotifyJsonReader();
   const coverUrls = new Map(), releaseMetadata = new Map();
   function tidalClientId() {
     let id = (storage.getItem(TIDAL_CLIENT) || "").trim();
@@ -76,6 +78,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     return { clientId, redirectUri };
   }
   function clearSpotify() {
+    spotifyReader.clear();
     SPOTIFY_KEYS.forEach((key) => session.removeItem(`accord-spotify-${key}`));
     ["oauth-state", "code-verifier", "oauth-redirect", "oauth-at", "oauth-client"]
       .forEach((key) => session.removeItem(`accord-spotify-${key}`));
@@ -113,12 +116,17 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     }
     return abortable(spotifyRefreshing, signal);
   }
-  async function spotifyRead(path, token, signal) {
-    const response = await spotify.fetch(`https://api.spotify.com/v1/${path}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-      credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal }, true);
-    if (!response.ok) throw new Error(`Spotify HTTP ${response.status}. Verifica l'accesso nelle impostazioni.`);
-    return abortable(response.json(), signal);
+  async function spotifyRead(path, token, signal, duration = false) {
+    const url = `https://api.spotify.com/v1/${path}`;
+    return abortable(spotifyReader.read(url, token, async (etag) => {
+      const response = await spotify.fetch(url, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json", ...(etag ? { "If-None-Match": etag } : {}) },
+        credentials: "omit", redirect: "error", referrerPolicy: "no-referrer", signal }, true, null, { duration });
+      if (!response.ok && response.status !== 304) {
+        throw new Error(`Spotify HTTP ${response.status}. Verifica l'accesso nelle impostazioni.`);
+      }
+      return response;
+    }), signal);
   }
   function qobuz(signal) {
     const value = JSON.parse(session.getItem(QOBUZ_SESSION) || "null");
@@ -308,7 +316,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         : provider === "qobuz" ? /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
           : /^[A-Za-z0-9]{22}$/.test(album.id);
       if (!matches) throw new Error("Album non disponibile nel servizio selezionato.");
-      const timeout = AbortSignal.timeout(90_000);
+      const timeout = AbortSignal.timeout(provider === "spotify" ? 1_800_000 : 90_000);
       const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
       const guard = () => {
         signal.throwIfAborted();
@@ -320,7 +328,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         api = qobuz(signal);
       } else if (provider === "spotify") {
         const token = await spotifyAccess(signal);
-        api = { request: async (path) => { guard(); const result = await spotifyRead(path, token, signal); guard(); return result; } };
+        api = { request: async (path) => { guard(); const result = await spotifyRead(path, token, signal, true); guard(); return result; } };
       } else {
         const token = await tidalAuth.access(tidalClientId(), { signal });
         const profile = await tidal.request("users/me", token, { signal });

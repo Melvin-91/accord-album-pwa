@@ -212,20 +212,40 @@ test("collection services read complete Spotify album duration and reject an inc
   const saved = album(), disk = storage({ "accord-spotify-client-id": "client",
     "accord-spotify-token-client-id": "client", "accord-spotify-access-token": "token",
     "accord-spotify-token-expires": String(Date.now() + 3600000) });
-  let bad = false, calls = 0;
+  let bad = false, calls = 0, clock = Date.now();
   const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    spotifyTiming: { now: () => clock, wait: async (delay) => { clock += delay; } },
     fetch: async (url) => {
       calls += 1;
       const offset = new URL(url).searchParams.get("offset");
-      if (offset) return reply({ total: 2, offset: 1, items: [{ id: "two", duration_ms: bad ? 0 : 200 }], next: null });
-      return reply({ id: saved.id, total_tracks: 2, tracks: { total: 2, offset: 0,
+      if (offset) return new Response(JSON.stringify({ total: 2, offset: 1, items: [{ id: "two", duration_ms: bad ? 0 : 200 }], next: null }),
+        { headers: { "Cache-Control": "no-store" } });
+      return new Response(JSON.stringify({ id: saved.id, total_tracks: 2, tracks: { total: 2, offset: 0,
         items: [{ id: "one", duration_ms: 100 }],
-        next: `https://api.spotify.com/v1/albums/${saved.id}/tracks?offset=1&limit=1` } });
+        next: `https://api.spotify.com/v1/albums/${saved.id}/tracks?offset=1&limit=1` } }),
+        { headers: { "Cache-Control": "no-store" } });
     } });
   assert.equal(await services.albumDuration(saved), 300);
   bad = true;
   await assert.rejects(services.albumDuration(saved), /durate non valide/);
   assert.equal(calls, 4);
+});
+test("Spotify duration reuses the full album response fetched from an album link", async () => {
+  const saved = album(), disk = storage({ "accord-music-service-v1": "spotify",
+    "accord-spotify-client-id": "client", "accord-spotify-token-client-id": "client",
+    "accord-spotify-access-token": "token", "accord-spotify-token-expires": String(Date.now() + 3600000) });
+  let calls = 0, clock = Date.now();
+  const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    spotifyTiming: { now: () => clock, wait: async (delay) => { clock += delay; } },
+    fetch: async () => {
+      calls += 1;
+      return reply({ id: saved.id, name: saved.name, album_type: "album", artists: [{ name: saved.artist }],
+        release_date: "1993-01-01", external_urls: { spotify: saved.url }, total_tracks: 1,
+        tracks: { total: 1, offset: 0, items: [{ id: "track", duration_ms: 123000 }], next: null } });
+    } });
+  assert.equal((await services.search(saved.url))[0].id, saved.id);
+  assert.equal(await services.albumDuration(saved), 123000);
+  assert.equal(calls, 1);
 });
 test("collection services read the exact TIDAL and Qobuz editions", async () => {
   const tidalDisk = storage({ "accord-music-service-v1": "tidal",
@@ -809,12 +829,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=9/);
+  assert.match(html, /collection-app\.mjs\?v=10/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.10/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.11/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #c3b0ff/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);

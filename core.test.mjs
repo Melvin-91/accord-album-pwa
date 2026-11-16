@@ -1893,18 +1893,19 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=9", "collection.css?v=4"]) {
+  for (const file of ["collection-app.mjs?v=10", "collection.css?v=4"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
   for (const file of ["core.mjs?v=52", "collection-store.mjs?v=6", "collection-sync.mjs?v=4",
-    "music-app-links.mjs?v=4", "collection-services.mjs?v=7", "music-suggestion-filters.mjs?v=4"]) {
+    "music-app-links.mjs?v=4", "collection-services.mjs?v=8", "music-suggestion-filters.mjs?v=4"]) {
     assert.ok(active.includes(file));
     assert.ok(sw.includes(file));
   }
   for (const file of ["music-completion.mjs?v=3", "music-continuity.mjs?v=13", "ui.mjs?v=25", "duration-sync.mjs?v=1"]) {
     assert.ok(sw.includes(file));
   }
+  assert.ok(sw.includes("core.mjs?v=53"));
   assert.doesNotMatch(sw, /playlist-ui\.mjs|suggestions-ui\.mjs|music-completion-ui\.mjs/);
   assert.match(html, /<dialog id="duplicatesDialog" aria-labelledby="duplicatesTitle">/);
   assert.match(css, /max-height: calc\(100dvh - 40px\)/);
@@ -2309,6 +2310,22 @@ const spotifyHttpResponse = (status, retryAfter, error = {}) => ({
   status,
   headers: new Headers(retryAfter === undefined ? {} : { "Retry-After": retryAfter }),
   clone: () => ({ json: async () => ({ error }) }),
+});
+
+test("Spotify duration reads use shared slower pacing and stop on the first 429", async () => {
+  const statuses = [200, 200, 429, 200];
+  const fixture = spotifyTransportFixture(() => spotifyHttpResponse(statuses.shift(), "2"));
+  const second = createSpotifyTransport(fixture.options);
+  const duration = { duration: true };
+  await fixture.transport.fetch("ordinary", {}, true);
+  await second.fetch("duration-one", {}, true, null, duration);
+  await assert.rejects(fixture.transport.fetch("duration-two", {}, true, null, duration), /limite/i);
+  await assert.rejects(second.fetch("duration-three", {}, true, null, duration), /limite/i);
+  assert.equal(fixture.calls.length, 3);
+  await fixture.options.wait(3000);
+  await second.fetch("duration-three", {}, true, null, duration);
+  assert.deepEqual(fixture.calls.map((call) => call.time - fixture.calls[0].time), [0, 15000, 30000, 60000]);
+  assert.equal(fixture.values.get("accord-spotify-duration-interval-v1"), "30000");
 });
 
 test("Spotify OAuth 429 publishes a cooldown consumed by catalog reads and token exchanges", async () => {

@@ -410,6 +410,7 @@ export function createSpotifyTransport({
 } = {}) {
   const cooldownKey = "accord-spotify-rate-limit-until-v1";
   const requestAtKey = "accord-spotify-request-at-v1";
+  const durationIntervalKey = "accord-spotify-duration-interval-v1";
   const requestInterval = 3000;
   const maxRetries = 2;
   const maxWait = 30_000;
@@ -439,7 +440,16 @@ export function createSpotifyTransport({
     return Number.isFinite(date) ? Math.max(1000, date - now()) : 5000;
   };
   const transientDelay = (retry) => 500 * (2 ** retry) + Math.floor(random() * 250);
-  const waitForSlot = async (retryRead, signal) => {
+  const durationInterval = () => {
+    const saved = storage.getItem(durationIntervalKey);
+    if (saved === null) return 15_000;
+    const value = Number(saved);
+    if (!saved.trim() || !Number.isFinite(value) || value < 15_000 || value > 120_000) {
+      throw new Error("Intervallo durate Spotify salvato non valido.");
+    }
+    return value;
+  };
+  const waitForSlot = async (retryRead, signal, duration) => {
     while (true) {
       await waitForCooldown(retryRead, signal);
       const saved = storage.getItem(requestAtKey);
@@ -447,20 +457,21 @@ export function createSpotifyTransport({
         throw new Error("Configurazione intervallo Spotify non valida: rimuovi la chiave accord-spotify-request-at-v1 dai dati del sito e riprova.");
       }
       const previous = saved === null ? NaN : Number(saved);
-      const remaining = Number.isFinite(previous) ? previous + requestInterval - now() : 0;
+      const interval = duration ? durationInterval() : requestInterval;
+      const remaining = Number.isFinite(previous) ? previous + interval - now() : 0;
       if (remaining <= 0) return;
       await abortable(wait(remaining), signal);
     }
   };
   return {
-    async fetch(url, options, retryRead = false, budget = null) {
+    async fetch(url, options, retryRead = false, budget = null, { duration = false } = {}) {
       const signal = options.signal;
       const queued = queue.then(() => lock("accord-spotify-api", async () => {
         let rateRetries = 0;
         let transientRetries = 0;
         while (true) {
           signal?.throwIfAborted();
-          await waitForSlot(retryRead, signal);
+          await waitForSlot(retryRead && !duration, signal, duration);
           budget?.attempt();
           storage.setItem(requestAtKey, String(now()));
           let response;
@@ -475,6 +486,7 @@ export function createSpotifyTransport({
           if (response.status === 429) {
             const delay = retryAfter(response);
             storage.setItem(cooldownKey, String(Math.max(cooldown(), now() + delay)));
+            if (duration) storage.setItem(durationIntervalKey, String(Math.min(120_000, durationInterval() * 2)));
             let quotaExceeded = false;
             try {
               const error = (await abortable(response.clone().json(), signal)).error || {};
@@ -484,7 +496,7 @@ export function createSpotifyTransport({
               signal?.throwIfAborted();
               // Some Accounts responses have no JSON error body.
             }
-            if (retryRead && rateRetries < maxRetries && delay <= maxWait && !quotaExceeded) {
+            if (retryRead && !duration && rateRetries < maxRetries && delay <= maxWait && !quotaExceeded) {
               rateRetries += 1;
               await abortable(wait(delay), signal);
               continue;

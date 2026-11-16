@@ -2,6 +2,11 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.29.11 · Durate Spotify
+
+Le letture delle durate Spotify sono distanziate e si fermano al primo limite;
+le risposte album recenti vengono riutilizzate quando possibile.
+
 ### PWA 1.29.10 · Durate TIDAL
 
 Il recupero della durata usa il conteggio degli elementi fornito da TIDAL e
