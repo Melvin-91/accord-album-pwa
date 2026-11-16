@@ -59,8 +59,10 @@ export function continueCompletion(previous, proposed) {
 
 export function acceptDurationPage(row, page) {
   if (page.id !== row.target) throw new Error("Il catalogo ha restituito un'edizione diversa.");
+  const videos = page.videos || [];
   if (!Number.isSafeInteger(page.total) || page.total <= 0 || page.total > 10000
-      || !Array.isArray(page.tracks) || !page.tracks.length || row.total !== null && row.total !== page.total) {
+      || !Array.isArray(page.tracks) || !Array.isArray(videos) || !(page.tracks.length || videos.length)
+      || row.total !== null && row.total !== page.total) {
     throw new Error("Elenco brani incompleto o conteggio instabile: nessuna durata salvata.");
   }
   const ids = new Set(row.tracks.map((track) => track.id));
@@ -73,14 +75,24 @@ export function acceptDurationPage(row, page) {
     ids.add(track.id);
     additions.push({ id: track.id, duration_ms: track.duration_ms });
   }
+  const excluded = [...(row.videos || [])];
+  for (const id of videos) {
+    if (typeof id !== "string" || !id || excluded.includes(id)) {
+      throw new Error("Video TIDAL duplicati o non validi: nessun totale parziale salvato.");
+    }
+    excluded.push(id);
+  }
   const next = page.next ?? null;
   if (next !== null && (row.seen.includes(next) || next === row.cursor)) throw new Error("Cursore del catalogo ripetuto.");
   const tracks = [...row.tracks, ...additions];
-  if (tracks.length > page.total || next === null && tracks.length !== page.total
-      || next !== null && tracks.length >= page.total) throw new Error("Elenco brani non completo o paginazione incoerente.");
+  const count = tracks.length + excluded.length;
+  if (count > page.total || next === null && count !== page.total
+      || next !== null && count >= page.total) throw new Error("Elenco brani non completo o paginazione incoerente.");
+  if (next === null && !tracks.length) throw new Error("L'album TIDAL non contiene brani audio: nessuna durata salvata.");
   const total = tracks.reduce((sum, track) => sum + track.duration_ms, 0);
   if (!Number.isSafeInteger(total)) throw new Error("Totale durata fuori intervallo.");
   Object.assign(row, { total: page.total, tracks, cursor: next, pages: row.pages + 1 });
+  if (excluded.length) row.videos = excluded;
   if (next !== null) { row.seen.push(next); return null; }
   return total;
 }
@@ -99,7 +111,7 @@ export async function readAlbumDuration(provider, api, target, { maxReads = 200,
     const page = await readCatalogPage(provider, api, row, consume);
     signal?.throwIfAborted();
     const duration = acceptDurationPage(row, page);
-    if (duration !== null) return { duration, total: row.total };
+    if (duration !== null) return { duration, total: row.tracks.length };
   }
 }
 
@@ -133,7 +145,7 @@ export function applyCompletion(storage, row, value) {
   provenance[album.id] ||= {};
   provenance[album.id][row.category] = { source: row.source, target: row.target,
     identity: identity(row.album), updated: new Date().toISOString(),
-    complete_tracks: row.category === "duration" ? row.total : null };
+    complete_tracks: row.category === "duration" ? row.tracks.length : null };
   related[COMPLETION_PROVENANCE_KEY] = provenance;
   commitLocalRestore(storage, COLLECTION, {}, collection, related,
     `Completamento locale: ${COMPLETION_CATEGORIES[row.category]}`);
@@ -179,7 +191,8 @@ export async function runCompletion({ storage, plan, limit, read, guard = () => 
         Object.assign(row, { status, detail: status === "completed" ? "Dato mancante completato."
           : status === "unavailable" ? "Nessun dato disponibile dalla fonte." : "Scelta locale conservata." });
         if (status === "completed") {
-          row.detail += row.category === "duration" ? ` ${value} ms · ${row.total} brani completi.`
+          row.detail += row.category === "duration" ? ` ${value} ms · ${row.tracks.length} brani audio completi.`
+            + (row.videos?.length ? ` ${row.videos.length} video esclusi.` : "")
             : row.category === "genres" ? ` ${value.join(", ")}.` : ` ${value.detail || ""}`;
         }
         persist();
@@ -266,16 +279,20 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
   if (!Array.isArray(document.data) || !Array.isArray(document.included || [])) throw new Error("Elenco TIDAL non valido.");
   const resources = new Map([...(document.included || []), ...document.data].filter((item) => item.attributes)
     .map((item) => [`${item.type}:${item.id}`, item]));
-  const tracks = document.data.map((item) => {
-    if (item.type !== "tracks" || !item.id) throw new Error("L'album TIDAL contiene elementi diversi dai brani.");
-    const resource = resources.get(`tracks:${item.id}`);
+  const tracks = [], videos = [];
+  for (const item of document.data) {
+    if (!["tracks", "videos"].includes(item.type) || typeof item.id !== "string" || !item.id) {
+      throw new Error("L'album TIDAL contiene un elemento non riconosciuto.");
+    }
+    const resource = resources.get(`${item.type}:${item.id}`);
     const refs = resource?.relationships?.albums?.data;
     const related = Array.isArray(refs) ? refs : refs ? [refs] : [];
     if (related.length && !related.some((album) => String(album.id) === number)) {
       throw new Error("Un brano TIDAL dichiara un'edizione diversa.");
     }
-    return { id: String(item.id), duration_ms: isoDurationMs(resource?.attributes?.duration) };
-  });
+    if (item.type === "videos") videos.push(item.id);
+    else tracks.push({ id: item.id, duration_ms: isoDurationMs(resource?.attributes?.duration) });
+  }
   let next = typeof document.links?.next === "string" ? document.links.next : document.links?.next?.href || null;
   if (next) {
     const url = new URL(next, "https://openapi.tidal.com/v2/");
@@ -285,5 +302,5 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
     }
     next = `albums/${number}/relationships/items${url.search}`;
   }
-  return { id, total: row.total, next, tracks };
+  return { id, total: row.total, next, tracks, videos };
 }

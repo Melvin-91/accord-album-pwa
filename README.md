@@ -2,6 +2,20 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.30.0 · Notte, icone e durate audio
+
+Nuovo stile Notte: blu carbone e rame, copertine piu' ampie su desktop,
+schede adattate al telefono e icone coerenti anche nei menu dinamici.
+Restano disponibili testo ingrandito, contrasto alto e movimento ridotto.
+La rotella non modifica i menu a tendina prima del clic o del focus da tastiera.
+
+Il recupero delle durate usa soltanto il servizio selezionato, senza
+passaggi automatici a Spotify. Per gli album di altri cataloghi serve
+un'edizione associata valida oppure la relativa edizione nel catalogo attivo.
+Gli album TIDAL con video vengono letti interamente: i video contano nella
+verifica della paginazione ma non nella durata audio. Elementi sconosciuti,
+duplicati o pagine mancanti continuano a impedire il salvataggio del totale.
+
 ### PWA 1.29.11 · Durate Spotify
 
 Le letture delle durate Spotify sono distanziate e si fermano al primo limite;

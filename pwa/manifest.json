@@ -11,8 +11,8 @@
     "params": { "title": "share_title", "text": "share_text", "url": "share_url" }
   },
   "display": "standalone",
-  "background_color": "#090909",
-  "theme_color": "#090909",
+  "background_color": "#15191e",
+  "theme_color": "#15191e",
   "icons": [
     {
       "src": "../assets/accord-192.png",

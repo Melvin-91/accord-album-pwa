@@ -8,6 +8,7 @@ import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs";
+import { setEditionLink } from "./music-continuity.mjs";
 globalThis.crypto ||= webcrypto;
 
 const album = (id = "A".repeat(22), changes = {}) => validateAlbum({
@@ -262,6 +263,11 @@ test("collection services read the exact TIDAL and Qobuz editions", async () => 
         included: [{ type: "tracks", id: "1", attributes: { duration: "PT2M3S" } }] });
     } });
   assert.equal(await tidal.albumDuration(album("tidal:12")), 123000);
+  assert.equal(tidal.provider, "tidal");
+  await assert.rejects(tidal.albumDuration(album()), /Album non associato a TIDAL/);
+  setEditionLink(tidalDisk, album(), "tidal", { id: "tidal:12", name: "Chosen edition" });
+  assert.equal(await tidal.albumDuration(album()), 123000);
+  assert.equal(tidal.provider, "tidal");
   const disk = storage({ "accord-music-service-v1": "qobuz",
     "accord-qobuz-session-v1": JSON.stringify({ appId: "app", token: "token" }) });
   const qobuz = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
@@ -272,6 +278,16 @@ test("collection services read the exact TIDAL and Qobuz editions", async () => 
         tracks: { total: 1, offset: 0, items: [{ id: 1, title: "Track", duration: 123 }] } });
     } });
   assert.equal(await qobuz.albumDuration(album("qobuz:abc")), 123000);
+});
+test("duration lookup never accesses Spotify when TIDAL is active without a linked edition", async () => {
+  const calls = [];
+  const services = createCollectionServices({
+    storage: storage({ "accord-music-service-v1": "tidal" }), session: storage(),
+    pageUrl: "https://example.test/pwa/", fetch: async (url) => { calls.push(url); throw new Error("Unexpected request"); },
+  });
+  await assert.rejects(services.albumDuration(album()), /Album non associato a TIDAL/);
+  assert.deepEqual(calls, []);
+  assert.equal(services.provider, "tidal");
 });
 test("review choices remove only selected copies and preserve the keeper and pending deletion snapshot", () => {
   const a = album(undefined, { rating: 4, notes: "Keeper" }), b = album("tidal:12", { rating: 2, notes: "Other review" });
@@ -829,14 +845,14 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=10/);
+  assert.match(html, /collection-app\.mjs\?v=12/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*accord-192\.png/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.29\.11/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.30\.0/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
-  assert.match(read("collection.css"), /--accent: #c3b0ff/);
+  assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {

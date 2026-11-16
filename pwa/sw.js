@@ -1,17 +1,18 @@
-const CACHE = "accord-album-pwa-v1.29.11";
+const CACHE = "accord-album-pwa-v1.30.0";
 const FILES = [
   "./",
   "./index.html",
-  "./collection.css?v=4",
+  "./collection.css?v=5",
   "./core.mjs?v=52",
   "./core.mjs?v=53",
-  "./collection-app.mjs?v=10",
+  "./collection-app.mjs?v=12",
+  "./command-icons.mjs?v=1",
   "./collection-store.mjs?v=6",
   "./collection-sync.mjs?v=4",
   "./duration-sync.mjs?v=1",
-  "./collection-services.mjs?v=8",
+  "./collection-services.mjs?v=9",
   "./music-suggestion-filters.mjs?v=4",
-  "./music-completion.mjs?v=3",
+  "./music-completion.mjs?v=4",
   "./music-continuity.mjs?v=13",
   "./ui.mjs?v=25",
   "./tidal.mjs?v=16",

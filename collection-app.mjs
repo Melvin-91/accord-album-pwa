@@ -3,6 +3,11 @@ import { createCollectionStore, createCollectionCoverCache } from "./collection-
 import { createCollectionSync } from "./collection-sync.mjs?v=4";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
+import { installCommandIcons } from "./command-icons.mjs?v=1";
+import { installSelectWheelGuard } from "./ui.mjs?v=25";
+
+installCommandIcons(document);
+installSelectWheelGuard(document);
 
 const $ = (id) => document.getElementById(id);
 const states = { queued: "Da ascoltare", listening: "In ascolto",
@@ -38,7 +43,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=8")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=9")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -242,9 +247,12 @@ function albumCard(album, favorite, duration) {
   favoriteButton.addEventListener("click", () => {
     if (mutate(() => store.favorite(album.id))) report("Preferito salvato su questo dispositivo.");
   });
-  card.append(artwork, node("h2", album.name), node("p", album.artist),
-    node("p", `${album.year || "-"} - ${providerName(album)}`, { class: "muted" }));
-  if (duration) card.append(node("p", `Durata: ${durationText(duration)}`, { class: "muted" }));
+  const metadata = node("div", "", { class: "album-metadata muted" });
+  metadata.append(node("span", `${album.year || "-"} - ${providerName(album)}`));
+  if (duration) metadata.append(node("span", durationText(duration), {
+    class: "album-duration", "aria-label": `Durata: ${durationText(duration)}`,
+  }));
+  card.append(artwork, node("h2", album.name), node("p", album.artist), metadata);
   const controls = node("div", "", { class: "album-controls" });
   const statusLabel = node("label", "Ascolto"), status = node("select", "", { "data-control": "status" });
   Object.entries(states).forEach(([value, label]) => status.append(node("option", label, { value })));
@@ -425,10 +433,10 @@ $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); 
 $("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
-  const client = await services(), original = client.provider, controller = new AbortController();
+  const client = await services(), provider = client.provider, controller = new AbortController();
   const known = store.durations();
   const missing = store.state.albums.filter((album) => !Object.hasOwn(known, album.id));
-  const failed = [], skipped = [], unavailable = new Map();
+  const failed = [], unavailable = new Map();
   let completed = 0, index = 0;
   durationAbort = controller; disable();
   try {
@@ -436,10 +444,7 @@ $("updateDurations").addEventListener("click", () => run(async () => {
       if (controller.signal.aborted) break;
       index += 1;
       $("durationStatus").textContent = `Durate: ${index} su ${missing.length} · ${album.name}`;
-      const provider = durationProvider(album);
-      if (!provider) { skipped.push(`${album.name}: servizio non identificabile`); continue; }
       if (unavailable.has(provider)) { failed.push(`${album.name}: ${unavailable.get(provider)}`); continue; }
-      client.select(provider);
       try {
         if (await updateAlbumDuration(album, client, controller.signal)) completed += 1;
       } catch (error) {
@@ -451,9 +456,9 @@ $("updateDurations").addEventListener("click", () => run(async () => {
       }
     }
   } finally {
-    client.select(original); durationAbort = null; disable();
+    durationAbort = null; disable();
   }
-  const details = [...failed, ...skipped];
+  const details = failed;
   const status = `${controller.signal.aborted ? "Interrotto. " : ""}${completed} durate aggiunte.`
     + (details.length ? ` Non disponibili (${details.length}): ${details.join("; ")}` : "");
   $("durationStatus").textContent = status;

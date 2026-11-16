@@ -245,8 +245,38 @@ test("TIDAL numberOfItems requires every track and valid metadata", async () => 
     pages = [{ data: { type: "albums", id: "54460298", attributes: { numberOfItems: value } } }];
     await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /conteggio/i);
   }
-  pages = [metadata, { data: [{ type: "videos", id: "1" }] }];
-  await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /diversi dai brani/);
+  pages = [metadata, { data: [{ type: "unknown", id: "1" }] }];
+  await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /non riconosciuto/);
+});
+
+test("TIDAL video-only final pages count toward completeness but not audio duration", async () => {
+  const metadata = { data: { type: "albums", id: "42", attributes: { numberOfItems: 2 } } };
+  const track = { type: "tracks", id: "1", attributes: { duration: "PT1M" } };
+  const video = { type: "videos", id: "1", attributes: { duration: "PT5M" } };
+  const pages = [metadata, { data: [track], links: { next: "/albums/42/relationships/items?offset=1" } },
+    { data: [video] }];
+  const storage = store(), api = { completionPage: async () => pages.shift() };
+  setEditionLink(storage, album(), "tidal", { id: "tidal:42", name: "Chosen" });
+  const reader = (row, consume) => readCatalogPage("tidal", api, row, consume);
+  await run(storage, plan(storage, ["duration"], "tidal"), 2, reader);
+  assert.equal(storage.getItem(DURATIONS), null);
+  const result = await run(storage, json(storage, COMPLETION_KEY), 1, reader);
+  assert.equal(json(storage, DURATIONS)[ID], 60000);
+  assert.match(result.rows[0].detail, /1 video esclusi/);
+  assert.equal(json(storage, COMPLETION_PROVENANCE_KEY)[ID].duration.complete_tracks, 1);
+});
+
+test("TIDAL mixed pages reject missing, duplicate and exclusively video items", async () => {
+  const metadata = { data: { type: "albums", id: "42", attributes: { numberOfItems: 3 } } };
+  const track = { type: "tracks", id: "1", attributes: { duration: "PT1M" } }, video = { type: "videos", id: "2" };
+  let pages = [metadata, { data: [video, track, { ...video, id: "3" }] }];
+  const api = { completionPage: async () => pages.shift() };
+  assert.deepEqual(await readAlbumDuration("tidal", api, "tidal:42"), { duration: 60000, total: 1 });
+  for (const [items, message] of [[[track, video], /non completo/], [[track, video, video], /duplicati/],
+    [[video, { ...video, id: "3" }, { ...video, id: "4" }], /non contiene brani/]]) {
+    pages = [metadata, { data: items }];
+    await assert.rejects(readAlbumDuration("tidal", api, "tidal:42"), message);
+  }
 });
 
 test("Qobuz native identities and millisecond conversion retain leading zeroes", async () => {

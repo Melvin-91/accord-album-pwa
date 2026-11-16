@@ -3,7 +3,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
-import { readAlbumDuration } from "./music-completion.mjs?v=3";
+import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -312,16 +312,18 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     releaseMetadata(album) { return releaseMetadata.get(album?.id) || {}; },
     async albumDuration(album, { signal: externalSignal } = {}) {
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
-      const matches = provider === "tidal" ? /^tidal:[1-9][0-9]*$/.test(album.id)
-        : provider === "qobuz" ? /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id)
-          : /^[A-Za-z0-9]{22}$/.test(album.id);
-      if (!matches) throw new Error("Album non disponibile nel servizio selezionato.");
+      const target = catalogTarget(storage, album, provider);
+      if (!target) {
+        const label = { tidal: "TIDAL", qobuz: "Qobuz", spotify: "Spotify" }[provider];
+        throw new Error(`Album non associato a ${label}: scegli la sua edizione nel catalogo. Non uso altri servizi.`);
+      }
       const timeout = AbortSignal.timeout(provider === "spotify" ? 1_800_000 : 90_000);
       const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
       const guard = () => {
         signal.throwIfAborted();
         gate.assert(provider, epoch);
         if (revision !== accountRevision()) throw new Error("Account cambiato: durata scartata.");
+        if (catalogTarget(storage, album, provider) !== target) throw new Error("Associazione edizione cambiata: durata scartata.");
       };
       let api;
       if (provider === "qobuz") {
@@ -344,7 +346,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         } };
       }
       guard();
-      const result = await readAlbumDuration(provider, api, album.id, { signal });
+      const result = await readAlbumDuration(provider, api, target, { signal });
       guard();
       return result.duration;
     },
