@@ -3,6 +3,8 @@ import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive
 import { validateDurationDocument, validateDurationEntries, durationDocument, mergeDurations } from "./duration-sync.mjs?v=1";
 
 const API = "https://api.github.com";
+class UncertainGitHubWrite extends Error {}
+
 export function githubCollectionSettings(storage) {
   const owner = (storage.getItem("accord-album-owner") || "").trim();
   const token = (storage.getItem("accord-album-token") || "").trim();
@@ -20,9 +22,16 @@ const equalAlbums = (left, right) => JSON.stringify([...left].sort((a, b) => a.i
   === JSON.stringify([...right].sort((a, b) => a.id.localeCompare(b.id)));
 const hash = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+async function gitBlobSha(bytes) {
+  const header = new TextEncoder().encode(`blob ${bytes.length}\0`);
+  const blob = new Uint8Array(header.length + bytes.length);
+  blob.set(header); blob.set(bytes, header.length);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-1", blob))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export function createCollectionSync({ storage, store, covers, fetch: request = globalThis.fetch }) {
-  function client(assertExtra = () => {}) {
+  function client(assertExtra = () => {}, progress = () => {}) {
     const settings = githubCollectionSettings(storage);
     const root = `${API}/repos/${encodeURIComponent(settings.owner)}/accord-music-data`;
     function assertCurrent() {
@@ -37,21 +46,33 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       try {
         response = await request(url, { ...options, headers: { Accept: "application/vnd.github+json",
           Authorization: `Bearer ${settings.token}`, ...options.headers },
-          signal: AbortSignal.timeout(30_000), credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" });
-      } catch {
-        throw new Error(options.method === "PUT"
-          ? "Esito dell'invio GitHub incerto. Nessun invio ripetuto: rileggi con Sincronizza prima di riprovare."
-          : "GitHub non raggiungibile. Nessuna modifica applicata.");
+          signal: AbortSignal.timeout(options.method === "PUT" ? 120_000 : 30_000),
+          cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" });
+      } catch (error) {
+        if (options.method === "PUT") {
+          throw new UncertainGitHubWrite("Esito dell'invio GitHub incerto. "
+            + (error?.name === "TimeoutError" || error?.name === "AbortError"
+              ? "Tempo massimo di invio superato (120 s)." : "Connessione interrotta o bloccata dal browser."));
+        }
+        throw new Error("GitHub non raggiungibile. Nessuna modifica applicata.");
       }
       try { assertCurrent(); } catch (error) {
         if (options.method === "PUT") throw new Error(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
         throw error;
       }
       if (missing && response.status === 404) return null;
-      if (!response.ok) throw new Error(`GitHub HTTP ${response.status}. `
-        + (response.status >= 500 && options.method === "PUT" ? "Esito incerto: nessun invio ripetuto."
-          : response.status === 409 ? "Il file e' cambiato: aggiorna l'anteprima."
+      if (!response.ok) {
+        if (response.headers.get("Retry-After") || response.headers.get("X-RateLimit-Remaining") === "0") {
+          throw new Error(`GitHub HTTP ${response.status}. Il server richiede un'attesa: riprova Sincronizza piu' tardi.`
+            + (options.method === "PUT" && response.status >= 500 ? " Esito dell'invio incerto; nessun invio ripetuto." : ""));
+        }
+        if (response.status >= 500 && options.method === "PUT") {
+          throw new UncertainGitHubWrite(`GitHub HTTP ${response.status}. Esito dell'invio incerto.`);
+        }
+        throw new Error(`GitHub HTTP ${response.status}. `
+          + (response.status === 409 ? "Il file e' cambiato: aggiorna l'anteprima."
             : "Verifica repository privato e permesso Contents del token."));
+      }
       return response;
     }
     async function read(withCovers = false) {
@@ -118,12 +139,36 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
     }
     async function write(file, bytes, sha, branch) {
       const payload = { message: `Sync Accord ${file}`, content: base64(bytes), branch, ...(sha ? { sha } : {}) };
-      const response = await send(`${root}/contents/${file}`, { method: "PUT",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      let result;
-      try { result = await response.json(); } catch { throw new Error("Invio GitHub non verificabile: rileggi con Sincronizza."); }
-      if (typeof result?.content?.sha !== "string" || typeof result?.commit?.sha !== "string") {
-        throw new Error("Conferma dell'invio GitHub incompleta: rileggi con Sincronizza.");
+      progress(`Invio GitHub: ${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB). Attesa massima: 120 s.`);
+      try {
+        const response = await send(`${root}/contents/${file}`, { method: "PUT",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        let result;
+        try { result = await response.json(); } catch {
+          throw new UncertainGitHubWrite("Risposta dell'invio GitHub non leggibile.");
+        }
+        if (typeof result?.content?.sha !== "string" || !result.content.sha
+            || typeof result?.commit?.sha !== "string" || !result.commit.sha) {
+          throw new UncertainGitHubWrite("Conferma dell'invio GitHub incompleta.");
+        }
+      } catch (error) {
+        if (!(error instanceof UncertainGitHubWrite)) throw new Error(`${file}: ${error.message}`);
+        const detail = `${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB): ${error.message}`;
+        let verified = false;
+        try {
+          progress(`Verifica in sola lettura di ${file}: nessun reinvio.`);
+          const response = await send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, {}, true);
+          if (response) {
+            const metadata = await response.json();
+            verified = metadata.type === "file" && metadata.sha === await gitBlobSha(bytes);
+          }
+          assertCurrent();
+        } catch (verificationError) {
+          throw new Error(`${detail} Verifica in sola lettura non riuscita: ${verificationError.message} `
+            + "Nessun invio ripetuto. Riprova Sincronizza; non cancellare i dati locali.");
+        }
+        if (!verified) throw new Error(`${detail} Il contenuto remoto non conferma l'invio. `
+          + "Nessun invio ripetuto. Rileggi con Sincronizza prima di riprovare; non cancellare i dati locali.");
       }
     }
     return { read, write, assertCurrent, settings };
@@ -134,9 +179,12 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       const connection = client(), remote = await connection.read();
       return findCollectionAlbum(remote.albums, album, store.links());
     },
-    async sync({ chooseConflicts, confirm }) {
-      const durationSnapshot = store.durationSnapshot();
-      const connection = client(() => store.assertDurationSnapshot(durationSnapshot)), before = store.state, remote = await connection.read(true);
+    async sync({ chooseConflicts, confirm, onProgress = () => {} }) {
+      const durationSnapshot = store.durationSnapshot(), before = store.state;
+      const connection = client(() => {
+        store.assertDurationSnapshot(durationSnapshot);
+        if (store.state !== before) throw new Error("Raccolta cambiata durante la sincronizzazione. Riapri Sincronizza.");
+      }, onProgress), remote = await connection.read(true);
       connection.assertCurrent();
       const durationState = before.durationBase ?? { owner: connection.settings.owner, albums: [] };
       if (!durationState || typeof durationState !== "object" || Array.isArray(durationState)
@@ -207,7 +255,6 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       if ((outgoing || incoming || durationOutgoing.length || durationIncoming.length || deletionsChanged || !remote.deletionSync || !remote.deletionHistory)
           && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums, durationOutgoing, durationIncoming })) return false;
       connection.assertCurrent();
-      if (store.state !== before) throw new Error("Raccolta cambiata durante l'anteprima. Riapri Sincronizza.");
       const selected = new Map();
       for (const album of merged.albums) {
         if (!album.cover_sha256) continue;

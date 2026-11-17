@@ -2,7 +2,18 @@
 
 ## Stato corrente e gerarchia
 
-### PWA 1.34.0 · Anteprime ufficiali TIDAL
+### PWA 1.34.1 · Recupero degli invii GitHub
+
+Le letture GitHub ignorano la cache HTTP. Gli upload hanno 120 secondi
+anziche' 30; lo stato indica file e dimensione. Se la risposta si perde,
+il client rilegge soltanto i metadati sullo stesso branch e confronta lo
+SHA Git del contenuto previsto. Prosegue solo se corrisponde: non ripete PUT.
+Se la verifica fallisce o il contenuto e' diverso, conserva dati e base
+locali e indica quale file richiede una nuova sincronizzazione.
+Non cancellare i dati del browser per risolvere un invio incerto.
+Non modifica il formato dei dati o il collegamento GitHub salvato.
+
+### Novita' precedenti: PWA 1.34.0 · Anteprime ufficiali TIDAL
 
 In **Gestisci album**, gli album TIDAL hanno **Anteprima TIDAL · 30 s**.
 Solo premendo il pulsante viene caricato il lettore ufficiale TIDAL; Play

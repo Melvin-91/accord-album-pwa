@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { webcrypto } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
 import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
 import { recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
@@ -104,11 +104,12 @@ test("failure saving provenance rolls back the duration without mutating album d
   assert.equal(disk.getItem(COMPLETION_PROVENANCE_KEY), null);
 });
 
-function github(records, { failPut = false, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true, durations = null } = {}) {
-  const writes = [], reads = [];
+function github(records, { failPut = false, putReply, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true, durations = null } = {}) {
+  const writes = [], reads = [], committed = new Map();
   const request = async (url, options = {}) => {
     assert.equal(options.credentials, "omit");
     assert.equal(options.redirect, "error");
+    assert.equal(options.cache, "no-store");
     if (options.method === "PUT") {
       writes.push({ url, payload: JSON.parse(options.body) });
       if (mutateBeforePut) mutateBeforePut();
@@ -122,9 +123,17 @@ function github(records, { failPut = false, mutateBeforePut, coverArchive, delet
       if (new URL(url).pathname.endsWith("/durations.json")) {
         durations = JSON.parse(Buffer.from(writes.at(-1).payload.content, "base64").toString()).albums;
       }
+      const file = new URL(url).pathname.split("/").at(-1);
+      const bytes = Buffer.from(writes.at(-1).payload.content, "base64");
+      const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+      committed.set(file, { bytes, sha });
+      if (putReply) return putReply(file);
       return reply({ content: { sha: "next" }, commit: { sha: "commit" } });
     }
     reads.push(url);
+    const stored = committed.get(new URL(url).pathname.split("/").at(-1));
+    if (stored) return options.headers.Accept.includes("raw") ? new Response(stored.bytes)
+      : reply({ type: "file", sha: stored.sha, encoding: "base64", content: stored.bytes.toString("base64") });
     if (/durations\.json/.test(url)) {
       if (durations === null) return reply({}, 404);
       return reply({ type: "file", sha: "durations", content: Buffer.from(JSON.stringify(
@@ -251,6 +260,113 @@ test("duration write failure leaves the local base and values unchanged", async 
     .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), /incerto/);
   assert.equal(store.durations()[saved.id], 123000);
   assert.equal(store.state.durationBase, undefined);
+  assert.equal(remote.writes.length, 1);
+});
+test("lost responses to cover, album and duration uploads are verified without another PUT", async (t) => {
+  const image = new Uint8Array([0xff, 0xd8, 0xff, 1]);
+  const saved = album(undefined, { cover_sha256: createHash("sha256").update(image).digest("hex") });
+  const disk = local([saved], []), store = createCollectionStore(disk), messages = [], timeouts = [];
+  store.saveMissingDuration(saved, 123000);
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", (milliseconds) => { timeouts.push(milliseconds); return timeout(milliseconds); });
+  const remote = github([], { putReply: () => { throw new DOMException("Synthetic timeout", "TimeoutError"); } });
+  const sync = createCollectionSync({ storage: disk, store,
+    covers: { get: async () => image, put: async () => {} }, fetch: remote.request });
+  const options = { chooseConflicts: () => assert.fail("Unexpected conflict"), confirm: async () => true,
+    onProgress: (message) => messages.push(message) };
+  assert.equal(await sync.sync(options), true);
+  assert.deepEqual(remote.writes.map(({ url }) => new URL(url).pathname.split("/").at(-1)),
+    ["covers.bin", "albums.json", "durations.json"]);
+  assert.deepEqual(store.state.base, [saved]);
+  assert.equal(store.state.durationBase.albums[0].duration_ms, 123000);
+  assert.equal(timeouts.filter((value) => value === 120000).length, 3);
+  assert.ok(timeouts.filter((value) => value === 30000).length > 3);
+  assert.equal(messages.filter((message) => message.includes("sola lettura")).length, 3);
+  await sync.sync(options);
+  assert.equal(remote.writes.length, 3);
+});
+test("5xx, unreadable and incomplete upload responses recover only through matching remote content", async () => {
+  for (const putReply of [() => reply({}, 503), () => new Response("{"), () => reply({ content: {} })]) {
+    const saved = album(), disk = local([saved], []), store = createCollectionStore(disk);
+    const remote = github([], { putReply });
+    const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
+    assert.equal(await sync.sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), true);
+    assert.deepEqual(store.state.base, [saved]);
+    assert.equal(remote.writes.length, 1);
+  }
+});
+test("a lost response never accepts a different remote blob or resends the upload", async () => {
+  const saved = album(), disk = local([saved], []), store = createCollectionStore(disk), before = store.state;
+  const remote = github([], { putReply: () => { throw new TypeError("Synthetic lost response"); } });
+  const request = async (url, options) => {
+    const response = await remote.request(url, options);
+    if (options.method !== "PUT" && remote.writes.length && /albums\.json/.test(url)) {
+      return reply({ ...(await response.json()), sha: "0".repeat(40) });
+    }
+    return response;
+  };
+  await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }),
+  (error) => /albums\.json/.test(error.message) && /non conferma/.test(error.message) && /Nessun invio ripetuto/.test(error.message));
+  assert.equal(store.state, before);
+  assert.equal(remote.writes.length, 1);
+});
+test("failed read-back or a changed account cannot confirm an uncertain upload", async () => {
+  for (const changeAccount of [false, true]) {
+    const saved = album(), disk = local([saved], []), store = createCollectionStore(disk), before = store.state;
+    const remote = github([], { putReply: () => {
+      if (changeAccount) disk.setItem("accord-album-owner", "different-owner");
+      throw new TypeError("Synthetic lost response");
+    } });
+    let verificationReads = 0;
+    const request = async (url, options) => {
+      if (remote.writes.length) {
+        verificationReads += 1;
+        throw new TypeError("Synthetic read-back offline");
+      }
+      return remote.request(url, options);
+    };
+    await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request })
+      .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), /Verifica in sola lettura non riuscita/);
+    assert.equal(store.state, before);
+    assert.equal(remote.writes.length, 1);
+    assert.equal(verificationReads, changeAccount ? 0 : 1);
+  }
+});
+test("conflicts and server-imposed waits never trigger recovery reads or retries", async () => {
+  for (const [status, headers] of [[409, {}], [503, { "Retry-After": "60" }], [502, { "X-RateLimit-Remaining": "0" }]]) {
+    const saved = album(), disk = local([saved], []), store = createCollectionStore(disk), before = store.state;
+    const remote = github([]), calls = [];
+    let recoveryReads = 0;
+    const request = async (url, options) => {
+      if (calls.length) { recoveryReads += 1; throw new TypeError("Unexpected recovery request"); }
+      if (options.method === "PUT") { calls.push(url); return new Response("{}", { status, headers }); }
+      return remote.request(url, options);
+    };
+    await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request })
+      .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }),
+    new RegExp(`albums\\.json: GitHub HTTP ${status}`));
+    assert.equal(store.state, before);
+    assert.equal(calls.length, 1);
+    assert.equal(recoveryReads, 0);
+  }
+});
+test("an edit in the same tab during a lost response is preserved without advancing the sync base", async () => {
+  const saved = album(), disk = local([saved], []), store = createCollectionStore(disk);
+  const remote = github([], { putReply: () => {
+    store.update(saved.id, { notes: "Changed while sending" });
+    throw new TypeError("Synthetic lost response");
+  } });
+  let recoveryReads = 0;
+  const request = async (url, options) => {
+    if (remote.writes.length) { recoveryReads += 1; throw new TypeError("Unexpected recovery request"); }
+    return remote.request(url, options);
+  };
+  await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request })
+    .sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), /Raccolta cambiata/);
+  assert.equal(store.state.albums[0].notes, "Changed while sending");
+  assert.deepEqual(store.state.base, []);
+  assert.equal(recoveryReads, 0);
   assert.equal(remote.writes.length, 1);
 });
 test("updated album metadata keeps the duration for the same catalog edition", async () => {
@@ -923,12 +1039,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=16/);
+  assert.match(html, /collection-app\.mjs\?v=17/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.34\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.34\.1/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);

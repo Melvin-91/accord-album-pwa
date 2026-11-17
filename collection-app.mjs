@@ -1,6 +1,6 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=7";
-import { createCollectionSync } from "./collection-sync.mjs?v=5";
+import { createCollectionSync } from "./collection-sync.mjs?v=6";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
@@ -546,6 +546,7 @@ async function reviewMetadata() {
 async function performSync() {
   report("Lettura della raccolta condivisa...");
   const completed = await sync.sync({
+    onProgress: (message) => report(message),
     async chooseConflicts(conflicts) {
       const content = [node("p", "Scegli quale versione mantenere per ogni modifica.")], controls = [];
       const labels = { album: "Album", status: "Stato", rating: "Voto", genres: "Generi",
