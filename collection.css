@@ -138,7 +138,9 @@ dialog form, dialog section { display: grid; gap: 16px; }
 dialog section { border-top: 1px solid var(--line); padding: 18px 0; }
 dialog section h3 { margin-bottom: 0; font-size: 1rem; font-weight: 600; }
 .dialog-actions { margin-top: 16px; }
-#catalogForm { grid-template-columns: 150px 1fr auto; align-items: end; }
+#catalogForm { grid-template-columns: minmax(0, 1fr); }
+.catalog-criteria { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.catalog-criteria > :is(.catalog-reference, small) { grid-column: 1 / -1; }
 #catalogForm fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 8px; margin: 0; min-width: 0; }
 #catalogForm legend { color: var(--muted); font-size: .75rem; padding: 0 6px; }
 #catalogResults { display: grid; gap: 12px; }
@@ -161,7 +163,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
   .topbar { padding: 16px; gap: 14px; }
   main { width: calc(100% - 32px); margin-top: 0; }
   .collection-toolbar { padding-block: 12px 28px; }
-  #catalogForm { grid-template-columns: 1fr; }
+  .catalog-criteria { grid-template-columns: minmax(0, 1fr); }
   #albumList { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 18px; }
   .album-card { gap: 8px; contain-intrinsic-size: auto 400px; }
   .album-card h2 { font-size: .9375rem; }

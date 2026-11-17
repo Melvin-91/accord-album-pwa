@@ -1,7 +1,7 @@
 import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=54";
 import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
-import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
+import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=5";
 
@@ -227,19 +227,22 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
     },
-    async search(query, { signal: externalSignal } = {}) {
+    async search(query, { signal: externalSignal, reference } = {}) {
       query = query.trim();
       if (!query || query.length > 100) throw new Error("Inserisci titolo, artista o link album (massimo 100 caratteri).");
       const timeout = AbortSignal.timeout(45_000);
       const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
       signal.throwIfAborted();
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
+      const direct = reference ?? (/^https:/i.test(query) || new RegExp(`^${provider}:`, "i").test(query)
+        || provider === "tidal" && /^\d+$/.test(query));
       let records;
       coverUrls.clear();
       releaseMetadata.clear();
       if (provider === "qobuz") {
+        const id = direct ? qobuzAlbumId(query) : null;
         const client = qobuz(signal);
-        const rows = /^https:|^qobuz:/i.test(query) ? [await client.album(query)]
+        const rows = id ? [await client.album(id)]
           : (await client.search(query)).rows;
         records = rows.map((row) => {
           if (row.coverUrl) coverUrls.set(row.album.id, qobuzCoverUrl(row.coverUrl));
@@ -247,12 +250,13 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
           return row.album;
         });
       } else if (provider === "tidal") {
+        const id = direct ? tidalAlbumId(query) : null;
         const token = await tidalAuth.access(tidalClientId(), { signal });
         const profile = await tidal.request("users/me", token, { signal }), countryCode = profile.data?.attributes?.country;
         if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
         const include = "albums.artists,albums.coverArt";
-        const path = /^https:|^tidal:|^\d+$/i.test(query)
-          ? `albums?${new URLSearchParams({ "filter[id]": tidalAlbumId(query), countryCode, include: "artists" })}`
+        const path = id
+          ? `albums?${new URLSearchParams({ "filter[id]": id, countryCode, include: "artists" })}`
           : await tidal.searchPath(query, "albums", token, { countryCode, include, signal });
         const page = await tidal.pages(path, token, { maxPages: 1, maxItems: 50, signal });
         const ids = tidalResources(page.documents).filter((item) => item.type === "albums")
@@ -275,18 +279,18 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
           throw new Error("Metadati degli album TIDAL incompleti. Nessun album aggiunto: riprova la ricerca o il link.");
         }
       } else {
-        const token = await spotifyAccess(signal);
         let id = null;
-        if (/^https:|^spotify:/i.test(query)) {
-          const uri = query.match(/^spotify:album:([A-Za-z0-9]{22})$/);
-          if (uri) id = uri[1];
-          else {
+        if (direct) {
+          const identifier = query.match(/^(?:spotify:album:)?([A-Za-z0-9]{22})$/);
+          if (identifier) id = identifier[1];
+          else if (URL.canParse(query)) {
             const url = new URL(query);
             id = url.protocol === "https:" && url.host === "open.spotify.com" && !url.username && !url.password
               ? url.pathname.match(/^\/(?:intl-[a-z]+\/)?album\/([A-Za-z0-9]{22})$/)?.[1] : null;
           }
           if (!id) throw new Error("Link album Spotify non valido.");
         }
+        const token = await spotifyAccess(signal);
         const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: query, type: "album", limit: "30" })}`, token, signal);
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
         const entries = id ? [result] : result.albums.items;

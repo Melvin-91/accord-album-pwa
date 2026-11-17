@@ -5,7 +5,7 @@ import { createHash, webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
 import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
 import { recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies } from "./collection-qol.mjs";
+  filteredCollection, collectionAnomalies, catalogSearchInput, catalogSearchFields } from "./collection-qol.mjs";
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
@@ -14,6 +14,27 @@ import { setEditionLink } from "./music-continuity.mjs";
 import { durationProvenanceText, COMPLETION_PROVENANCE_KEY } from "./music-completion.mjs";
 globalThis.crypto ||= webcrypto;
 
+test("album search keeps separate criteria, accepts either text field and recalls legacy queries", () => {
+  const empty = { artist: "", title: "", reference: "" };
+  const disk = storage();
+  rememberCatalogSearch(disk, "tidal", "Artist Title");
+  rememberCatalogSearch(disk, "tidal", "https://tidal.com/browse/album/123");
+  const separate = { ...empty, artist: " Artist ", title: "Title" };
+  const { criteria, query, reference } = catalogSearchInput("tidal", separate);
+  assert.equal(query, "Artist Title");
+  assert.equal(reference, false);
+  rememberCatalogSearch(disk, "tidal", criteria);
+  assert.deepEqual(recentCatalogSearches(disk, "tidal").map((value) => catalogSearchFields("tidal", value)),
+    [{ ...empty, artist: "Artist", title: "Title" }, { ...empty, reference: "https://tidal.com/browse/album/123" },
+      { ...empty, title: "Artist Title" }]);
+  assert.equal(catalogSearchInput("spotify", { ...empty, artist: "Artist" }).query, "Artist");
+  assert.deepEqual(catalogSearchInput("tidal", { ...empty, title: "1989" }),
+    { criteria: { ...empty, title: "1989" }, query: "1989", reference: false });
+  assert.equal(catalogSearchInput("qobuz", { ...empty, reference: "00123" }).reference, true);
+  assert.throws(() => catalogSearchInput("qobuz", { ...empty, reference: "not a link" }), /catalogo selezionato/);
+  assert.throws(() => catalogSearchInput("tidal", { ...empty, artist: "Artist", reference: "123" }), /non entrambi/);
+  assert.throws(() => catalogSearchInput("spotify", empty), /Inserisci/);
+});
 test("catalog recall is isolated, bounded and never changes collection or credentials", () => {
   const disk = storage({ [COLLECTION_KEY]: "unchanged", token: "synthetic-only" });
   for (let index = 0; index < 25; index++) rememberCatalogSearch(disk, "tidal", `Album ${index}`);
@@ -864,6 +885,18 @@ test("TIDAL collection search resolves the official search identifier and return
   assert.equal(f.calls[2].url.searchParams.get("include"), "albums.artists,albums.coverArt");
   assert.equal(f.calls[2].url.searchParams.get("countryCode"), "IT");
 });
+test("TIDAL uses exact lookup only for the reference field, not a numeric title", async () => {
+  const f = tidalSearchFixture();
+  await assert.rejects(f.services.search("https://example.test/album/12", { reference: true }), /non valido/i);
+  assert.equal(f.calls.length, 0);
+  const records = await f.services.search("https://tidal.com/browse/album/12", { reference: true });
+  assert.equal(records[0].id, "tidal:12");
+  assert.equal(f.calls.at(-1).url.pathname, "/v2/albums");
+  assert.equal(f.calls.at(-1).url.searchParams.get("filter[id]"), "12");
+  await f.services.search("1989", { reference: false });
+  assert.equal(f.calls.at(-2).url.pathname, "/v2/searchResults");
+  assert.equal(f.calls.at(-2).url.searchParams.get("filter[query]"), "1989");
+});
 test("TIDAL search hydrates identifier-only results instead of silently dropping albums", async () => {
   const f = tidalSearchFixture(({ url }) => url.pathname.endsWith("/relationships/albums")
     ? reply({ data: [{ type: "albums", id: "12" }] }) : null);
@@ -1063,12 +1096,13 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=18/);
+  assert.match(html, /collection-app\.mjs\?v=19/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.34\.2/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.0/);
+  for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);

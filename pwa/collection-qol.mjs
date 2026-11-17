@@ -1,13 +1,40 @@
 export const RECENT_CATALOG_SEARCHES = "accord-catalog-searches-v1";
 const providers = ["spotify", "tidal", "qobuz"];
 const normalized = (text) => text.normalize("NFKC").toLocaleLowerCase().trim().replace(/\s+/g, " ");
+const catalogFields = ["artist", "title", "reference"];
+const validCatalogText = (value) => typeof value === "string" && value.length <= 100;
+const validSearch = (value) => typeof value === "string"
+  ? validCatalogText(value) && Boolean(value.trim())
+  : value && typeof value === "object" && !Array.isArray(value)
+    && catalogFields.every((key) => validCatalogText(value[key]))
+    && catalogFields.some((key) => value[key].trim());
+
+export function catalogSearchFields(provider, value) {
+  if (typeof value !== "string") return value;
+  const reference = /^(?:https:|qobuz:|tidal:|spotify:)/i.test(value) || provider === "tidal" && /^\d+$/.test(value);
+  return { artist: "", title: reference ? "" : value, reference: reference ? value : "" };
+}
+
+export function catalogSearchInput(provider, fields) {
+  const criteria = Object.fromEntries(catalogFields.map((key) => [key, fields[key].trim()]));
+  const { artist, title, reference } = criteria;
+  if (!validSearch(criteria)) throw new Error("Inserisci un artista, un titolo album o un link/ID (massimo 100 caratteri per campo).");
+  if (reference && (artist || title)) throw new Error("Usa artista e titolo oppure il link/ID, non entrambi.");
+  const query = reference || [artist, title].filter(Boolean).join(" ");
+  if (query.length > 100) throw new Error("Artista e titolo insieme possono contenere al massimo 100 caratteri.");
+  if (reference && (!providers.includes(provider) ||
+      !new RegExp(`^(?:https://|${provider}:|[A-Za-z0-9]+$)`, "i").test(reference))) {
+    throw new Error("Inserisci un link album o un ID del catalogo selezionato.");
+  }
+  return { criteria, query, reference: Boolean(reference) };
+}
 
 function searches(storage) {
   const saved = JSON.parse(storage.getItem(RECENT_CATALOG_SEARCHES) || "{}");
   if (!saved || typeof saved !== "object" || Array.isArray(saved)
       || Object.entries(saved).some(([provider, values]) => !providers.includes(provider)
         || !Array.isArray(values) || values.length > 20
-        || values.some((value) => typeof value !== "string" || !value.trim() || value.length > 100))) {
+        || values.some((value) => !validSearch(value)))) {
     throw new Error("Ricerche recenti non leggibili. Nessuna ricerca avviata.");
   }
   return saved;
@@ -17,12 +44,16 @@ export function recentCatalogSearches(storage, provider) {
   return searches(storage)[provider] || [];
 }
 export function rememberCatalogSearch(storage, provider, query) {
-  if (!providers.includes(provider) || typeof query !== "string" || !query.trim() || query.trim().length > 100) {
+  if (!providers.includes(provider) || !validSearch(query)) {
     throw new Error("Criteri di ricerca non validi.");
   }
-  const saved = searches(storage), text = query.trim();
+  const saved = searches(storage), text = typeof query === "string" ? query.trim() : query;
+  const key = (value) => {
+    const fields = catalogSearchFields(provider, value);
+    return JSON.stringify([normalized(fields.artist), normalized(fields.title), fields.reference.trim()]);
+  };
   storage.setItem(RECENT_CATALOG_SEARCHES, JSON.stringify({ ...saved,
-    [provider]: [text, ...(saved[provider] || []).filter((value) => normalized(value) !== normalized(text))].slice(0, 20) }));
+    [provider]: [text, ...(saved[provider] || []).filter((value) => key(value) !== key(text))].slice(0, 20) }));
 }
 export function clearCatalogSearches(storage, provider) {
   if (!providers.includes(provider)) throw new Error("Catalogo non valido.");

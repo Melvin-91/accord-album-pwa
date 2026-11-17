@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.35.0 · Campi separati per aggiungere un album
+
+In **Aggiungi album**, compila **Artista**, **Titolo album** o entrambi.
+In alternativa, usa **Link o ID album** con il catalogo selezionato. Le
+ricerche recenti ripristinano i campi senza avviare richieste; le correzioni
+locali sono proposte separatamente per artista e titolo.
+
 ### PWA 1.34.2 · Download GitHub interrotti
 
 I download dei file GitHub non incorporati nei metadati, comprese le

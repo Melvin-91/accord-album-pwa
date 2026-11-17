@@ -9,7 +9,7 @@ import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 import { durationProvenanceText } from "./music-completion.mjs?v=5";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies } from "./collection-qol.mjs?v=1";
+  filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=2";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -45,12 +45,22 @@ function revealCollectionAlbum(id) {
     card?.scrollIntoView({ block: "center" });
   });
 }
+const catalogInputs = { artist: "catalogArtist", title: "catalogTitle", reference: "catalogReference" };
+const catalogLabels = { artist: "Artista", title: "Titolo", reference: "Link/ID" };
+const catalogFields = () => Object.fromEntries(Object.entries(catalogInputs).map(([key, id]) => [key, $(id).value]));
+
 function refreshCatalogSearches() {
   const select = $("recentCatalogSearches");
   select.replaceChildren(node("option", "Scegli una ricerca, poi premi Cerca", { value: "" }));
   $("catalogCorrections").replaceChildren();
   try {
-    recentCatalogSearches(localStorage, $("catalogService").value).forEach((value) => select.append(node("option", value, { value })));
+    const provider = $("catalogService").value;
+    recentCatalogSearches(localStorage, provider).forEach((value) => {
+      const fields = catalogSearchFields(provider, value);
+      const label = typeof value === "string" ? value : Object.keys(catalogInputs)
+        .filter((key) => fields[key]).map((key) => `${catalogLabels[key]}: ${fields[key]}`).join(" · ");
+      select.append(node("option", label, { value: JSON.stringify(fields) }));
+    });
   } catch (error) {
     const message = error.message + " Usa Svuota recenti per ripristinarle.";
     $("catalogCorrections").append(node("p", message, { role: "alert" }));
@@ -78,7 +88,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=10")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=11")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -699,18 +709,22 @@ $("openAdd").addEventListener("click", async () => {
   await run(async () => {
   const client = await services(); $("catalogService").value = client.provider;
   refreshCatalogSearches();
-  $("catalogStatus").textContent = "Cerca per titolo e artista, oppure incolla un link album.";
+  $("catalogStatus").textContent = "Scegli un catalogo e premi Cerca quando hai compilato i campi.";
     $("addDialog").showModal();
     $("catalogBody").scrollTop = 0;
   });
-  if ($("addDialog").open && !busy) $("catalogQuery").focus();
+  if ($("addDialog").open && !busy) $("catalogArtist").focus();
 });
 $("catalogService").addEventListener("change", () => run(async () => {
   (await services()).select($("catalogService").value); generation += 1; resultAlbums = []; renderResults();
   refreshCatalogSearches();
 }));
 $("recentCatalogSearches").addEventListener("change", () => {
-  if ($("recentCatalogSearches").value) $("catalogQuery").value = $("recentCatalogSearches").value;
+  const value = $("recentCatalogSearches").value;
+  if (!value) return;
+  const fields = JSON.parse(value);
+  for (const [key, id] of Object.entries(catalogInputs)) $(id).value = fields[key];
+  $("catalogCorrections").replaceChildren();
 });
 $("clearCatalogSearches").addEventListener("click", async () => {
   try { clearCatalogSearches(localStorage, $("catalogService").value); refreshCatalogSearches(); }
@@ -726,16 +740,19 @@ $("clearCatalogSearches").addEventListener("click", async () => {
 });
 $("suggestCatalogCorrections").addEventListener("click", () => {
   try {
-    const candidates = store.state.albums.flatMap((album) => [album.name, album.artist, `${album.artist} ${album.name}`]);
-    candidates.push(...recentCatalogSearches(localStorage, $("catalogService").value));
-    const proposals = catalogSearchCorrections($("catalogQuery").value, candidates);
-    $("catalogCorrections").replaceChildren();
-    for (const proposal of proposals) {
-      const use = node("button", `Usa: ${proposal}`, { type: "button", class: "secondary" });
-      use.addEventListener("click", () => { $("catalogQuery").value = proposal; $("catalogCorrections").replaceChildren(); });
-      $("catalogCorrections").append(use);
+    const provider = $("catalogService").value, output = $("catalogCorrections");
+    const recent = recentCatalogSearches(localStorage, provider).map((value) => catalogSearchFields(provider, value));
+    output.replaceChildren();
+    for (const [key, albumField] of [["artist", "artist"], ["title", "name"]]) {
+      const input = $(catalogInputs[key]);
+      const candidates = [...store.state.albums.map((album) => album[albumField]), ...recent.map((row) => row[key])];
+      for (const proposal of catalogSearchCorrections(input.value, candidates)) {
+        const use = node("button", `${catalogLabels[key]}: ${proposal}`, { type: "button", class: "secondary" });
+        use.addEventListener("click", () => { input.value = proposal; output.replaceChildren(); });
+        output.append(use);
+      }
     }
-    if (!proposals.length) $("catalogCorrections").append(node("p", "Nessuna correzione locale affidabile."));
+    if (!output.childElementCount) output.append(node("p", "Nessuna correzione locale affidabile."));
   } catch (error) { report(error.message, true); }
 });
 $("compareCatalogEditions").addEventListener("click", () => {
@@ -751,13 +768,14 @@ $("catalogForm").addEventListener("submit", (event) => {
   run(async () => {
     const client = await services(), current = ++generation;
     if (!$("addDialog").open) return;
-    rememberCatalogSearch(localStorage, $("catalogService").value, $("catalogQuery").value);
+    const { criteria, query, reference } = catalogSearchInput(client.provider, catalogFields());
+    rememberCatalogSearch(localStorage, client.provider, criteria);
     refreshCatalogSearches();
     const controller = new AbortController();
     catalogAbort = controller; resultAlbums = []; renderResults(); disable();
     report("Ricerca in corso (massimo 45 secondi). Puoi annullarla.");
     try {
-      const albums = await client.search($("catalogQuery").value, { signal: controller.signal });
+      const albums = await client.search(query, { signal: controller.signal, reference });
       if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
       resultAlbums = albums.map(validateAlbum);
       resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
