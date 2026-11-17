@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
 import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
+import { recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
+  filteredCollection, collectionAnomalies } from "./collection-qol.mjs";
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
@@ -11,6 +13,43 @@ import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.m
 import { setEditionLink } from "./music-continuity.mjs";
 import { durationProvenanceText, COMPLETION_PROVENANCE_KEY } from "./music-completion.mjs";
 globalThis.crypto ||= webcrypto;
+
+test("catalog recall is isolated, bounded and never changes collection or credentials", () => {
+  const disk = storage({ [COLLECTION_KEY]: "unchanged", token: "synthetic-only" });
+  for (let index = 0; index < 25; index++) rememberCatalogSearch(disk, "tidal", `Album ${index}`);
+  rememberCatalogSearch(disk, "spotify", "Another");
+  rememberCatalogSearch(disk, "tidal", "album 24");
+  assert.equal(recentCatalogSearches(disk, "tidal").length, 20);
+  assert.equal(recentCatalogSearches(disk, "tidal")[0], "album 24");
+  assert.deepEqual(recentCatalogSearches(disk, "spotify"), ["Another"]);
+  clearCatalogSearches(disk, "tidal");
+  assert.deepEqual(recentCatalogSearches(disk, "tidal"), []);
+  assert.deepEqual(recentCatalogSearches(disk, "spotify"), ["Another"]);
+  assert.equal(disk.getItem(COLLECTION_KEY), "unchanged");
+  assert.equal(disk.getItem("token"), "synthetic-only");
+  disk.setItem("accord-catalog-searches-v1", "{bad");
+  assert.throws(() => rememberCatalogSearch(disk, "tidal", "Do not overwrite"));
+  assert.equal(disk.getItem("accord-catalog-searches-v1"), "{bad");
+});
+test("corrections only propose close local names and ignore URLs and identifiers", () => {
+  assert.deepEqual(catalogSearchCorrections("Master of Pupets", ["Master of Puppets", "Unrelated"]), ["Master of Puppets"]);
+  assert.deepEqual(catalogSearchCorrections("https://example.test/album", ["Another"]), []);
+  assert.deepEqual(catalogSearchCorrections("A".repeat(22), ["A".repeat(21) + "B"]), []);
+  assert.deepEqual(catalogSearchCorrections("Master of Puppets", ["Master of Puppets"]), []);
+});
+test("review snapshots retain original filtered IDs and anomalies do not modify metadata", () => {
+  const records = [album("A".repeat(22), { name: "One" }), album("B".repeat(22), { name: "Two", year: "", genres: ["Rock"] }),
+    album("C".repeat(22), { name: "Three", status: "liked" })];
+  const before = structuredClone(records), ids = filteredCollection(records, { status: "queued" }).map(({ id }) => id);
+  const issues = collectionAnomalies(records, { [records[0].id]: 999999999, [records[1].id]: 180000 });
+  assert.ok(issues.some(({ id, reason }) => id === records[0].id && reason.includes("insolita")));
+  assert.ok(issues.some(({ id, reason }) => id === records[1].id && reason.includes("Anno")));
+  assert.deepEqual(records, before);
+  records[0].status = "liked";
+  assert.deepEqual(ids, [records[0].id, records[1].id]);
+  assert.deepEqual(filteredCollection(records, { status: "queued", favoritesOnly: true, favoriteIds: [records[1].id] })
+    .map(({ id }) => id), [records[1].id]);
+});
 
 const album = (id = "A".repeat(22), changes = {}) => validateAlbum({
   id, artist: "Bjork", name: "Debut", year: "1993", status: "queued", rating: null,
@@ -884,12 +923,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=14/);
+  assert.match(html, /collection-app\.mjs\?v=15/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.32\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.33\.0/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);

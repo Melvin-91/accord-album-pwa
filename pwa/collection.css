@@ -73,6 +73,8 @@ a { color: var(--accent); text-underline-offset: 3px; }
 .edition-difference { font-weight: 700; background: var(--soft); }
 .album-comparison-dialog { width: min(1050px, calc(100% - 24px)); }
 .album-options pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.collection-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
+#catalogCorrections { display: flex; flex-wrap: wrap; gap: 8px; }
 #feedback { margin: 0 0 10px; overflow-wrap: anywhere; font-size: .875rem; line-height: 1.6; }
 #feedback.error { color: #ffb1b1; }
 #filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; }

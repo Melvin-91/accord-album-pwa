@@ -7,6 +7,8 @@ import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 import { durationProvenanceText } from "./music-completion.mjs?v=5";
+import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
+  filteredCollection, collectionAnomalies } from "./collection-qol.mjs?v=1";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -25,6 +27,35 @@ const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = 
 let resultCoverUrls = new Map();
 let resultMetadata = new Map();
 const comparedEditions = new Set();
+let revealedAlbum = null, revealOrigin = null, quickReview = null;
+const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value,
+  favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
+const matchingAlbums = () => filteredCollection(store.state.albums, collectionFilters());
+function revealCollectionAlbum(id) {
+  if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
+  if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
+  revealedAlbum = id;
+  $("addDialog").close(); $("settingsDialog").close();
+  render();
+  requestAnimationFrame(() => {
+    const card = [...$("albumList").children].find((item) => item.dataset.id === id);
+    card?.querySelector(".album-options")?.setAttribute("open", "");
+    card?.querySelector("summary")?.focus({ preventScroll: true });
+    card?.scrollIntoView({ block: "center" });
+  });
+}
+function refreshCatalogSearches() {
+  const select = $("recentCatalogSearches");
+  select.replaceChildren(node("option", "Scegli una ricerca, poi premi Cerca", { value: "" }));
+  $("catalogCorrections").replaceChildren();
+  try {
+    recentCatalogSearches(localStorage, $("catalogService").value).forEach((value) => select.append(node("option", value, { value })));
+  } catch (error) {
+    const message = error.message + " Usa Svuota recenti per ripristinarle.";
+    $("catalogCorrections").append(node("p", message, { role: "alert" }));
+    report(message, true);
+  }
+}
 function trustedCoverUrl(value) {
   if (typeof value !== "string") return false;
   try {
@@ -52,7 +83,7 @@ async function services() {
   return servicesPromise;
 }
 function disable() {
-  document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
+  document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #openQuickReview, #returnToFilters, #quickReviewDialog button, #quickReviewDialog select, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   $("collection").setAttribute("aria-busy", String(busy));
   $("cancelCatalogSearch").hidden = !catalogAbort;
@@ -311,15 +342,16 @@ function closeAlbumOptions(except = null) {
 }
 function render() {
   if (!store) return;
-  const query = $("search").value.trim().toLocaleLowerCase(), state = $("statusFilter").value;
   const favorites = new Set(store.state.preferences.favoriteIds || []);
   const durations = store.durations();
   document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
   document.documentElement.dataset.contrast = store.state.preferences.contrast === "high" ? "high" : "standard";
   document.documentElement.dataset.density = store.state.preferences.density === "compact" ? "compact" : "touch";
-  const filtered = store.state.albums.filter((album) => (!query || `${album.artist} ${album.name}`.toLocaleLowerCase().includes(query))
-    && (!state || album.status === state) && (!$("favoritesFilter").checked || favorites.has(album.id)));
-  filtered.sort((a, b) => a.artist.localeCompare(b.artist, "it") || a.name.localeCompare(b.name, "it"));
+  const filtered = matchingAlbums();
+  const revealed = store.state.albums.find((album) => album.id === revealedAlbum);
+  if (revealed && !filtered.some((album) => album.id === revealedAlbum)) filtered.unshift(revealed);
+  if (revealed) visibleLimit = Math.max(visibleLimit, filtered.findIndex((album) => album.id === revealedAlbum) + 1);
+  $("returnToFilters").hidden = !revealedAlbum;
   const active = document.activeElement, activeId = active?.closest(".album-card")?.dataset.id, control = active?.dataset.control;
   const wanted = filtered.slice(0, visibleLimit).map((album) => {
     const signature = JSON.stringify([album, favorites.has(album.id), durations[album.id], localStorage.getItem(MUSIC_LINK_TARGET_KEY)]);
@@ -402,9 +434,103 @@ function renderResults() {
       const evidence = node("details");
       evidence.append(node("summary", "Perche' gia' presente?"), node("p", duplicate.reason, { class: "muted" }));
       row.append(evidence);
+      const reveal = node("button", "Apri la copia in raccolta", { type: "button", class: "secondary" });
+      reveal.addEventListener("click", () => {
+        try { revealCollectionAlbum(duplicate.album.id); } catch (error) { report(error.message, true); }
+      });
+      row.append(reveal);
     }
     row.append(button); $("catalogResults").append(row);
   }
+}
+function reviewDirty() {
+  return quickReview && (quickReview.status.value !== quickReview.album.status
+    || (quickReview.rating.value ? Number(quickReview.rating.value) : null) !== quickReview.album.rating);
+}
+async function leaveQuickReview(offset = null) {
+  if (busy || !quickReview) return;
+  if (reviewDirty() && await choice("Modifiche non salvate", [node("p", "Stato e voto non salvati saranno scartati.")],
+    [["cancel", "Resta qui"], ["discard", "Scarta e continua"]]) !== "discard") return;
+  if (offset === null) $("quickReviewDialog").close();
+  else {
+    quickReview.index += offset;
+    showQuickReview();
+  }
+}
+function showQuickReview() {
+  const dialog = $("quickReviewDialog"), current = store.state.albums.find((album) => album.id === quickReview.ids[quickReview.index]);
+  if (!current) { report("Album non piu' presente: revisione interrotta. Le modifiche gia' salvate restano.", true); dialog.close(); return; }
+  quickReview.album = current;
+  const title = node("h2", "Revisione rapida"), progress = node("p",
+    `${quickReview.index + 1} di ${quickReview.ids.length} · ${providerName(current)}`, { class: "muted" });
+  const name = node("h3", current.name), artist = node("p", `${current.artist} · ${current.year || "-"}`);
+  const controls = node("div", "", { class: "album-controls" }), statusLabel = node("label", "Ascolto");
+  const status = node("select", "", { "aria-label": "Stato della revisione", id: "quickReviewStatusValue" });
+  Object.entries(states).forEach(([value, text]) => status.append(node("option", text, { value })));
+  status.value = current.status; statusLabel.append(status);
+  const ratingLabel = node("label", "Voto"), rating = node("select", "", { "aria-label": "Voto della revisione", id: "quickReviewRating" });
+  rating.append(node("option", "Senza voto", { value: "" }));
+  for (let value = .5; value <= 5; value += .5) rating.append(node("option", String(value).replace(".", ","), { value }));
+  rating.value = current.rating === null ? "" : String(current.rating); ratingLabel.append(rating);
+  quickReview.status = status; quickReview.rating = rating;
+  controls.append(statusLabel, ratingLabel);
+  const message = node("p", "Salva solo questo album. L'elenco iniziale resta stabile anche se cambi stato.", {
+    id: "quickReviewStatus", role: "status" });
+  const actions = node("div", "", { class: "dialog-actions" });
+  const previous = node("button", "Precedente", { type: "button", class: "secondary" });
+  previous.disabled = quickReview.index === 0;
+  previous.addEventListener("click", () => { void leaveQuickReview(-1); });
+  const skip = node("button", "Salta", { type: "button", class: "secondary" });
+  skip.disabled = quickReview.index + 1 === quickReview.ids.length;
+  skip.addEventListener("click", () => { void leaveQuickReview(1); });
+  const close = node("button", "Chiudi", { type: "button", class: "secondary" });
+  close.addEventListener("click", () => { void leaveQuickReview(); });
+  const save = node("button", quickReview.index + 1 === quickReview.ids.length ? "Salva e termina" : "Salva e successivo", {
+    id: "quickReviewSave", type: "button" });
+  save.addEventListener("click", () => {
+    if (busy) return;
+    try {
+      store.assertCurrent();
+      const actual = store.state.albums.find((album) => album.id === current.id);
+      if (JSON.stringify(actual) !== JSON.stringify(current)) throw new Error("Album cambiato: chiudi e riapri la revisione.");
+      const changes = { status: status.value, rating: rating.value ? Number(rating.value) : null };
+      if (reviewDirty()) store.update(current.id, changes);
+      quickReview.album = store.state.albums.find((album) => album.id === current.id);
+      render();
+      if (quickReview.index + 1 === quickReview.ids.length) {
+        dialog.close(); report("Revisione completata sul dispositivo. Sincronizza per condividere le modifiche.");
+      } else {
+        quickReview.index += 1; showQuickReview();
+      }
+    } catch (error) { message.textContent = error.message; report(error.message, true); }
+  });
+  actions.append(previous, skip, close, save);
+  dialog.replaceChildren(title, progress, name, artist, controls, message, actions);
+  if (!dialog.open) dialog.showModal();
+  status.focus({ preventScroll: true });
+}
+async function reviewMetadata() {
+  const provenance = JSON.parse(localStorage.getItem("accord-music-completion-provenance-v1") || "{}");
+  const issues = collectionAnomalies(store.state.albums, store.durations(), provenance);
+  const content = node("div"), category = node("select", "", { "aria-label": "Tipo di anomalia" });
+  category.append(node("option", "Tutte le anomalie", { value: "" }));
+  [...new Set(issues.map(({ reason }) => reason))].sort().forEach((value) => category.append(node("option", value, { value })));
+  const listing = node("div"), byId = new Map(store.state.albums.map((album) => [album.id, album]));
+  function populate() {
+    listing.replaceChildren();
+    for (const issue of issues.filter(({ reason }) => !category.value || reason === category.value)) {
+      const album = byId.get(issue.id), row = node("article", "", { class: "catalog-result" });
+      row.append(node("h3", `${album.artist} - ${album.name}`), node("p", issue.reason));
+      const open = node("button", "Apri album per verificare", { type: "button", class: "secondary" });
+      open.addEventListener("click", () => $("choiceDialog").close(`album:${album.id}`));
+      row.append(open); listing.append(row);
+    }
+  }
+  category.addEventListener("change", populate); populate(); content.append(category, listing);
+  const answer = await choice("Revisione anomalie", [node("p", `${issues.length} segnalazioni locali. Non sono tutte errori: `
+    + "verifica l'edizione. Nessuna sovrascrittura automatica e nessuna richiesta ai cataloghi."), content],
+  [["cancel", "Chiudi"]]);
+  if (answer.startsWith("album:")) revealCollectionAlbum(answer.slice(6));
 }
 async function performSync() {
   report("Lettura della raccolta condivisa...");
@@ -467,6 +593,7 @@ async function serviceSettings() {
   const client = await services(), provider = $("settingsService").value;
   client.select(provider); $("catalogService").value = provider; generation += 1;
   resultAlbums = []; renderResults();
+  refreshCatalogSearches();
   document.querySelectorAll("[data-service]").forEach((field) => { field.hidden = field.dataset.service !== provider; });
   const settings = client.settings(provider);
   const name = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[provider];
@@ -491,11 +618,34 @@ $("collectionHome").addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "auto" });
   $("collectionTitle").focus({ preventScroll: true });
 });
-$("search").addEventListener("input", () => { visibleLimit = 40; closeAlbumOptions(); render(); });
+$("search").addEventListener("input", () => {
+  revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
+});
 ["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
-  visibleLimit = 40; closeAlbumOptions(); render();
+  revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
+$("openQuickReview").addEventListener("click", () => {
+  if (busy || !store) return;
+  const ids = matchingAlbums().map((album) => album.id);
+  if (!ids.length) { report("Nessun album nei filtri correnti da rivedere."); return; }
+  quickReview = { ids, index: 0, scroll: scrollY };
+  showQuickReview();
+});
+$("quickReviewDialog").addEventListener("cancel", (event) => {
+  event.preventDefault(); void leaveQuickReview();
+});
+$("quickReviewDialog").addEventListener("close", () => {
+  const scroll = quickReview?.scroll || 0;
+  quickReview = null;
+  requestAnimationFrame(() => { $("openQuickReview").focus({ preventScroll: true }); window.scrollTo({ top: scroll }); });
+});
+$("reviewMetadata").addEventListener("click", () => run(reviewMetadata));
+$("returnToFilters").addEventListener("click", () => {
+  const origin = revealOrigin;
+  revealedAlbum = null; revealOrigin = null; visibleLimit = origin?.limit || 40; render();
+  requestAnimationFrame(() => window.scrollTo({ top: origin?.scroll || 0, behavior: "auto" }));
+});
 $("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
@@ -536,6 +686,7 @@ $("duplicates").addEventListener("click", () => {
 $("openAdd").addEventListener("click", async () => {
   await run(async () => {
   const client = await services(); $("catalogService").value = client.provider;
+  refreshCatalogSearches();
   $("catalogStatus").textContent = "Cerca per titolo e artista, oppure incolla un link album.";
     $("addDialog").showModal();
     $("catalogBody").scrollTop = 0;
@@ -544,7 +695,37 @@ $("openAdd").addEventListener("click", async () => {
 });
 $("catalogService").addEventListener("change", () => run(async () => {
   (await services()).select($("catalogService").value); generation += 1; resultAlbums = []; renderResults();
+  refreshCatalogSearches();
 }));
+$("recentCatalogSearches").addEventListener("change", () => {
+  if ($("recentCatalogSearches").value) $("catalogQuery").value = $("recentCatalogSearches").value;
+});
+$("clearCatalogSearches").addEventListener("click", async () => {
+  try { clearCatalogSearches(localStorage, $("catalogService").value); refreshCatalogSearches(); }
+  catch (error) {
+    report(error.message, true);
+    if (await choice("Ripristina ricerche recenti", [node("p", "Impossibile aggiornare le ricerche recenti. Eliminare soltanto "
+      + "le ricerche recenti di tutti i cataloghi? Raccolta e account restano invariati.")],
+    [["cancel", "Annulla"], ["clear", "Elimina cronologia ricerche"]]) === "clear") {
+      try { localStorage.removeItem(RECENT_CATALOG_SEARCHES); refreshCatalogSearches(); }
+      catch (failure) { report(failure.message, true); }
+    }
+  }
+});
+$("suggestCatalogCorrections").addEventListener("click", () => {
+  try {
+    const candidates = store.state.albums.flatMap((album) => [album.name, album.artist, `${album.artist} ${album.name}`]);
+    candidates.push(...recentCatalogSearches(localStorage, $("catalogService").value));
+    const proposals = catalogSearchCorrections($("catalogQuery").value, candidates);
+    $("catalogCorrections").replaceChildren();
+    for (const proposal of proposals) {
+      const use = node("button", `Usa: ${proposal}`, { type: "button", class: "secondary" });
+      use.addEventListener("click", () => { $("catalogQuery").value = proposal; $("catalogCorrections").replaceChildren(); });
+      $("catalogCorrections").append(use);
+    }
+    if (!proposals.length) $("catalogCorrections").append(node("p", "Nessuna correzione locale affidabile."));
+  } catch (error) { report(error.message, true); }
+});
 $("compareCatalogEditions").addEventListener("click", () => {
   try {
     const selected = resultAlbums.filter((album) => comparedEditions.has(album.id)).map((album) => ({
@@ -558,6 +739,8 @@ $("catalogForm").addEventListener("submit", (event) => {
   run(async () => {
     const client = await services(), current = ++generation;
     if (!$("addDialog").open) return;
+    rememberCatalogSearch(localStorage, $("catalogService").value, $("catalogQuery").value);
+    refreshCatalogSearches();
     const controller = new AbortController();
     catalogAbort = controller; resultAlbums = []; renderResults(); disable();
     report("Ricerca in corso (massimo 45 secondi). Puoi annullarla.");

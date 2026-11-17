@@ -2,6 +2,35 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.33.0 · Revisione rapida e contesto musicale
+
+Mantiene Orbita e aggiunge **Revisione rapida**: stato e voto si rivedono
+uno alla volta sul campione dei filtri iniziali, anche oltre la prima
+pagina. Ogni salvataggio e' esplicito; saltare, tornare indietro o chiudere
+con modifiche pendenti richiede conferma. Modificare lo stato non cambia
+gli album rimanenti della sessione. Le protezioni dalle scritture di altre
+schede restano attive; le modifiche rimangono locali fino alla sincronizzazione.
+
+Ogni catalogo conserva fino a 20 ricerche recenti. Richiamarle o applicare
+una correzione suggerita riempie soltanto il campo: la ricerca va ancora
+avviata. Le correzioni usano esclusivamente nomi gia' nella raccolta o nei
+recenti; non interrogano servizi e non correggono URL o ID. I recenti si
+svuotano per catalogo; un eventuale ripristino di dati illeggibili richiede
+conferma separata e riguarda soltanto questa cronologia locale.
+
+**Apri la copia in raccolta** mostra un album anche fuori filtro;
+**Torna ai risultati precedenti** ripristina pagina e scorrimento senza
+cambiare ricerca o filtri. Una nuova ricerca o un nuovo filtro chiude il
+contesto temporaneo. Negli strumenti avanzati, **Rivedi anomalie dei
+metadati** segnala anno/generi/durata mancanti, durate sotto un minuto o
+sopra 12 ore e provenienza non coerente. Sono verifiche locali da valutare,
+non correzioni certe: non modificano metadati e non interrogano i cataloghi.
+
+Non aggiunge funzioni lavoro, storico o suggerimenti avanzati alla PWA.
+Il dock rimane a quattro azioni; finestre scorrevoli e testo al 130% restano
+disponibili. La versione e' destinata alla pubblicazione esplicitamente
+autorizzata insieme a questi interventi.
+
 ### PWA 1.32.0 · Confronto edizioni e provenienza
 
 Mantiene Orbita. In Aggiungi album puoi confrontare 2-4 risultati dello
