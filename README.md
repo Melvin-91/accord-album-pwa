@@ -2,6 +2,14 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.34.2 · Download GitHub interrotti
+
+I download dei file GitHub non incorporati nei metadati, comprese le
+copertine, hanno fino a 120 secondi. Le interruzioni durante la lettura
+della risposta indicano quale file e' coinvolto. Una lettura iniziale
+interrotta non avvia scritture. Se manca invece la conferma di un invio,
+resta attiva la verifica remota in sola lettura, senza reinvio.
+
 ### PWA 1.34.1 · Recupero degli invii GitHub
 
 Le letture GitHub ignorano la cache HTTP. Gli upload hanno 120 secondi

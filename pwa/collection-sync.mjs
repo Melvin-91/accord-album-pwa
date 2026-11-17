@@ -40,57 +40,79 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       const current = githubCollectionSettings(storage);
       if (current.owner !== settings.owner || current.token !== settings.token) throw new Error("Collegamento GitHub cambiato: operazione interrotta.");
     }
-    async function send(url, options = {}, missing = false) {
+    async function send(url, { method = "GET", body, missing = false, raw = false, label } = {}) {
       assertCurrent();
+      const writing = method === "PUT", timeout = writing || raw ? 120_000 : 30_000;
       let response;
+      function transferFailure(error) {
+        const interrupted = error?.name === "TimeoutError" || error?.name === "AbortError";
+        const detail = interrupted ? `Trasferimento interrotto o tempo limite raggiunto (${timeout / 1000} s).`
+          : "Connessione interrotta o bloccata dal browser.";
+        if (writing) return new UncertainGitHubWrite(`Esito dell'invio GitHub incerto. ${detail}`);
+        return new Error(`Lettura GitHub di ${label} non completata. ${detail} Riprova Sincronizza.`);
+      }
       try {
-        response = await request(url, { ...options, headers: { Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${settings.token}`, ...options.headers },
-          signal: AbortSignal.timeout(options.method === "PUT" ? 120_000 : 30_000),
+        response = await request(url, { method, body, headers: {
+          Accept: raw ? "application/vnd.github.raw+json" : "application/vnd.github+json",
+          Authorization: `Bearer ${settings.token}`, ...(writing ? { "Content-Type": "application/json" } : {}) },
+          signal: AbortSignal.timeout(timeout),
           cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" });
       } catch (error) {
-        if (options.method === "PUT") {
-          throw new UncertainGitHubWrite("Esito dell'invio GitHub incerto. "
-            + (error?.name === "TimeoutError" || error?.name === "AbortError"
-              ? "Tempo massimo di invio superato (120 s)." : "Connessione interrotta o bloccata dal browser."));
+        throw transferFailure(error);
+      }
+      function assertAfterResponse() {
+        try { assertCurrent(); } catch (error) {
+          if (writing) throw new Error(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
+          throw error;
         }
-        throw new Error("GitHub non raggiungibile. Nessuna modifica applicata.");
       }
-      try { assertCurrent(); } catch (error) {
-        if (options.method === "PUT") throw new Error(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
-        throw error;
-      }
+      assertAfterResponse();
       if (missing && response.status === 404) return null;
       if (!response.ok) {
         if (response.headers.get("Retry-After") || response.headers.get("X-RateLimit-Remaining") === "0") {
           throw new Error(`GitHub HTTP ${response.status}. Il server richiede un'attesa: riprova Sincronizza piu' tardi.`
-            + (options.method === "PUT" && response.status >= 500 ? " Esito dell'invio incerto; nessun invio ripetuto." : ""));
+            + (writing && response.status >= 500 ? " Esito dell'invio incerto; nessun invio ripetuto." : ""));
         }
-        if (response.status >= 500 && options.method === "PUT") {
+        if (response.status >= 500 && writing) {
           throw new UncertainGitHubWrite(`GitHub HTTP ${response.status}. Esito dell'invio incerto.`);
         }
         throw new Error(`GitHub HTTP ${response.status}. `
           + (response.status === 409 ? "Il file e' cambiato: aggiorna l'anteprima."
             : "Verifica repository privato e permesso Contents del token."));
       }
-      return response;
+      let result;
+      try {
+        result = raw ? new Uint8Array(await response.arrayBuffer()) : await response.json();
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw transferFailure(error);
+        if (writing) throw new UncertainGitHubWrite("Risposta dell'invio GitHub non leggibile.");
+        throw new Error(`Risposta GitHub non valida per ${label}.`);
+      }
+      assertAfterResponse();
+      if (!raw && (!result || typeof result !== "object" || Array.isArray(result))) {
+        if (writing) throw new UncertainGitHubWrite("Risposta dell'invio GitHub non leggibile.");
+        throw new Error(`Risposta GitHub non valida per ${label}.`);
+      }
+      return result;
     }
     async function read(withCovers = false) {
-      const repository = await (await send(root)).json();
+      const repository = await send(root, { label: "accord-music-data" });
       if (repository.private !== true || typeof repository.default_branch !== "string" || !repository.default_branch) {
         throw new Error("accord-music-data deve essere un repository privato con un branch predefinito.");
       }
-      const branch = repository.default_branch, path = (file) => `${root}/contents/${file}?ref=${encodeURIComponent(branch)}`;
-      const response = await send(path("albums.json"), {}, true);
+      const branch = repository.default_branch;
+      function readFile(file, options) {
+        if (options?.raw) progress(`Download GitHub: ${file}. Attesa massima: 120 s.`);
+        return send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, { label: file, ...options });
+      }
+      const metadata = await readFile("albums.json", { missing: true });
       let albums = [], deletedAlbums = [], sha = null, deletionSync = false, deletionHistory = false;
-      if (response) {
-        const metadata = await response.json();
+      if (metadata !== null) {
         if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("albums.json non leggibile.");
         let bytes;
         if (metadata.encoding === "none") {
-          bytes = new Uint8Array(await (await send(path("albums.json"), {
-            headers: { Accept: "application/vnd.github.raw+json" } })).arrayBuffer());
-          const current = await (await send(path("albums.json"))).json();
+          bytes = await readFile("albums.json", { raw: true });
+          const current = await readFile("albums.json");
           if (current.sha !== metadata.sha) throw new Error("albums.json e' cambiato durante la lettura. Riprova Sincronizza.");
         } else {
           if (typeof metadata.content !== "string" || !metadata.content) throw new Error("albums.json non leggibile.");
@@ -108,24 +130,20 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       const remote = { albums, deletedAlbums, sha, branch, deletionSync, deletionHistory, covers: new Map(), coversSha: null, archive: new Uint8Array(),
         durations: [], durationsSha: null };
       if (withCovers) {
-        const metadataResponse = await send(path("covers.bin"), {}, true);
-        if (metadataResponse) {
-          const metadata = await metadataResponse.json();
-          if (metadata.type !== "file" || typeof metadata.sha !== "string") throw new Error("covers.bin non leggibile.");
-          remote.coversSha = metadata.sha;
-          remote.archive = new Uint8Array(await (await send(path("covers.bin"), {
-            headers: { Accept: "application/vnd.github.raw+json" } })).arrayBuffer());
+        const coverMetadata = await readFile("covers.bin", { missing: true });
+        if (coverMetadata !== null) {
+          if (coverMetadata.type !== "file" || typeof coverMetadata.sha !== "string") throw new Error("covers.bin non leggibile.");
+          remote.coversSha = coverMetadata.sha;
+          remote.archive = await readFile("covers.bin", { raw: true });
           remote.covers = await decodeCoverArchive(remote.archive);
         }
-        const durationsResponse = await send(path("durations.json"), {}, true);
-        if (durationsResponse) {
-          const metadata = await durationsResponse.json();
+        const metadata = await readFile("durations.json", { missing: true });
+        if (metadata !== null) {
           if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("Archivio durate non leggibile.");
           let bytes;
           if (metadata.encoding === "none") {
-            bytes = new Uint8Array(await (await send(path("durations.json"), {
-              headers: { Accept: "application/vnd.github.raw+json" } })).arrayBuffer());
-            const current = await (await send(path("durations.json"))).json();
+            bytes = await readFile("durations.json", { raw: true });
+            const current = await readFile("durations.json");
             if (current.sha !== metadata.sha) throw new Error("Le durate GitHub sono cambiate durante la lettura. Riprova.");
           } else {
             if (typeof metadata.content !== "string" || !metadata.content) throw new Error("Archivio durate non leggibile.");
@@ -141,12 +159,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       const payload = { message: `Sync Accord ${file}`, content: base64(bytes), branch, ...(sha ? { sha } : {}) };
       progress(`Invio GitHub: ${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB). Attesa massima: 120 s.`);
       try {
-        const response = await send(`${root}/contents/${file}`, { method: "PUT",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-        let result;
-        try { result = await response.json(); } catch {
-          throw new UncertainGitHubWrite("Risposta dell'invio GitHub non leggibile.");
-        }
+        const result = await send(`${root}/contents/${file}`, { method: "PUT", body: JSON.stringify(payload) });
         if (typeof result?.content?.sha !== "string" || !result.content.sha
             || typeof result?.commit?.sha !== "string" || !result.commit.sha) {
           throw new UncertainGitHubWrite("Conferma dell'invio GitHub incompleta.");
@@ -157,9 +170,8 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         let verified = false;
         try {
           progress(`Verifica in sola lettura di ${file}: nessun reinvio.`);
-          const response = await send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, {}, true);
-          if (response) {
-            const metadata = await response.json();
+          const metadata = await send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, { label: file, missing: true });
+          if (metadata) {
             verified = metadata.type === "file" && metadata.sha === await gitBlobSha(bytes);
           }
           assertCurrent();

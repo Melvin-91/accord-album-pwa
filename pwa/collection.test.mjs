@@ -286,13 +286,37 @@ test("lost responses to cover, album and duration uploads are verified without a
   assert.equal(remote.writes.length, 3);
 });
 test("5xx, unreadable and incomplete upload responses recover only through matching remote content", async () => {
-  for (const putReply of [() => reply({}, 503), () => new Response("{"), () => reply({ content: {} })]) {
+  for (const putReply of [() => reply({}, 503), () => new Response("{"), () => reply({ content: {} }),
+    () => ({ ok: true, status: 200, json: async () => { throw new DOMException("Fetch is aborted", "AbortError"); } })]) {
     const saved = album(), disk = local([saved], []), store = createCollectionStore(disk);
     const remote = github([], { putReply });
     const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: remote.request });
     assert.equal(await sync.sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }), true);
     assert.deepEqual(store.state.base, [saved]);
     assert.equal(remote.writes.length, 1);
+  }
+});
+test("a download interrupted after response headers identifies the file without writing", async (t) => {
+  const timeouts = [];
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, "timeout", (ms) => { timeouts.push(ms); return timeout(ms); });
+  for (const raw of [false, true]) {
+    const saved = album(), disk = local([saved]), store = createCollectionStore(disk), before = store.state;
+    const remote = github([saved], { coverArchive: new Uint8Array() }), messages = [];
+    const request = async (url, options) => {
+      if (url.includes("covers.bin") && options.headers.Accept.includes("raw") === raw) {
+        const abort = async () => { throw new DOMException("Fetch is aborted", "AbortError"); };
+        return { ok: true, status: 200, json: abort, arrayBuffer: abort };
+      }
+      return remote.request(url, options);
+    };
+    await assert.rejects(createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request })
+      .sync({ chooseConflicts: () => assert.fail(), confirm: () => assert.fail(), onProgress: (msg) => messages.push(msg) }),
+    /Lettura GitHub di covers\.bin non completata.*Riprova Sincronizza/);
+    assert.equal(timeouts.at(-1), raw ? 120_000 : 30_000);
+    assert.equal(messages.some((msg) => msg.includes("Download GitHub: covers.bin")), raw);
+    assert.equal(store.state, before);
+    assert.equal(remote.writes.length, 0);
   }
 });
 test("a lost response never accepts a different remote blob or resends the upload", async () => {
@@ -1039,12 +1063,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=17/);
+  assert.match(html, /collection-app\.mjs\?v=18/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.34\.1/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.34\.2/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
