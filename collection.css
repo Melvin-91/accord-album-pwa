@@ -124,6 +124,10 @@ dialog::backdrop { background: #090c10cc; }
 .dialog-heading { display: flex; align-items: start; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
 .dialog-heading h2 { margin-top: 0; font-size: 1.375rem; font-weight: 500; letter-spacing: -.03em; }
 .dialog-heading button { background: var(--raised); color: inherit; }
+.tidal-preview-dialog { width: min(720px, calc(100vw - 24px)); }
+.tidal-preview-dialog .dialog-heading { position: sticky; top: -24px; background: var(--surface); z-index: 1; padding-block: 12px; }
+.tidal-preview-dialog .dialog-heading button { flex-shrink: 0; }
+.tidal-preview-dialog iframe { display: block; width: 100%; height: 480px; min-height: 240px; border: 0; }
 #addDialog { padding: 0; overflow: hidden; }
 #addDialog[open] { display: flex; flex-direction: column; }
 #addDialog > .dialog-heading { flex: 0 0 auto; padding: 22px 22px 0; }

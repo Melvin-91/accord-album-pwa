@@ -2,6 +2,7 @@ import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=7";
 import { createCollectionSync } from "./collection-sync.mjs?v=5";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
+import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
@@ -331,7 +332,17 @@ function albumCard(album, favorite, duration) {
     query: `${album.artist} ${album.name}`, report: (message) => report(message) });
   const remove = node("button", "Rimuovi", { type: "button", "data-control": "remove", class: "secondary" });
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
-  options.append(remove);
+  const management = node("div", "", { class: "dialog-actions" });
+  management.append(remove);
+  options.append(management);
+  if (/^tidal:[1-9][0-9]*$/.test(album.id)) {
+    const preview = node("button", "Anteprima TIDAL · 30 s", { type: "button", class: "secondary" });
+    preview.addEventListener("click", () => {
+      try { openTidalPreview(document, album); }
+      catch (error) { report(error.message, true); }
+    });
+    management.append(preview);
+  }
   footer.append(favoriteButton, open); card.append(footer, options);
   return card;
 }

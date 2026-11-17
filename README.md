@@ -2,7 +2,17 @@
 
 ## Stato corrente e gerarchia
 
-### PWA 1.33.0 · Revisione rapida e contesto musicale
+### PWA 1.34.0 · Anteprime ufficiali TIDAL
+
+In **Gestisci album**, gli album TIDAL hanno **Anteprima TIDAL · 30 s**.
+Solo premendo il pulsante viene caricato il lettore ufficiale TIDAL; Play
+rimane esplicito. La finestra e' scorrevole e Chiudi/Esc rimuove l'iframe,
+interrompendo l'audio. Il collegamento esterno permette di aprire la stessa
+anteprima nel browser. Sono necessari Internet e un'identita' album TIDAL
+coerente; non vengono passati token di Accord e la raccolta non viene modificata.
+Non e' un player remoto TIDAL, non implementa Connect o la coda dell'app.
+
+### Novita' precedenti: PWA 1.33.0 · Revisione rapida e contesto musicale
 
 Mantiene Orbita e aggiunge **Revisione rapida**: stato e voto si rivedono
 uno alla volta sul campione dei filtri iniziali, anche oltre la prima
