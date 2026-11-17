@@ -20,6 +20,30 @@ export function catalogTarget(storage, album, provider) {
   return ["tidal", "qobuz"].includes(provider) ? editionLink(storage, album, provider)?.id || null : null;
 }
 
+export function durationProvenanceText(storage, album, duration) {
+  if (!duration) return "Durata non disponibile.";
+  const heading = `Durata: ${Math.floor(duration / 60000)}:${String(Math.floor(duration / 1000) % 60).padStart(2, "0")}`;
+  const provenance = stored(storage, COMPLETION_PROVENANCE_KEY, {});
+  if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) {
+    throw new Error("Provenienza delle durate non leggibile.");
+  }
+  const record = provenance[album.id]?.duration;
+  if (!record || record.duration_ms !== undefined && record.duration_ms !== duration) {
+    return `${heading}\nProvenienza non disponibile: dato preesistente o sincronizzato.`;
+  }
+  const labels = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" };
+  const lines = [heading, `Fonte: ${record.source === "manual" ? "inserimento manuale" : labels[record.source] || "non disponibile"}`];
+  if (labels[record.source]) {
+    lines.push(`Edizione: ${record.target || "Non disponibile"}`);
+    if (!same(record.identity, identity(album)) || catalogTarget(storage, album, record.source) !== record.target) {
+      lines.push("Provenienza storica: identita' o associazione cambiata dopo il recupero.");
+    }
+    if (Number.isSafeInteger(record.complete_tracks) && record.complete_tracks > 0) lines.push(`Brani audio verificati: ${record.complete_tracks}`);
+  }
+  lines.push(`Data: ${record.updated || "Non disponibile"}`);
+  return lines.join("\n");
+}
+
 export function createCompletionPlan(storage, albums, provider, categories) {
   if (!albums.length || albums.length > 200 || !categories.length
       || categories.some((key) => !Object.hasOwn(COMPLETION_CATEGORIES, key))) {

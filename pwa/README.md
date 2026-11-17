@@ -2,6 +2,26 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.32.0 · Confronto edizioni e provenienza
+
+Mantiene Orbita. In Aggiungi album puoi confrontare 2-4 risultati dello
+stesso catalogo, con differenze evidenziate e copertine disponibili.
+Numero brani e durata vengono mostrati soltanto quando noti; nessun
+recupero aggiuntivo dei metadati o associazione implicita.
+Le copie gia' presenti spiegano il motivo: ID, associazione verificata
+oppure artista/titolo normalizzati. La provenienza delle nuove durate
+registra servizio, edizione, data e brani verificati; e' consultabile da
+Gestisci album. Le durate senza provenienza restano dichiarate tali.
+Il salvataggio locale conserva insieme durata e provenienza, ripristinando
+i valori precedenti in caso di errore. Ricevere una durata diversa tramite
+sincronizzazione elimina la vecchia provenienza locale, senza inventarne
+una nuova. La provenienza resta locale e non contiene credenziali.
+
+Non aggiunge tabelle, importazione playlist o account Last.fm/ListenBrainz
+alla PWA essenziale: intestazioni e verifica cronologia sono interventi
+desktop. La pubblicazione richiede autorizzazione esplicita e rimane
+separata dalla sincronizzazione della raccolta personale.
+
 ### PWA 1.31.0 · Orbita
 
 Spazio musicale centrato, titoli leggeri, copertine protagoniste e dock

@@ -2,6 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { validateSuggestionCriteria, validateSuggestionRecipes } from "./music-suggestion-recipes.mjs";
 import { editionComparisonData } from "./edition-comparison.mjs";
+test("Spotify edition comparison preserves reported counts and does not fabricate durations", () => {
+  const rows = editionComparisonData([
+    { id: "A".repeat(22), name: "Original", artist: "Artist", total_tracks: 10 },
+    { id: "B".repeat(22), name: "Deluxe", artist: "Artist", total_tracks: 14, duration_iso: "PT1H" },
+  ], "spotify");
+  assert.equal(rows[0].tracks, 10);
+  assert.equal(rows[1].tracks, 14);
+  assert.equal(rows[0].duration, "Non disponibile");
+  assert.equal(rows[1].duration, "60 min 0 s");
+  assert.throws(() => editionComparisonData([
+    { id: "A".repeat(22), name: "Original", artist: "Artist" },
+    { id: "tidal:42", name: "Deluxe", artist: "Artist" },
+  ], "spotify"), /stesso catalogo/);
+});
 
 const criteria = {
   tool: "history", period: "30", start: "", end: "", exclusion: "all",

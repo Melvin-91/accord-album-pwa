@@ -1,5 +1,5 @@
 import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive, encodeCoverArchive,
-  findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=52";
+  findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=54";
 import { validateDurationDocument, validateDurationEntries, durationDocument, mergeDurations } from "./duration-sync.mjs?v=1";
 
 const API = "https://api.github.com";

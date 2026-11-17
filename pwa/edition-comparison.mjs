@@ -1,3 +1,5 @@
+import { isoDurationMs } from "./music-completion.mjs?v=5";
+
 function availableInteger(record, keys) {
   for (const key of keys) {
     const value = record[key];
@@ -7,6 +9,12 @@ function availableInteger(record, keys) {
 }
 
 function durationLabel(record) {
+  if (record.duration_iso && !record.duration_ms) {
+    try {
+      const duration = isoDurationMs(record.duration_iso);
+      return `${Math.floor(duration / 60000)} min ${Math.floor(duration / 1000) % 60} s`;
+    } catch { return "Durata catalogo non valida"; }
+  }
   const milliseconds = availableInteger(record, ["duration_ms", "durationMs"]);
   const seconds = availableInteger(record, ["duration_seconds", "durationSeconds", "duration"]);
   const total = milliseconds > 0 ? Math.floor(milliseconds / 1000) : seconds;
@@ -16,7 +24,7 @@ function durationLabel(record) {
 
 export function editionComparisonData(records, provider) {
   const validId = provider === "tidal" ? /^tidal:[1-9][0-9]*$/
-    : provider === "qobuz" ? /^qobuz:[A-Za-z0-9]{1,120}$/ : null;
+    : provider === "qobuz" ? /^qobuz:[A-Za-z0-9]{1,120}$/ : provider === "spotify" ? /^[A-Za-z0-9]{22}$/ : null;
   if (!validId || !Array.isArray(records) || records.length < 2 || records.length > 4
       || records.some((record) => !record || !validId.test(record.id)
         || typeof record.name !== "string" || !record.name.trim()
@@ -31,7 +39,7 @@ export function editionComparisonData(records, provider) {
     name: record.name,
     artist: record.artist,
     year: record.year || "Non disponibile",
-    tracks: availableInteger(record, ["track_count", "tracks_count", "numberOfTracks", "trackCount"])
+    tracks: availableInteger(record, ["track_count", "tracks_count", "numberOfTracks", "trackCount", "total_tracks"])
       ?? "Non disponibile",
     duration: durationLabel(record),
   }));
@@ -42,9 +50,9 @@ export function showEditionComparison(records, provider) {
   const dialog = document.createElement("dialog");
   dialog.className = "album-comparison-dialog";
   const heading = document.createElement("h2");
-  heading.textContent = `Confronto edizioni · ${provider === "tidal" ? "TIDAL" : "Qobuz"}`;
+  heading.textContent = `Confronto edizioni · ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[provider]}`;
   const note = document.createElement("p");
-  note.textContent = "Solo metadati già disponibili. L'associazione resta separata e rimovibile; album, identità e voti non vengono uniti o trasferiti.";
+  note.textContent = "Differenze in evidenza. Solo metadati disponibili; quelli mancanti non vengono stimati. Chiudi per tornare alla scelta, senza aggiunte o associazioni.";
   const table = document.createElement("table");
   const fields = [
     ["Artista", (edition) => edition.artist],
@@ -56,9 +64,25 @@ export function showEditionComparison(records, provider) {
   ];
   const thead = document.createElement("thead"), header = document.createElement("tr");
   header.append(document.createElement("th"));
-  for (const edition of editions) {
+  for (const [index, edition] of editions.entries()) {
     const cell = document.createElement("th");
     cell.scope = "col"; cell.textContent = edition.name;
+    const url = records[index].cover_url;
+    if (typeof url === "string") {
+      let safe = false;
+      try {
+        const parsed = new URL(url);
+        safe = parsed.protocol === "https:" && !parsed.username && !parsed.password
+          && (["resources.tidal.com", "static.qobuz.com", "scdn.co", "spotifycdn.com"].includes(parsed.hostname)
+            || parsed.hostname.endsWith(".scdn.co") || parsed.hostname.endsWith(".spotifycdn.com"));
+      } catch { safe = false; }
+      if (safe) {
+        const image = document.createElement("img");
+        image.src = url; image.alt = `Copertina: ${edition.name}`; image.referrerPolicy = "no-referrer";
+        image.width = image.height = 112; image.className = "comparison-artwork";
+        cell.append(image);
+      }
+    }
     header.append(cell);
   }
   thead.append(header);
@@ -66,9 +90,11 @@ export function showEditionComparison(records, provider) {
   for (const [label, value] of fields) {
     const row = document.createElement("tr"), name = document.createElement("th");
     name.scope = "row"; name.textContent = label; row.append(name);
+    const different = new Set(editions.map((edition) => String(value(edition)))).size > 1;
     for (const edition of editions) {
       const cell = document.createElement("td");
       cell.textContent = String(value(edition)); row.append(cell);
+      if (different) { cell.className = "edition-difference"; cell.title = "Differenza tra le edizioni confrontate"; }
     }
     tbody.append(row);
   }

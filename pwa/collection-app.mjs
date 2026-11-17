@@ -1,10 +1,12 @@
-import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=52";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=6";
-import { createCollectionSync } from "./collection-sync.mjs?v=4";
+import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=7";
+import { createCollectionSync } from "./collection-sync.mjs?v=5";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
+import { showEditionComparison } from "./edition-comparison.mjs?v=2";
+import { durationProvenanceText } from "./music-completion.mjs?v=5";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -22,6 +24,7 @@ let store, sync, servicesPromise, catalogAbort, durationAbort, busy = false, vis
 const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = new Map();
 let resultCoverUrls = new Map();
 let resultMetadata = new Map();
+const comparedEditions = new Set();
 function trustedCoverUrl(value) {
   if (typeof value !== "string") return false;
   try {
@@ -43,7 +46,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=9")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=10")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -66,8 +69,8 @@ const durationText = (milliseconds) => {
 };
 async function updateAlbumDuration(album, client, signal) {
   if (Object.hasOwn(store.durations(), album.id)) return false;
-  const duration = await client.albumDuration(album, { signal });
-  return store.saveMissingDuration(album, duration);
+  const result = await client.albumDuration(album, { signal, withProvenance: true });
+  return store.saveMissingDuration(album, result.duration, result.provenance);
 }
 function fetchAddedDuration(album) {
   void (async () => {
@@ -113,10 +116,16 @@ async function choice(title, content, actions, validate = () => true) {
 function comparison(album, favorite = false) {
   const card = node("article", "", { class: "comparison-card" });
   card.append(node("h3", album.name), node("p", album.artist));
+  const source = resultCoverUrls.get(album.id) || urls.get(album.id);
+  if (source && (trustedCoverUrl(source) || source === urls.get(album.id))) {
+    card.append(node("img", "", { src: source, alt: `Copertina: ${album.name}`,
+      width: "112", height: "112", class: "comparison-artwork", referrerpolicy: "no-referrer" }));
+  }
   const facts = node("dl");
   const values = { Servizio: providerName(album), Anno: album.year || "-", Stato: states[album.status],
     Voto: album.rating ?? "-", Preferito: favorite ? "Si" : "No", Generi: album.genres.join(", ") || "-",
-    Collezioni: album.collections.join(", ") || "-", Tag: album.tags.join(", ") || "-", Note: album.notes || "-" };
+    Collezioni: album.collections.join(", ") || "-", Tag: album.tags.join(", ") || "-", Note: album.notes || "-",
+    Durata: store.durations()[album.id] ? durationText(store.durations()[album.id]) : "Non disponibile", "ID catalogo": album.id };
   Object.entries(values).forEach(([label, value]) => facts.append(node("dt", label), node("dd", String(value))));
   const link = node("a", "Apri nel servizio", { href: album.url, target: "_blank", rel: "noopener noreferrer" });
   card.append(facts, link);
@@ -151,6 +160,7 @@ async function compareCandidate(candidate, found) {
     node("p", found.confidence === "uncertain"
       ? "Titolo e artista coincidono, ma l'anno e' diverso. Controlla se si tratta di un'altra edizione."
       : "Album gia' presente. Confronta le copie prima di decidere."),
+    node("p", "Motivo: " + found.reason),
     row,
   ], actions);
   if (store.state !== expected) throw new Error("Raccolta cambiata: riapri il confronto.");
@@ -274,6 +284,16 @@ function albumCard(album, favorite, duration) {
   rating.value = album.rating === null ? "" : String(album.rating); ratingLabel.append(rating);
   rating.addEventListener("change", () => mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null })));
   controls.append(statusLabel, ratingLabel); options.append(controls);
+  if (duration) {
+    const provenance = node("details"), details = node("pre");
+    provenance.append(node("summary", "Provenienza durata"), details);
+    provenance.addEventListener("toggle", () => {
+      if (!provenance.open) return;
+      try { details.textContent = durationProvenanceText(localStorage, album, duration); }
+      catch (error) { details.textContent = error.message; report(error.message, true); }
+    });
+    options.append(provenance);
+  }
   const footer = node("div", "", { class: "card-actions" }), open = node("a", "Apri", {
     rel: "noopener noreferrer", "aria-label": `Apri album: ${album.name}` });
   configureMusicAppLink(open, album.url, { storage: localStorage,
@@ -331,6 +351,8 @@ function render() {
   $("headerSyncState").textContent = store.state.lastSync ? "Raccolta condivisa" : "Raccolta sul dispositivo";
 }
 function renderResults() {
+  comparedEditions.clear();
+  $("compareCatalogEditions").hidden = true;
   $("catalogResults").replaceChildren();
   const options = { includeLive: $("catalogLive").checked, includeSingle: $("catalogSingle").checked,
     includeEp: $("catalogEp").checked };
@@ -341,6 +363,16 @@ function renderResults() {
     const release = kind ? ` - ${{ single: "Singolo", ep: "EP", short: "Singolo o EP" }[kind]}${estimated ? " (stima)" : ""}` : "";
     const row = node("article", "", { class: "catalog-result" });
     row.append(node("h3", album.name), node("p", `${album.artist} - ${album.year || "-"} - ${providerName(album)}${release}`));
+    const compareLabel = node("label", "", { class: "check" }), compare = node("input", "", {
+      type: "checkbox", "aria-label": `Confronta edizione: ${album.name} (${album.year || "-"})` });
+    compare.addEventListener("change", () => {
+      if (compare.checked && comparedEditions.size >= 4) {
+        compare.checked = false; report("Confronta al massimo quattro edizioni alla volta.", true); return;
+      }
+      if (compare.checked) comparedEditions.add(album.id); else comparedEditions.delete(album.id);
+      $("compareCatalogEditions").hidden = comparedEditions.size < 2;
+    });
+    compareLabel.append(compare, document.createTextNode("Confronta edizione")); row.append(compareLabel);
     const duplicate = store.duplicate(album), button = node("button", duplicate ? "Gia' presente: confronta" : "Aggiungi", { type: "button" });
     button.addEventListener("click", () => run(async () => {
       const current = store.duplicate(album);
@@ -366,6 +398,11 @@ function renderResults() {
       }
       renderResults();
     }));
+    if (duplicate) {
+      const evidence = node("details");
+      evidence.append(node("summary", "Perche' gia' presente?"), node("p", duplicate.reason, { class: "muted" }));
+      row.append(evidence);
+    }
     row.append(button); $("catalogResults").append(row);
   }
 }
@@ -508,6 +545,14 @@ $("openAdd").addEventListener("click", async () => {
 $("catalogService").addEventListener("change", () => run(async () => {
   (await services()).select($("catalogService").value); generation += 1; resultAlbums = []; renderResults();
 }));
+$("compareCatalogEditions").addEventListener("click", () => {
+  try {
+    const selected = resultAlbums.filter((album) => comparedEditions.has(album.id)).map((album) => ({
+      ...album, ...resultMetadata.get(album.id), cover_url: resultCoverUrls.get(album.id),
+      ...(store.durations()[album.id] ? { duration_ms: store.durations()[album.id] } : {}) }));
+    showEditionComparison(selected, $("catalogService").value);
+  } catch (error) { report(error.message, true); }
+});
 $("catalogForm").addEventListener("submit", (event) => {
   event.preventDefault();
   run(async () => {

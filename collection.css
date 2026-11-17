@@ -66,6 +66,13 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); f
 ::selection { background: var(--accent); color: var(--on-accent); }
 a { color: var(--accent); text-underline-offset: 3px; }
 [hidden] { display: none !important; }
+.comparison-artwork { display: block; object-fit: contain; margin: 10px 0; max-width: 100%; }
+.edition-comparison-table { overflow: auto; min-height: 0; }
+.edition-comparison-table table { border-collapse: collapse; width: 100%; }
+.edition-comparison-table :is(td, th) { padding: 10px; text-align: left; vertical-align: top; border: 1px solid var(--line); min-width: 125px; overflow-wrap: anywhere; }
+.edition-difference { font-weight: 700; background: var(--soft); }
+.album-comparison-dialog { width: min(1050px, calc(100% - 24px)); }
+.album-options pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 #feedback { margin: 0 0 10px; overflow-wrap: anywhere; font-size: .875rem; line-height: 1.6; }
 #feedback.error { color: #ffb1b1; }
 #filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; }

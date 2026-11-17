@@ -1,8 +1,10 @@
-import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=52";
+import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=54";
+import { catalogTarget } from "./music-completion.mjs?v=5";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
 const DURATIONS_KEY = "accord-listening-album-durations-v1";
 const QUEUE_KEY = "accord-listening-queue-v1";
+const PROVENANCE_KEY = "accord-music-completion-provenance-v1";
 const albums = (records) => validateDocument({ format: "accord-album-collection", version: 4, albums: records });
 
 export function duplicateCollectionGroups(records, links = {}) {
@@ -86,10 +88,12 @@ export function createCollectionStore(storage) {
     if (storage.getItem(COLLECTION_KEY) !== serialized) throw new Error("Raccolta cambiata in un'altra scheda. Ricarica prima di continuare.");
   }
   function durationSnapshot() {
-    return { saved: storage.getItem(DURATIONS_KEY), queue: storage.getItem(QUEUE_KEY), values: durations() };
+    return { saved: storage.getItem(DURATIONS_KEY), queue: storage.getItem(QUEUE_KEY),
+      provenance: storage.getItem(PROVENANCE_KEY), values: durations() };
   }
   function assertDurationSnapshot(snapshot) {
-    if (storage.getItem(DURATIONS_KEY) !== snapshot.saved || storage.getItem(QUEUE_KEY) !== snapshot.queue) {
+    if (storage.getItem(DURATIONS_KEY) !== snapshot.saved || storage.getItem(QUEUE_KEY) !== snapshot.queue
+        || storage.getItem(PROVENANCE_KEY) !== snapshot.provenance) {
       throw new Error("Le durate o la coda sono cambiate durante la sincronizzazione. Riprova.");
     }
   }
@@ -99,6 +103,34 @@ export function createCollectionStore(storage) {
     storage.setItem(COLLECTION_KEY, value);
     serialized = value;
     state = next;
+  }
+  function writeDurationState(saved, provenance, finish = () => {}) {
+    const written = [];
+    try {
+      for (const [key, value] of [[DURATIONS_KEY, saved], [PROVENANCE_KEY, provenance]]) {
+        const previous = storage.getItem(key);
+        storage.setItem(key, JSON.stringify(value));
+        written.push([key, previous]);
+      }
+      finish();
+    } catch (error) {
+      for (const [key, previous] of written.reverse()) {
+        try {
+          if (previous === null) storage.removeItem(key); else storage.setItem(key, previous);
+        } catch (rollback) {
+          throw new Error(`Salvataggio locale incompleto: ${error.message}. Ripristino durate non riuscito: ${rollback.message}.`);
+        }
+      }
+      throw error;
+    }
+  }
+  function provenanceRecords() {
+    const value = JSON.parse(storage.getItem(PROVENANCE_KEY) || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || Object.values(value).some((entry) => !entry || typeof entry !== "object" || Array.isArray(entry))) {
+      throw new Error("Provenienza delle durate non leggibile.");
+    }
+    return value;
   }
   function removeFrom(next, identifiers) {
     const ids = new Set(identifiers), removed = next.albums.filter((album) => ids.has(album.id));
@@ -113,27 +145,18 @@ export function createCollectionStore(storage) {
       assertCurrent();
       assertDurationSnapshot(snapshot);
       const saved = JSON.parse(snapshot.saved || "{}");
-      for (const row of entries) saved[row.id] = row.duration_ms;
-      const value = JSON.stringify(next), durationValue = JSON.stringify(saved);
-      let durationWritten = false;
-      try {
-        if (entries.length) { storage.setItem(DURATIONS_KEY, durationValue); durationWritten = true; }
-        storage.setItem(COLLECTION_KEY, value);
-      } catch (error) {
-        if (durationWritten) {
-          try {
-            if (snapshot.saved === null) storage.removeItem(DURATIONS_KEY);
-            else storage.setItem(DURATIONS_KEY, snapshot.saved);
-          } catch (rollback) {
-            throw new Error(`Salvataggio locale incompleto: ${error.message}. Ripristino durate non riuscito: ${rollback.message}.`);
-          }
-        }
-        throw error;
+      const provenance = provenanceRecords();
+      for (const row of entries) {
+        if (snapshot.values[row.id] !== row.duration_ms && provenance[row.id]) delete provenance[row.id].duration;
+        saved[row.id] = row.duration_ms;
       }
+      const value = JSON.stringify(next);
+      if (entries.length) writeDurationState(saved, provenance, () => storage.setItem(COLLECTION_KEY, value));
+      else storage.setItem(COLLECTION_KEY, value);
       serialized = value;
       state = next;
     },
-    saveMissingDuration(album, duration) {
+    saveMissingDuration(album, duration, provenance = null) {
       assertCurrent();
       const current = state.albums.find((item) => item.id === album.id);
       if (!current || current.artist !== album.artist || current.name !== album.name || current.url !== album.url) {
@@ -142,7 +165,16 @@ export function createCollectionStore(storage) {
       if (!Number.isSafeInteger(duration) || duration <= 0) throw new Error("Durata non valida.");
       if (Object.hasOwn(durations(), album.id)) return false;
       const saved = JSON.parse(storage.getItem(DURATIONS_KEY) || "{}");
-      storage.setItem(DURATIONS_KEY, JSON.stringify({ ...saved, [album.id]: duration }));
+      const records = provenanceRecords();
+      if (provenance) {
+        if (provenance.duration_ms !== duration || !["spotify", "tidal", "qobuz"].includes(provenance.source)
+            || JSON.stringify(provenance.identity) !== JSON.stringify([album.id, album.artist, album.name])
+            || catalogTarget(storage, album, provenance.source) !== provenance.target) {
+          throw new Error("Provenienza della durata incoerente.");
+        }
+        records[album.id] = { ...records[album.id], duration: provenance };
+      } else if (records[album.id]) delete records[album.id].duration;
+      writeDurationState({ ...saved, [album.id]: duration }, records);
       return true;
     },
     duplicate: (candidate) => findCollectionAlbum(state.albums, candidate, links()),

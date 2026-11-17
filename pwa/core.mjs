@@ -1585,13 +1585,13 @@ export function archiveAlbumNoteVersions(storage, conflicts, remoteRevision, key
 export function findCollectionAlbum(collection, candidate, links = {}) {
   if (!links || typeof links !== "object" || Array.isArray(links)) throw new Error("Associazioni album non valide.");
   const direct = collection.find((album) => album.id === candidate.id);
-  if (direct) return { album: direct, confidence: "verified" };
+  if (direct) return { album: direct, confidence: "verified", reason: "Stesso ID di catalogo." };
   const provider = candidate.id.startsWith("tidal:") ? "tidal" : candidate.id.startsWith("qobuz:") ? "qobuz" : "spotify";
   const linked = collection.find((album) => {
     const link = links[album.id]?.[provider];
     return link?.id === candidate.id && link.source === JSON.stringify([album.id, album.artist, album.name]);
   });
-  if (linked) return { album: linked, confidence: "verified" };
+  if (linked) return { album: linked, confidence: "verified", reason: "Associazione di edizione verificata." };
   const identity = collectionAlbumIdentity(candidate);
   if (!identity.artist || !identity.title) return null;
   let uncertain = null;
@@ -1599,8 +1599,10 @@ export function findCollectionAlbum(collection, candidate, links = {}) {
     const existing = collectionAlbumIdentity(album);
     if (identity.artist !== existing.artist || identity.title !== existing.title) continue;
     const differentYear = !!album.year && !!candidate.year && album.year !== candidate.year;
-    if (differentYear && !identity.edition && !existing.edition) uncertain ||= { album, confidence: "uncertain" };
-    else return { album, confidence: "matching" };
+    const reason = "Artista e titolo coincidono dopo normalizzazione di accenti, punteggiatura e suffissi di edizione."
+      + (differentYear ? " Anni diversi: controlla l'edizione." : " Controlla l'edizione prima di unire le copie.");
+    if (differentYear && !identity.edition && !existing.edition) uncertain ||= { album, confidence: "uncertain", reason };
+    else return { album, confidence: "matching", reason };
   }
   return uncertain;
 }

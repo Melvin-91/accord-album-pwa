@@ -1,9 +1,9 @@
-import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=53";
+import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=54";
 import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
-import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=4";
+import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=5";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -267,7 +267,8 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         const wanted = new Set(ids.map((id) => `tidal:${id}`));
         records = tidalAlbumRecords(page.documents).filter((album) => wanted.has(album.id));
         for (const resource of tidalResources(page.documents).filter((item) => item.type === "albums")) {
-          releaseMetadata.set(`tidal:${resource.id}`, { album_type: resource.attributes?.albumType });
+          releaseMetadata.set(`tidal:${resource.id}`, { album_type: resource.attributes?.albumType,
+            track_count: resource.attributes?.numberOfTracks, duration_iso: resource.attributes?.duration });
         }
         for (const [id, url] of tidalAlbumArtwork(page.documents)) coverUrls.set(id, url);
         if (records.length !== wanted.size || page.count && !wanted.size) {
@@ -310,7 +311,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         : album.id.startsWith("qobuz:") ? qobuzCoverUrl(url) : spotifyCoverUrl(url);
     },
     releaseMetadata(album) { return releaseMetadata.get(album?.id) || {}; },
-    async albumDuration(album, { signal: externalSignal } = {}) {
+    async albumDuration(album, { signal: externalSignal, withProvenance = false } = {}) {
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       const target = catalogTarget(storage, album, provider);
       if (!target) {
@@ -348,7 +349,9 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       guard();
       const result = await readAlbumDuration(provider, api, target, { signal });
       guard();
-      return result.duration;
+      return withProvenance ? { duration: result.duration, provenance: { source: provider, target,
+        identity: [album.id, album.artist, album.name], complete_tracks: result.total,
+        updated: new Date().toISOString(), duration_ms: result.duration } } : result.duration;
     },
   };
 }

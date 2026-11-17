@@ -9,6 +9,7 @@ import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs";
 import { setEditionLink } from "./music-continuity.mjs";
+import { durationProvenanceText, COMPLETION_PROVENANCE_KEY } from "./music-completion.mjs";
 globalThis.crypto ||= webcrypto;
 
 const album = (id = "A".repeat(22), changes = {}) => validateAlbum({
@@ -26,6 +27,44 @@ const storage = (values = {}) => {
 const local = (records, base = records, extras = {}) => storage({ [COLLECTION_KEY]: JSON.stringify({ albums: records, base, ...extras }),
   "accord-album-owner": "owner", "accord-album-token": "synthetic-test-token" });
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status });
+test("duplicate evidence distinguishes native IDs, verified links and normalized title matches", () => {
+  const saved = album(), alias = album("tidal:42", { artist: "BJÖRK", name: "Debut (Deluxe Edition)" });
+  assert.match(findCollectionAlbum([saved], saved).reason, /Stesso ID/);
+  assert.match(findCollectionAlbum([saved], alias).reason, /normalizzazione/);
+  const links = { [saved.id]: { tidal: { id: alias.id, source: JSON.stringify([saved.id, saved.artist, saved.name]) } } };
+  assert.match(findCollectionAlbum([saved], alias, links).reason, /Associazione/);
+  links[saved.id].tidal.source = "stale";
+  assert.match(findCollectionAlbum([saved], alias, links).reason, /normalizzazione/);
+});
+
+test("collection duration provenance is saved atomically, is readable, and cannot survive a changed synced value", () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk);
+  const duration = 180001, provenance = { source: "spotify", target: saved.id,
+    identity: [saved.id, saved.artist, saved.name], duration_ms: duration, complete_tracks: 12, updated: "2026-11-17T10:00:00" };
+  assert.equal(store.saveMissingDuration(saved, duration, provenance), true);
+  const text = durationProvenanceText(disk, saved, duration);
+  assert.match(text, /Spotify/); assert.match(text, /3:00/); assert.match(text, /12/);
+  assert.match(durationProvenanceText(disk, { ...saved, name: "Changed" }, duration), /storica/);
+  assert.equal(store.saveMissingDuration(saved, 999999, { ...provenance, duration_ms: 999999 }), false);
+  const snapshot = store.durationSnapshot();
+  store.commitSync(store.state, snapshot, [{ id: saved.id, duration_ms: 200000 }]);
+  assert.equal(JSON.parse(disk.getItem(COMPLETION_PROVENANCE_KEY))[saved.id].duration, undefined);
+  assert.match(durationProvenanceText(disk, saved, 200000), /non disponibile/);
+});
+
+test("failure saving provenance rolls back the duration without mutating album data", () => {
+  const saved = album(), disk = local([saved]), store = createCollectionStore(disk);
+  const previous = disk.getItem(COLLECTION_KEY), write = disk.setItem;
+  disk.setItem = (key, value) => {
+    if (key === COMPLETION_PROVENANCE_KEY) throw new Error("quota");
+    write(key, value);
+  };
+  assert.throws(() => store.saveMissingDuration(saved, 12345), /quota/);
+  assert.deepEqual(store.durations(), {});
+  assert.equal(disk.getItem(COLLECTION_KEY), previous);
+  assert.equal(disk.getItem(COMPLETION_PROVENANCE_KEY), null);
+});
+
 function github(records, { failPut = false, mutateBeforePut, coverArchive, deletedAlbums = [], deletionHistory = true, durations = null } = {}) {
   const writes = [], reads = [];
   const request = async (url, options = {}) => {
@@ -845,12 +884,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=13/);
+  assert.match(html, /collection-app\.mjs\?v=14/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.31\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.32\.0/);
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
