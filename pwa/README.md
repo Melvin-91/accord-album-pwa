@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.36.0 · Durate da riprovare e stato GitHub
+
+Ripeti le letture solo per le durate non recuperate, singolarmente o
+insieme. Accanto a Sincronizza sono indicate l'ultima conferma GitHub e
+le modifiche locali in attesa. In caso di invio incerto, Verifica su GitHub
+legge lo stato remoto senza ripetere l'invio.
+
 ### PWA 1.35.4 · Verifica delle durate e catalogo alternativo
 
 Per una durata mancante, Accord prova il servizio selezionato, poi al

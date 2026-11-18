@@ -48,6 +48,9 @@ main { width: min(1040px, calc(100% - 64px)); margin: 8px auto 32px; }
 .orbit-dock button:hover { color: inherit; background: var(--raised); border-color: var(--line); }
 .orbit-dock button[aria-current=page], .orbit-dock #update { color: var(--accent); background: var(--soft); }
 .orbit-dock .command-icon { width: 20px; height: 20px; margin: 0; }
+.sync-summary { position: absolute; right: 0; bottom: calc(100% + 6px); left: 0; max-width: none; padding: 6px 12px; border: 1px solid var(--line); border-radius: 12px; color: var(--muted); background: #242b34; font-size: .625rem; line-height: 1.3; text-align: center; }
+.duration-failure { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; margin: 8px 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.duration-failure p { margin: 0; overflow-wrap: anywhere; }
 nav, .dialog-actions, .card-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 button, input, select { font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-width: 100%; }
 button { cursor: pointer; background: var(--accent); color: var(--on-accent); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }

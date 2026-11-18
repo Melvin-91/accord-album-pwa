@@ -353,19 +353,27 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         : album.id.startsWith("qobuz:") ? qobuzCoverUrl(url) : spotifyCoverUrl(url);
     },
     releaseMetadata(album) { return releaseMetadata.get(album?.id) || {}; },
-    async albumDuration(album, { signal: externalSignal, withProvenance = false } = {}) {
+    async albumDuration(album, { signal: externalSignal, withProvenance = false, provider: requestedProvider } = {}) {
       const selected = gate.service, epoch = gate.epoch, revision = accountRevision();
-      const candidates = [...new Set([selected, ...["spotify", "tidal", "qobuz"].filter((service) =>
+      const primary = requestedProvider || selected;
+      if (!["spotify", "tidal", "qobuz"].includes(primary)) throw new Error("Servizio musicale non valido.");
+      const candidates = [...new Set([primary, ...["spotify", "tidal", "qobuz"].filter((service) =>
         catalogTarget(storage, album, service) === album.id), "tidal", "qobuz", "spotify"])]
         .map((service) => [service, catalogTarget(storage, album, service)]).filter(([, id]) => id);
       if (!candidates.length) throw new Error("Nessuna edizione identificata per recuperare la durata.");
-      const attempts = candidates.slice(0, candidates[0][0] === selected ? 2 : 1);
+      const attempts = candidates.slice(0, candidates[0][0] === primary ? 2 : 1);
+      const attempted = [];
       let missingEdition;
       for (const [index, [provider, target]] of attempts.entries()) {
+        attempted.push(provider);
         try {
           return await read(provider, target);
         } catch (error) {
-          if (index + 1 === attempts.length || error !== missingEdition) throw error;
+          if (index + 1 === attempts.length || error !== missingEdition) {
+            error.durationAttempts = [...attempted];
+            throw error;
+          }
+          missingEdition = error;
         }
       }
 

@@ -1,6 +1,6 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=9";
-import { createCollectionSync } from "./collection-sync.mjs?v=7";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=10";
+import { createCollectionSync } from "./collection-sync.mjs?v=8";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
@@ -18,6 +18,8 @@ const $ = (id) => document.getElementById(id);
 const states = { queued: "Da ascoltare", listening: "In ascolto",
   liked: "Mi piace", neutral: "Neutro", disliked: "Non mi piace" };
 const providerName = (album) => album.id.startsWith("tidal:") ? "TIDAL" : album.id.startsWith("qobuz:") ? "Qobuz" : "Spotify";
+const musicServiceName = (provider) => ({ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" })[provider] || "non noto";
+const DURATION_FAILURES_KEY = "accord-duration-retry-failures-v1";
 const node = (tag, text = "", attributes = {}) => {
   const value = document.createElement(tag); value.textContent = text;
   Object.entries(attributes).forEach(([key, item]) => value.setAttribute(key, item));
@@ -88,7 +90,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=15")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=16")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -106,10 +108,111 @@ const durationText = (milliseconds) => {
   const minutes = Math.max(1, Math.round(milliseconds / 60_000));
   return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
 };
-async function updateAlbumDuration(album, client, signal) {
+function durationFailures() {
+  const saved = JSON.parse(localStorage.getItem(DURATION_FAILURES_KEY) || "{}");
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)
+      || Object.entries(saved).some(([id, row]) => !row || row.id !== id
+        || typeof row.name !== "string" || typeof row.artist !== "string"
+        || !["spotify", "tidal", "qobuz"].includes(row.provider)
+        || !Array.isArray(row.attemptedProviders) || typeof row.reason !== "string")) {
+    throw new Error("Registro dei tentativi di durata non valido.");
+  }
+  return saved;
+}
+function saveDurationFailures(failures) {
+  localStorage.setItem(DURATION_FAILURES_KEY, JSON.stringify(failures));
+}
+function durationFailure(album, provider, error) {
+  const attemptedProviders = Array.isArray(error.durationAttempts)
+    ? error.durationAttempts.filter((item) => ["spotify", "tidal", "qobuz"].includes(item)) : [provider];
+  const deadlines = attemptedProviders.map((item) => Number(localStorage.getItem(`accord-${item}-cooldown-until-v1`) || 0))
+    .filter((value) => Number.isFinite(value) && value > Date.now());
+  const wait = Number(error.retry_after || error.retryAfter || 0);
+  if (wait > 0) deadlines.push(Date.now() + wait * 1000);
+  const seconds = Number(error.message.match(/attendi\s+(\d+)\s+secondi/i)?.[1] || 0);
+  if (seconds > 0) deadlines.push(Date.now() + seconds * 1000);
+  const record = { id: album.id, artist: album.artist, name: album.name, provider,
+    attemptedProviders, reason: error.message || String(error) };
+  if (deadlines.length) record.retryAt = Math.max(...deadlines);
+  return record;
+}
+function clearDurationFailure(id) {
+  const failures = durationFailures();
+  if (Object.hasOwn(failures, id)) { delete failures[id]; saveDurationFailures(failures); }
+}
+function renderDurationFailures() {
+  const container = $("durationFailures");
+  container.replaceChildren();
+  const saved = durationFailures(), durations = store.durations();
+  const records = Object.values(saved).filter((record) =>
+    store.state.albums.some((album) => album.id === record.id) && !Object.hasOwn(durations, record.id));
+  container.hidden = records.length === 0;
+  if (!records.length) return;
+  container.append(node("h3", `Durate in sospeso · ${records.length}`));
+  const retryAll = node("button", "Riprova solo i falliti",
+    { type: "button", class: "secondary", "data-retry-duration": "all" });
+  container.append(retryAll);
+  for (const record of records) {
+    const row = node("div", "", { class: "duration-failure" });
+    const attempted = record.attemptedProviders.length
+      ? record.attemptedProviders.map(musicServiceName).join(", ") : "nessun catalogo interrogato";
+    let retry = "";
+    if (record.retryAt > Date.now()) retry = ` · riprova dopo ${new Date(record.retryAt).toLocaleString("it")}`;
+    row.append(node("p", `${record.artist} · ${record.name} — ${attempted}: ${record.reason}${retry}`));
+    const button = node("button", "Riprova",
+      { type: "button", class: "secondary", "data-retry-duration": record.id });
+    row.append(button); container.append(row);
+  }
+}
+async function updateAlbumDuration(album, client, signal, provider) {
   if (Object.hasOwn(store.durations(), album.id)) return false;
-  const result = await client.albumDuration(album, { signal, withProvenance: true });
-  return store.saveMissingDuration(album, result.duration, result.provenance);
+  const result = await client.albumDuration(album, { signal, withProvenance: true, provider });
+  const saved = store.saveMissingDuration(album, result.duration, result.provenance);
+  if (saved) clearDurationFailure(album.id);
+  return saved;
+}
+async function runDurationRecovery(records) {
+  const client = await services(), controller = new AbortController();
+  const currentAlbums = new Map(store.state.albums.map((album) => [album.id, album]));
+  const known = store.durations(), failures = durationFailures(), blocked = new Map();
+  const targets = records.filter((record) => currentAlbums.has(record.id) && !Object.hasOwn(known, record.id));
+  if (!targets.length) { $("durationStatus").textContent = "Non ci sono durate mancanti da recuperare."; return; }
+  let completed = 0, index = 0;
+  durationAbort = controller; disable();
+  try {
+    for (const record of targets) {
+      if (controller.signal.aborted) break;
+      const album = currentAlbums.get(record.id), provider = record.provider || client.provider;
+      index += 1;
+      $("durationStatus").textContent = `Durate: ${index} su ${targets.length} · ${album.name}`;
+      if (blocked.has(provider)) {
+        failures[album.id] = { ...durationFailure(album, provider, new Error(blocked.get(provider))),
+          attemptedProviders: [] };
+        saveDurationFailures(failures);
+        continue;
+      }
+      try {
+        if (await updateAlbumDuration(album, client, controller.signal, provider)) completed += 1;
+      } catch (error) {
+        if (controller.signal.aborted) break;
+        failures[album.id] = durationFailure(album, provider, error);
+        saveDurationFailures(failures);
+        if (/HTTP (401|403|429)\b|attendi|limite|accesso .*non attivo/i.test(error.message)) {
+          blocked.set(provider, error.message);
+        }
+      }
+    }
+  } finally {
+    durationAbort = null; disable();
+  }
+  const remainingDurations = store.durations();
+  const remaining = Object.values(durationFailures()).filter((record) =>
+    currentAlbums.has(record.id) && !Object.hasOwn(remainingDurations, record.id)).length;
+  const status = `${controller.signal.aborted ? "Interrotto. " : ""}${completed} durate aggiunte.`
+    + (remaining ? ` ${remaining} in sospeso; puoi riprovare singolarmente o tutti i falliti.` : "");
+  $("durationStatus").textContent = status;
+  renderDurationFailures();
+  report(status, remaining > 0);
 }
 function fetchAddedDuration(album) {
   void (async () => {
@@ -118,6 +221,11 @@ function fetchAddedDuration(album) {
       const saved = await updateAlbumDuration(album, client);
       if (saved) { render(); report(`Album aggiunto. Durata recuperata per ${album.name}.`); }
     } catch (error) {
+      try {
+        const client = await services(), failures = durationFailures();
+        failures[album.id] = durationFailure(album, client.provider, error);
+        saveDurationFailures(failures); renderDurationFailures();
+      } catch (saveError) { report(`Durata non disponibile per ${album.name}; registro fallimenti non salvato: ${saveError.message}`, true); return; }
       report(`Album aggiunto, ma durata non disponibile per ${album.name}: ${error.message}`, true);
     }
   })();
@@ -396,8 +504,15 @@ function render() {
   $("empty").hidden = filtered.length > 0;
   $("empty").textContent = store.state.albums.length ? "Nessun album corrisponde ai filtri." : "La raccolta e' vuota. Aggiungi un album oppure sincronizza con GitHub.";
   $("moreAlbums").hidden = filtered.length <= visibleLimit;
-  $("lastSync").textContent = store.state.lastSync ? `Ultima sincronizzazione: ${new Date(store.state.lastSync).toLocaleString("it")}` : "Le modifiche restano sul dispositivo finche' sincronizzi.";
+  const pending = store.pendingChanges();
+  const confirmed = store.state.lastSync ? new Date(store.state.lastSync).toLocaleString("it") : "mai";
+  $("lastSync").textContent = `Ultima conferma GitHub: ${confirmed} · modifiche locali in attesa: ${pending}`;
   $("headerSyncState").textContent = store.state.lastSync ? "Raccolta condivisa" : "Raccolta sul dispositivo";
+  const verificationRequired = Boolean(sync?.uncertainWrite());
+  $("sync").textContent = verificationRequired ? "Verifica su GitHub" : "Sincronizza";
+  $("sync").setAttribute("aria-describedby", "syncSummary");
+  $("syncSummary").textContent = `Ultima conferma: ${confirmed} · ${pending} modifiche locali in attesa`
+    + (verificationRequired ? " · verifica in sola lettura richiesta" : "");
 }
 function renderResults() {
   comparedEditions.clear();
@@ -550,6 +665,14 @@ async function reviewMetadata() {
   if (answer.startsWith("album:")) revealCollectionAlbum(answer.slice(6));
 }
 async function performSync() {
+  if (sync.uncertainWrite()) {
+    const result = await sync.verifyUncertainWrite();
+    render();
+    report(result.verified
+      ? `Invio di ${result.file} verificato su GitHub in sola lettura. Nessun dato inviato; avvia Sincronizza solo dopo aver controllato lo stato locale.`
+      : `Invio GitHub ancora non confermato. Nessun dato inviato; ripeti Verifica su GitHub prima di sincronizzare.`, !result.verified);
+    return;
+  }
   report("Lettura della raccolta condivisa...");
   const completed = await sync.sync({
     onProgress: (message) => report(message),
@@ -626,6 +749,7 @@ try {
   store = createCollectionStore(localStorage);
   sync = createCollectionSync({ storage: localStorage, store, covers });
   render();
+  renderDurationFailures();
 } catch (error) { report(error.message, true); }
 disable();
 const dockObserver = new ResizeObserver(() => {
@@ -667,38 +791,25 @@ $("returnToFilters").addEventListener("click", () => {
 $("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
-  const client = await services(), controller = new AbortController();
-  const known = store.durations();
-  const missing = store.state.albums.filter((album) => !Object.hasOwn(known, album.id));
-  const failed = [];
-  let blocked = "";
-  let completed = 0, index = 0;
-  durationAbort = controller; disable();
-  try {
-    for (const album of missing) {
-      if (controller.signal.aborted) break;
-      index += 1;
-      $("durationStatus").textContent = `Durate: ${index} su ${missing.length} · ${album.name}`;
-      if (blocked) { failed.push(`${album.name}: ${blocked}`); continue; }
-      try {
-        if (await updateAlbumDuration(album, client, controller.signal)) completed += 1;
-      } catch (error) {
-        if (controller.signal.aborted) break;
-        if (/HTTP (401|403|429)\b|collega|attendi|limite|accesso .*non attivo/i.test(error.message)) {
-          blocked = error.message;
-        }
-        failed.push(`${album.name}: ${error.message}`);
-      }
-    }
-  } finally {
-    durationAbort = null; disable();
+  const client = await services(), known = store.durations();
+  const missing = store.state.albums.filter((album) => !Object.hasOwn(known, album.id))
+    .map((album) => ({ id: album.id, provider: client.provider }));
+  if (!missing.length) {
+    $("durationStatus").textContent = "Non ci sono durate mancanti. I fallimenti precedenti non vengono riprovati automaticamente.";
+    return;
   }
-  const details = failed;
-  const status = `${controller.signal.aborted ? "Interrotto. " : ""}${completed} durate aggiunte.`
-    + (details.length ? ` Non disponibili (${details.length}): ${details.join("; ")}` : "");
-  $("durationStatus").textContent = status;
-  report(status, details.length > 0);
+  await runDurationRecovery(missing);
 }));
+$("durationFailures").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-retry-duration]");
+  if (!button) return;
+  try {
+    const saved = durationFailures();
+    const records = button.dataset.retryDuration === "all" ? Object.values(saved)
+      : [saved[button.dataset.retryDuration]].filter(Boolean);
+    if (records.length) void run(() => runDurationRecovery(records));
+  } catch (error) { report(error.message, true); }
+});
 $("duplicates").addEventListener("click", () => {
   try { $("settingsDialog").close(); showDuplicates(); } catch (error) { report(error.message, true); }
 });

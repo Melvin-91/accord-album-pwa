@@ -228,6 +228,19 @@ test("duration reads preserve existing values and refuse a changed or removed al
   store.remove([saved.id]);
   assert.throws(() => store.saveMissingDuration(saved, 30), /cambiato/);
 });
+test("pending sync count deduplicates album and duration changes by album", () => {
+  const saved = album(), added = album("B".repeat(22), { name: "Another" });
+  const disk = local([saved]), store = createCollectionStore(disk);
+  assert.equal(store.pendingChanges(), 0);
+  store.saveMissingDuration(saved, 120001);
+  assert.equal(store.pendingChanges(), 1);
+  store.update(saved.id, { rating: 4 });
+  assert.equal(store.pendingChanges(), 1);
+  store.add(added);
+  assert.equal(store.pendingChanges(), 2);
+  store.remove([saved.id]);
+  assert.equal(store.pendingChanges(), 2);
+});
 test("durations synchronize across devices and include legacy queue values", async () => {
   const saved = album(), disk = local([saved]), first = createCollectionStore(disk), remote = github([saved]);
   disk.setItem("accord-listening-queue-v1", JSON.stringify({ durations: { [saved.id]: 123000 } }));
@@ -377,6 +390,37 @@ test("failed read-back or a changed account cannot confirm an uncertain upload",
     assert.equal(remote.writes.length, 1);
     assert.equal(verificationReads, changeAccount ? 0 : 1);
   }
+});
+test("uncertain upload marker survives reopening and verification is read-only", async () => {
+  const saved = album(), disk = local([saved], []), store = createCollectionStore(disk), remote = github([]);
+  let loseVerification = false;
+  const request = async (url, options) => {
+    if (options.method === "PUT") {
+      const response = await remote.request(url, options);
+      loseVerification = true;
+      throw new TypeError("Synthetic lost response");
+    }
+    if (loseVerification && /albums\.json/.test(url)) {
+      loseVerification = false;
+      throw new TypeError("Synthetic read-back offline");
+    }
+    return remote.request(url, options);
+  };
+  const first = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: request });
+  await assert.rejects(first.sync({ chooseConflicts: () => assert.fail(), confirm: async () => true }),
+    /Verifica in sola lettura non riuscita/);
+  assert.equal(remote.writes.length, 1);
+  const marker = JSON.parse(disk.getItem("accord-album-sync-uncertain-v1"));
+  assert.equal(marker.file, "albums.json");
+
+  const reopened = createCollectionSync({ storage: disk, store: createCollectionStore(disk),
+    covers: coverCache, fetch: request });
+  assert.equal(reopened.uncertainWrite().blobSha, marker.blobSha);
+  const writesBefore = remote.writes.length;
+  const result = await reopened.verifyUncertainWrite();
+  assert.deepEqual(result, { pending: true, verified: true, file: "albums.json" });
+  assert.equal(remote.writes.length, writesBefore);
+  assert.equal(disk.getItem("accord-album-sync-uncertain-v1"), null);
 });
 test("conflicts and server-imposed waits never trigger recovery reads or retries", async () => {
   for (const [status, headers] of [[409, {}], [503, { "Retry-After": "60" }], [502, { "X-RateLimit-Remaining": "0" }]]) {
@@ -1153,12 +1197,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=23/);
+  assert.match(html, /collection-app\.mjs\?v=24/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.4/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.36\.0/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

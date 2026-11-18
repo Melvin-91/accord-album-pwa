@@ -3,6 +3,7 @@ import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive
 import { validateDurationDocument, validateDurationEntries, durationDocument, mergeDurations } from "./duration-sync.mjs?v=1";
 
 const API = "https://api.github.com";
+const UNCERTAIN_WRITE_KEY = "accord-album-sync-uncertain-v1";
 class UncertainGitHubWrite extends Error {}
 
 export function githubCollectionSettings(storage) {
@@ -31,6 +32,18 @@ async function gitBlobSha(bytes) {
 }
 
 export function createCollectionSync({ storage, store, covers, fetch: request = globalThis.fetch }) {
+  const uncertainWrite = () => {
+    const saved = storage.getItem(UNCERTAIN_WRITE_KEY);
+    if (saved === null) return null;
+    const marker = JSON.parse(saved);
+    if (!marker || typeof marker !== "object" || Array.isArray(marker)
+        || !["albums.json", "covers.bin", "durations.json"].includes(marker.file)
+        || typeof marker.owner !== "string" || typeof marker.branch !== "string"
+        || !/^[a-f0-9]{40}$/.test(marker.blobSha)) {
+      throw new Error("Registro dell'invio GitHub incerto non valido. Nessun invio eseguito.");
+    }
+    return marker;
+  };
   function client(assertExtra = () => {}, progress = () => {}) {
     const settings = githubCollectionSettings(storage);
     const root = `${API}/repos/${encodeURIComponent(settings.owner)}/accord-music-data`;
@@ -158,14 +171,21 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
     async function write(file, bytes, sha, branch) {
       const payload = { message: `Sync Accord ${file}`, content: base64(bytes), branch, ...(sha ? { sha } : {}) };
       progress(`Invio GitHub: ${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB). Attesa massima: 120 s.`);
+      const marker = { owner: connectionOwner, branch, file, blobSha: await gitBlobSha(bytes),
+        createdAt: new Date().toISOString() };
+      storage.setItem(UNCERTAIN_WRITE_KEY, JSON.stringify(marker));
       try {
         const result = await send(`${root}/contents/${file}`, { method: "PUT", body: JSON.stringify(payload) });
         if (typeof result?.content?.sha !== "string" || !result.content.sha
             || typeof result?.commit?.sha !== "string" || !result.commit.sha) {
           throw new UncertainGitHubWrite("Conferma dell'invio GitHub incompleta.");
         }
+        storage.removeItem(UNCERTAIN_WRITE_KEY);
       } catch (error) {
-        if (!(error instanceof UncertainGitHubWrite)) throw new Error(`${file}: ${error.message}`);
+        if (!(error instanceof UncertainGitHubWrite)) {
+          storage.removeItem(UNCERTAIN_WRITE_KEY);
+          throw new Error(`${file}: ${error.message}`);
+        }
         const detail = `${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB): ${error.message}`;
         let verified = false;
         try {
@@ -181,11 +201,30 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         }
         if (!verified) throw new Error(`${detail} Il contenuto remoto non conferma l'invio. `
           + "Nessun invio ripetuto. Rileggi con Sincronizza prima di riprovare; non cancellare i dati locali.");
+        storage.removeItem(UNCERTAIN_WRITE_KEY);
       }
     }
-    return { read, write, assertCurrent, settings };
+    async function verify(marker) {
+      const url = `${root}/contents/${marker.file}?ref=${encodeURIComponent(marker.branch)}`;
+      return send(url, { label: marker.file, missing: true });
+    }
+    const connectionOwner = settings.owner;
+    return { read, write, verify, assertCurrent, settings };
   }
   return {
+    uncertainWrite,
+    async verifyUncertainWrite() {
+      const marker = uncertainWrite();
+      if (!marker) return { pending: false, verified: false };
+      const connection = client();
+      if (marker.owner !== connection.settings.owner) {
+        throw new Error("L'invio incerto appartiene a un altro account GitHub. Ripristina quel collegamento prima di verificare.");
+      }
+      const metadata = await connection.verify(marker);
+      const verified = metadata?.sha === marker.blobSha;
+      if (verified) storage.removeItem(UNCERTAIN_WRITE_KEY);
+      return { pending: true, verified, file: marker.file };
+    },
     async checkAddition(album) {
       if (!storage.getItem("accord-album-owner") && !storage.getItem("accord-album-token")) return null;
       const connection = client(), remote = await connection.read();

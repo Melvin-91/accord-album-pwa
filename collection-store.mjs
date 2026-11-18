@@ -141,6 +141,20 @@ export function createCollectionStore(storage) {
   }
   return {
     get state() { return state; }, links, assertCurrent, commit, durations, durationSnapshot, assertDurationSnapshot,
+    pendingChanges() {
+      const changed = new Set(), base = new Map(state.base.map((album) => [album.id, album]));
+      const current = new Map(state.albums.map((album) => [album.id, album]));
+      for (const id of new Set([...base.keys(), ...current.keys()])) {
+        if (JSON.stringify(base.get(id) ?? null) !== JSON.stringify(current.get(id) ?? null)) changed.add(id);
+      }
+      state.pendingRemovals.forEach((album) => changed.add(album.id));
+      const durationBase = new Map((state.durationBase?.albums || []).map((row) => [row.id, row.duration_ms]));
+      const localDurations = durations();
+      for (const id of new Set([...durationBase.keys(), ...Object.keys(localDurations)])) {
+        if ((durationBase.get(id) ?? null) !== (localDurations[id] ?? null)) changed.add(id);
+      }
+      return changed.size;
+    },
     commitSync(next, snapshot, entries) {
       assertCurrent();
       assertDurationSnapshot(snapshot);
