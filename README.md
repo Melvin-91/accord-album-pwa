@@ -2,6 +2,11 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.36.1 · Informazioni album
+
+La scheda mostra di nuovo il genere e visualizza la durata senza la voce
+Provenienza durata. I dati gia' salvati restano invariati.
+
 ### PWA 1.36.0 · Durate da riprovare e stato GitHub
 
 Ripeti le letture solo per le durate non recuperate, singolarmente o

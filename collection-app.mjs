@@ -7,7 +7,6 @@ import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.m
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
-import { durationProvenanceText } from "./music-completion.mjs?v=7";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
 
@@ -405,7 +404,8 @@ function albumCard(album, favorite, duration) {
     if (mutate(() => store.favorite(album.id))) report("Preferito salvato su questo dispositivo.");
   });
   const metadata = node("div", "", { class: "album-metadata muted" });
-  metadata.append(node("span", `${album.year || "-"} - ${providerName(album)}`));
+  const genre = album.primary_genre || album.genres[0];
+  metadata.append(node("span", [`${album.year || "-"} - ${providerName(album)}`, genre].filter(Boolean).join(" · ")));
   if (duration) metadata.append(node("span", durationText(duration), {
     class: "album-duration", "aria-label": `Durata: ${durationText(duration)}`,
   }));
@@ -430,16 +430,6 @@ function albumCard(album, favorite, duration) {
   rating.value = album.rating === null ? "" : String(album.rating); ratingLabel.append(rating);
   rating.addEventListener("change", () => mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null })));
   controls.append(statusLabel, ratingLabel); options.append(controls);
-  if (duration) {
-    const provenance = node("details"), details = node("pre");
-    provenance.append(node("summary", "Provenienza durata"), details);
-    provenance.addEventListener("toggle", () => {
-      if (!provenance.open) return;
-      try { details.textContent = durationProvenanceText(localStorage, album, duration); }
-      catch (error) { details.textContent = error.message; report(error.message, true); }
-    });
-    options.append(provenance);
-  }
   const footer = node("div", "", { class: "card-actions" }), open = node("a", "Apri", {
     rel: "noopener noreferrer", "aria-label": `Apri album: ${album.name}` });
   configureMusicAppLink(open, album.url, { storage: localStorage,
