@@ -2,6 +2,12 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.35.2 · Discografia TIDAL
+
+Con **Artista** compilato, **Aggiungi album** risolve il nome nel catalogo artisti
+TIDAL e legge le pagine della discografia. **Titolo album** restringe i risultati
+della discografia; i filtri Live, Singoli ed EP restano indipendenti.
+
 ### PWA 1.35.1 · Risultati coerenti con artista e titolo
 
 In **Aggiungi album**, Artista corrisponde solo agli artisti accreditati e

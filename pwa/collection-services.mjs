@@ -4,7 +4,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
 import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=5";
-import { catalogCriteriaMatch } from "./collection-qol.mjs?v=3";
+import { catalogCriteriaMatch, catalogNameKey } from "./collection-qol.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -237,7 +237,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       const direct = reference ?? (/^https:/i.test(query) || new RegExp(`^${provider}:`, "i").test(query)
         || provider === "tidal" && /^\d+$/.test(query));
-      let records;
+      let records, byTidalArtist = false;
       coverUrls.clear();
       releaseMetadata.clear();
       if (provider === "qobuz") {
@@ -256,27 +256,59 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         const profile = await tidal.request("users/me", token, { signal }), countryCode = profile.data?.attributes?.country;
         if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
         const include = "albums.artists,albums.coverArt";
-        const path = id
-          ? `albums?${new URLSearchParams({ "filter[id]": id, countryCode, include: "artists" })}`
-          : await tidal.searchPath(query, "albums", token, { countryCode, include, signal });
-        const page = await tidal.pages(path, token, { maxPages: 1, maxItems: 50, signal });
-        const ids = tidalResources(page.documents).filter((item) => item.type === "albums")
-          .map((item) => tidalAlbumId(item.id)).slice(0, 50);
-        const present = new Set(tidalAlbumRecords(page.documents).map((album) => album.id.slice(6)));
+        const limits = { maxPages: 12, maxItems: 500, signal };
+        byTidalArtist = !direct && Boolean(criteria?.artist);
+        let paths;
+        if (byTidalArtist) {
+          const path = await tidal.searchPath(criteria.artist, "artists", token, { countryCode, include: "artists", signal });
+          const page = await tidal.pages(path, token, limits);
+          if (!page.complete) throw new Error("Troppi risultati artista su TIDAL. Inserisci un nome più preciso.");
+          const key = catalogNameKey(criteria.artist);
+          const artistIds = new Set(page.documents.flatMap(({ data }) => data).map((row) => {
+            if (row?.type !== "artists") throw new Error("Risultati artista TIDAL non validi.");
+            return tidalAlbumId(row.id);
+          }));
+          const artists = tidalResources(page.documents).filter((row) => row.type === "artists" && artistIds.has(row.id));
+          if (artists.some((row) => typeof row.attributes?.name !== "string" || !row.attributes.name.trim())) {
+            throw new Error("Metadati degli artisti TIDAL incompleti.");
+          }
+          const exact = artists.filter((row) => catalogNameKey(row.attributes.name) === key);
+          const matches = exact.length ? exact : artists.filter((row) => key && catalogNameKey(row.attributes.name).includes(key));
+          if (matches.length > 5) throw new Error("Troppi artisti corrispondenti su TIDAL. Inserisci un nome più preciso.");
+          paths = matches.map(({ id }) =>
+            `artists/${id}/relationships/albums?${new URLSearchParams({ countryCode, include })}`);
+        } else {
+          paths = [id ? `albums?${new URLSearchParams({ "filter[id]": id, countryCode, include: "artists" })}`
+            : await tidal.searchPath(query, "albums", token, { countryCode, include, signal })];
+        }
+        const documents = [];
+        for (const path of paths) {
+          const page = await tidal.pages(path, token, byTidalArtist ? limits : { maxPages: 1, maxItems: 50, signal });
+          if (byTidalArtist && !page.complete) {
+            throw new Error("Discografia TIDAL non completa: raggiunto il limite di lettura.");
+          }
+          documents.push(...page.documents);
+        }
+        const ids = [...new Set(documents.flatMap(({ data }) => Array.isArray(data) ? data : [data])
+          .map((row) => {
+            if (row?.type !== "albums") throw new Error("Risultati album TIDAL non validi.");
+            return tidalAlbumId(row.id);
+          }))];
+        const present = new Set(tidalAlbumRecords(documents).map((album) => album.id.slice(6)));
         const missing = ids.filter((id) => !present.has(id));
         for (let start = 0; start < missing.length; start += 20) {
           const params = new URLSearchParams({ "filter[id]": missing.slice(start, start + 20).join(","),
             countryCode, include: "artists,coverArt" });
-          page.documents.push(await tidal.request(`albums?${params}`, token, { signal }));
+          documents.push(await tidal.request(`albums?${params}`, token, { signal }));
         }
         const wanted = new Set(ids.map((id) => `tidal:${id}`));
-        records = tidalAlbumRecords(page.documents).filter((album) => wanted.has(album.id));
-        for (const resource of tidalResources(page.documents).filter((item) => item.type === "albums")) {
+        records = tidalAlbumRecords(documents).filter((album) => wanted.has(album.id));
+        for (const resource of tidalResources(documents).filter((item) => item.type === "albums")) {
           releaseMetadata.set(`tidal:${resource.id}`, { album_type: resource.attributes?.albumType,
             track_count: resource.attributes?.numberOfTracks, duration_iso: resource.attributes?.duration });
         }
-        for (const [id, url] of tidalAlbumArtwork(page.documents)) coverUrls.set(id, url);
-        if (records.length !== wanted.size || page.count && !wanted.size) {
+        for (const [id, url] of tidalAlbumArtwork(documents)) coverUrls.set(id, url);
+        if (records.length !== wanted.size) {
           throw new Error("Metadati degli album TIDAL incompleti. Nessun album aggiunto: riprova la ricerca o il link.");
         }
       } else {
@@ -311,7 +343,8 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       signal.throwIfAborted();
       gate.assert(provider, epoch);
       if (revision !== accountRevision()) throw new Error("Account cambiato: risultati scartati.");
-      return !direct && criteria ? records.filter((album) => catalogCriteriaMatch(album, criteria)) : records;
+      return !direct && criteria ? records.filter((album) =>
+        catalogCriteriaMatch(album, byTidalArtist ? { title: criteria.title } : criteria)) : records;
     },
     coverUrl(album) {
       const url = coverUrls.get(album?.id);

@@ -9,7 +9,7 @@ import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=2";
 import { durationProvenanceText } from "./music-completion.mjs?v=5";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=3";
+  filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -88,7 +88,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=12")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=13")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -781,7 +781,7 @@ $("catalogForm").addEventListener("submit", (event) => {
       resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
       resultMetadata = new Map(resultAlbums.map((album) => [album.id, client.releaseMetadata(album)]));
       renderResults();
-      report(resultAlbums.length ? `${resultAlbums.length} risultati. Verifico di nuovo le copie prima di aggiungere.`
+      report(resultAlbums.length ? `${resultAlbums.length} risultati prima dei filtri Live, Singoli ed EP.`
         : "Nessun album corrisponde nei risultati restituiti dal catalogo.");
     } catch (error) {
       if (error.name === "AbortError" && controller.signal.aborted) report("Ricerca annullata. Puoi riprovare.");

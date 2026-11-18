@@ -29,10 +29,11 @@ export function catalogSearchInput(provider, fields) {
   return { criteria, query, reference: Boolean(reference) };
 }
 
+export const catalogNameKey = (text) => normalized(text.normalize("NFKD").replace(/\p{M}/gu, ""));
+
 export function catalogCriteriaMatch(album, { artist = "", title = "" }) {
-  const key = (text) => normalized(text.normalize("NFKD").replace(/\p{M}/gu, ""));
-  return (!artist || key(album.artist).includes(key(artist)))
-    && (!title || key(album.name).includes(key(title)));
+  return (!artist || catalogNameKey(album.artist).includes(catalogNameKey(artist)))
+    && (!title || catalogNameKey(album.name).includes(catalogNameKey(title)));
 }
 
 function searches(storage) {

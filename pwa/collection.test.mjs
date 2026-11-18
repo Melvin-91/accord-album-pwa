@@ -897,19 +897,29 @@ test("TIDAL uses exact lookup only for the reference field, not a numeric title"
   assert.equal(f.calls.at(-2).url.pathname, "/v2/searchResults");
   assert.equal(f.calls.at(-2).url.searchParams.get("filter[query]"), "1989");
 });
-test("catalog album searches match artist and title only against their own metadata", async () => {
-  const f = tidalSearchFixture((call, doc) => call.url.pathname.endsWith("/relationships/albums") ? reply({
-    data: [
-      { ...doc.data[0], attributes: { title: "Rebellion" } },
-      { ...doc.data[0], id: "13", attributes: { title: "Métal Days (Deluxe)" },
-        relationships: { artists: { data: [{ id: "2" }] } } },
-    ],
-    included: [...doc.included, { type: "artists", id: "2", attributes: { name: "Rebellion" } }],
-  }) : null);
+test("TIDAL finds artists and follows their discography past 50 albums without leaking title-only matches", async () => {
+  const f = tidalSearchFixture(({ url }, doc) => {
+    const path = url.pathname;
+    if (path.endsWith("opaque-result/relationships/artists")) {
+      return reply({ data: [{ type: "artists", id: "2" }],
+        included: [{ type: "artists", id: "2", attributes: { name: "Rebellion" } }] });
+    }
+    if (path.endsWith("/artists/2/relationships/albums")) {
+      const later = url.searchParams.has("cursor");
+      return reply({ ...doc, data: later
+        ? [{ ...doc.data[0], id: "99", attributes: { title: "Métal Days (Deluxe)" } }]
+        : Array.from({ length: 50 }, (_, i) => ({ ...doc.data[0], id: String(20 + i) })),
+      ...(later ? {} : { links: { next: "?cursor=next" } }) });
+    }
+    if (path.endsWith("opaque-result/relationships/albums")) {
+      return reply({ ...doc, data: [{ ...doc.data[0], attributes: { title: "Rebellion" } }] });
+    }
+    return null;
+  });
   for (const [artist, title, expected] of [
-    ["Rebellion", "", ["tidal:13"]],
+    ["Rebellion", "", [...Array.from({ length: 50 }, (_, i) => `tidal:${20 + i}`), "tidal:99"]],
     ["", "Rebellion", ["tidal:12"]],
-    ["rebellion", "metal   days", ["tidal:13"]],
+    ["rebellion", "metal   days", ["tidal:99"]],
     ["Rebellion", "Rebellion", []],
   ]) {
     const options = catalogSearchInput("tidal", { artist, title, reference: "" });
@@ -1117,12 +1127,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=20/);
+  assert.match(html, /collection-app\.mjs\?v=21/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.1/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.2/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
