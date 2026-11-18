@@ -4,6 +4,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
 import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=5";
+import { catalogCriteriaMatch } from "./collection-qol.mjs?v=3";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
 const QOBUZ_SESSION = "accord-qobuz-session-v1";
@@ -227,7 +228,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
     },
-    async search(query, { signal: externalSignal, reference } = {}) {
+    async search(query, { signal: externalSignal, reference, criteria } = {}) {
       query = query.trim();
       if (!query || query.length > 100) throw new Error("Inserisci titolo, artista o link album (massimo 100 caratteri).");
       const timeout = AbortSignal.timeout(45_000);
@@ -291,7 +292,11 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
           if (!id) throw new Error("Link album Spotify non valido.");
         }
         const token = await spotifyAccess(signal);
-        const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: query, type: "album", limit: "30" })}`, token, signal);
+        const scopedQuery = !direct && criteria
+          ? [["artist", criteria.artist], ["album", criteria.title]].filter(([, term]) => term)
+            .map(([field, term]) => `${field}:${JSON.stringify(term)}`).join(" ")
+          : query;
+        const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: scopedQuery, type: "album", limit: "30" })}`, token, signal);
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
         const entries = id ? [result] : result.albums.items;
         for (const entry of entries) {
@@ -306,7 +311,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       signal.throwIfAborted();
       gate.assert(provider, epoch);
       if (revision !== accountRevision()) throw new Error("Account cambiato: risultati scartati.");
-      return records;
+      return !direct && criteria ? records.filter((album) => catalogCriteriaMatch(album, criteria)) : records;
     },
     coverUrl(album) {
       const url = coverUrls.get(album?.id);

@@ -29,6 +29,12 @@ export function catalogSearchInput(provider, fields) {
   return { criteria, query, reference: Boolean(reference) };
 }
 
+export function catalogCriteriaMatch(album, { artist = "", title = "" }) {
+  const key = (text) => normalized(text.normalize("NFKD").replace(/\p{M}/gu, ""));
+  return (!artist || key(album.artist).includes(key(artist)))
+    && (!title || key(album.name).includes(key(title)));
+}
+
 function searches(storage) {
   const saved = JSON.parse(storage.getItem(RECENT_CATALOG_SEARCHES) || "{}");
   if (!saved || typeof saved !== "object" || Array.isArray(saved)

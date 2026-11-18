@@ -897,6 +897,25 @@ test("TIDAL uses exact lookup only for the reference field, not a numeric title"
   assert.equal(f.calls.at(-2).url.pathname, "/v2/searchResults");
   assert.equal(f.calls.at(-2).url.searchParams.get("filter[query]"), "1989");
 });
+test("catalog album searches match artist and title only against their own metadata", async () => {
+  const f = tidalSearchFixture((call, doc) => call.url.pathname.endsWith("/relationships/albums") ? reply({
+    data: [
+      { ...doc.data[0], attributes: { title: "Rebellion" } },
+      { ...doc.data[0], id: "13", attributes: { title: "Métal Days (Deluxe)" },
+        relationships: { artists: { data: [{ id: "2" }] } } },
+    ],
+    included: [...doc.included, { type: "artists", id: "2", attributes: { name: "Rebellion" } }],
+  }) : null);
+  for (const [artist, title, expected] of [
+    ["Rebellion", "", ["tidal:13"]],
+    ["", "Rebellion", ["tidal:12"]],
+    ["rebellion", "metal   days", ["tidal:13"]],
+    ["Rebellion", "Rebellion", []],
+  ]) {
+    const options = catalogSearchInput("tidal", { artist, title, reference: "" });
+    assert.deepEqual((await f.services.search(options.query, options)).map((row) => row.id), expected);
+  }
+});
 test("TIDAL search hydrates identifier-only results instead of silently dropping albums", async () => {
   const f = tidalSearchFixture(({ url }) => url.pathname.endsWith("/relationships/albums")
     ? reply({ data: [{ type: "albums", id: "12" }] }) : null);
@@ -915,12 +934,14 @@ test("Spotify and Qobuz collection search retain approved catalog cover URLs", a
   const spotify = createCollectionServices({ storage: spotifyDisk, session: storage(), pageUrl: "https://example.test/pwa/",
     fetch: async (url) => {
       assert.match(url, /api\.spotify\.com\/v1\/search/);
+      assert.equal(new URL(url).searchParams.get("q"), 'artist:"Test Artist" album:"Search Album"');
       return reply({ albums: { items: [{ id: spotifyId, name: "Search Album", album_type: "album",
         artists: [{ name: "Test Artist" }], release_date: "2020-01-01",
         external_urls: { spotify: `https://open.spotify.com/album/${spotifyId}` },
         images: [{ url: "https://i.scdn.co/image/cover", width: 640 }] }] } });
     } });
-  const spotifyAlbums = await spotify.search("Search Album");
+  const spotifyAlbums = await spotify.search("Test Artist Search Album",
+    { criteria: { artist: "Test Artist", title: "Search Album" } });
   assert.equal(spotify.coverUrl(spotifyAlbums[0]), "https://i.scdn.co/image/cover");
 
   const qobuzDisk = storage({ "accord-music-service-v1": "qobuz",
@@ -1096,12 +1117,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=19/);
+  assert.match(html, /collection-app\.mjs\?v=20/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.1/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

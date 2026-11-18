@@ -2,6 +2,12 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.35.1 · Risultati coerenti con artista e titolo
+
+In **Aggiungi album**, Artista corrisponde solo agli artisti accreditati e
+Titolo album solo al titolo. Se compili entrambi, l'album deve soddisfare
+entrambi i criteri. La ricerca per link o ID non cambia.
+
 ### PWA 1.35.0 · Campi separati per aggiungere un album
 
 In **Aggiungi album**, compila **Artista**, **Titolo album** o entrambi.
