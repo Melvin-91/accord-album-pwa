@@ -1,13 +1,13 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=8";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=9";
 import { createCollectionSync } from "./collection-sync.mjs?v=7";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
-import { showEditionComparison } from "./edition-comparison.mjs?v=3";
-import { durationProvenanceText } from "./music-completion.mjs?v=6";
+import { showEditionComparison } from "./edition-comparison.mjs?v=4";
+import { durationProvenanceText } from "./music-completion.mjs?v=7";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
 
@@ -88,7 +88,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=14")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=15")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -102,9 +102,6 @@ function disable() {
   $("cancelDurations").hidden = !durationAbort;
   $("cancelDurations").disabled = !durationAbort;
 }
-const durationProvider = (album) => /^tidal:[1-9][0-9]*$/.test(album.id) ? "tidal"
-  : /^qobuz:[A-Za-z0-9]{1,120}$/.test(album.id) ? "qobuz"
-    : /^[A-Za-z0-9]{22}$/.test(album.id) ? "spotify" : null;
 const durationText = (milliseconds) => {
   const minutes = Math.max(1, Math.round(milliseconds / 60_000));
   return minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
@@ -117,8 +114,7 @@ async function updateAlbumDuration(album, client, signal) {
 function fetchAddedDuration(album) {
   void (async () => {
     try {
-      const client = await services(), provider = durationProvider(album);
-      if (!provider || provider !== client.provider) throw new Error("Servizio dell'album non attivo.");
+      const client = await services();
       const saved = await updateAlbumDuration(album, client);
       if (saved) { render(); report(`Album aggiunto. Durata recuperata per ${album.name}.`); }
     } catch (error) {
@@ -671,10 +667,11 @@ $("returnToFilters").addEventListener("click", () => {
 $("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
-  const client = await services(), provider = client.provider, controller = new AbortController();
+  const client = await services(), controller = new AbortController();
   const known = store.durations();
   const missing = store.state.albums.filter((album) => !Object.hasOwn(known, album.id));
-  const failed = [], unavailable = new Map();
+  const failed = [];
+  let blocked = "";
   let completed = 0, index = 0;
   durationAbort = controller; disable();
   try {
@@ -682,13 +679,13 @@ $("updateDurations").addEventListener("click", () => run(async () => {
       if (controller.signal.aborted) break;
       index += 1;
       $("durationStatus").textContent = `Durate: ${index} su ${missing.length} · ${album.name}`;
-      if (unavailable.has(provider)) { failed.push(`${album.name}: ${unavailable.get(provider)}`); continue; }
+      if (blocked) { failed.push(`${album.name}: ${blocked}`); continue; }
       try {
         if (await updateAlbumDuration(album, client, controller.signal)) completed += 1;
       } catch (error) {
         if (controller.signal.aborted) break;
         if (/HTTP (401|403|429)\b|collega|attendi|limite|accesso .*non attivo/i.test(error.message)) {
-          unavailable.set(provider, error.message);
+          blocked = error.message;
         }
         failed.push(`${album.name}: ${error.message}`);
       }

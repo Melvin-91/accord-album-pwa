@@ -2,6 +2,15 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.35.4 · Verifica delle durate e catalogo alternativo
+
+Per una durata mancante, Accord prova il servizio selezionato, poi al
+massimo un altro se l'edizione non esiste nel primo. Il secondo tentativo
+richiede un ID nativo o un'associazione gia' salvata; non cerca per titolo.
+Su TIDAL, anche un totale di elementi superiore al dichiarato puo' essere
+verificato con la durata ufficiale dell'edizione o, per video extra, con
+il conteggio dei brani audio.
+
 ### PWA 1.35.3 · Calcolo della durata TIDAL
 
 Accord segue i cursori TIDAL fino all'ultima pagina, anche se il conteggio

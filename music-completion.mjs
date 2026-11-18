@@ -112,11 +112,14 @@ export function acceptDurationPage(row, page) {
   const tracks = [...row.tracks, ...additions];
   const count = tracks.length + excluded.length;
   const total = tracks.reduce((sum, track) => sum + track.duration_ms, 0);
-  const corroborated = tidal && next === null && tracks.length > 0 && !excluded.length
-    && Number.isSafeInteger(row.tidalAlbumDurationMs) && Math.abs(total - row.tidalAlbumDurationMs) < 1000;
-  if (count > page.total || next === null && count !== page.total && !corroborated
+  const corroborated = tidal && (
+    !excluded.length && tracks.length > 0
+      && Number.isSafeInteger(row.tidalAlbumDurationMs) && Math.abs(total - row.tidalAlbumDurationMs) < 1000
+    || excluded.length > 0 && tracks.length === row.tidalAlbumTrackCount && tracks.length === page.total);
+  if (count > 10000 || next === null && count !== page.total && !corroborated
       || next !== null && count >= page.total && !tidal) {
-    throw new Error(`Elenco brani non completo o paginazione incoerente (${count} elementi letti, ${page.total} dichiarati dal catalogo).`);
+    const breakdown = tidal ? `; ${tracks.length} brani audio, ${excluded.length} video` : "";
+    throw new Error(`Elenco brani non completo o paginazione incoerente (${count} elementi letti, ${page.total} dichiarati dal catalogo${breakdown}).`);
   }
   if (next === null && !tracks.length) throw new Error("L'album TIDAL non contiene brani audio: nessuna durata salvata.");
   if (!Number.isSafeInteger(total)) throw new Error("Totale durata fuori intervallo.");
@@ -296,6 +299,7 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
       throw new Error("Identita' o conteggio brani TIDAL non confermati.");
     }
     row.total = document.data.attributes.numberOfItems;
+    row.tidalAlbumTrackCount = document.data.attributes.numberOfTracks;
     delete row.tidalAlbumDurationMs;
     if (document.data.attributes.duration != null) {
       try { row.tidalAlbumDurationMs = isoDurationMs(document.data.attributes.duration); }

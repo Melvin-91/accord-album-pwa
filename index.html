@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#15191e">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; frame-src https://embed.tidal.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.35.3 · La mia raccolta</title>
+  <title>Accord v1.35.4 · La mia raccolta</title>
   <link rel="icon" href="./assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./collection.css?v=10">
@@ -15,7 +15,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="orbit-monogram" aria-hidden="true">a.</span>
-      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.35.3</span></div>
+      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.35.4</span></div>
     </div>
     <span id="headerSyncState" class="sync-state">Solo sul dispositivo</span>
   </header>
@@ -120,7 +120,7 @@
       <button id="updateDurations" type="button" class="secondary">Completa durate mancanti</button>
       <button id="cancelDurations" type="button" class="secondary" hidden>Interrompi durate</button>
       <p id="durationStatus" role="status" aria-live="polite"></p>
-      <p class="muted">Uso solo il servizio selezionato e sommo i brani audio, senza i video. Gli album di altri cataloghi richiedono l'edizione associata nel servizio attivo. Le durate si condividono quando sincronizzi la raccolta.</p>
+      <p class="muted">Provo prima il servizio selezionato. Se l'edizione manca, uso al massimo un altro catalogo, solo se l'edizione è già identificata. Sommo solo i brani audio. Le durate si condividono quando sincronizzi la raccolta.</p>
       <p class="muted">Controlla le copie trovate e conferma prima di unirle.</p>
       <button id="duplicates" type="button" class="secondary">Cerca duplicati</button>
     </details>
@@ -134,6 +134,6 @@
   <dialog id="quickReviewDialog" aria-label="Revisione rapida degli album"></dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=22"></script>
+  <script type="module" src="./collection-app.mjs?v=23"></script>
 </body>
 </html>

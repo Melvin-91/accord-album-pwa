@@ -3,7 +3,7 @@ import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlb
   tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
 import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
-import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=6";
+import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=7";
 import { catalogCriteriaMatch, catalogNameKey } from "./collection-qol.mjs?v=4";
 
 const TIDAL_CLIENT = "accord-tidal-client-id-v1";
@@ -129,12 +129,12 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       return response;
     }), signal);
   }
-  function qobuz(signal) {
+  function qobuz(signal, allowed = () => gate.service === "qobuz") {
     const value = JSON.parse(session.getItem(QOBUZ_SESSION) || "null");
     if (!value) throw new Error("Collega Qobuz nelle impostazioni.");
     const revision = accountRevision(), epoch = gate.epoch;
     return createQobuzClient({ ...qobuzCredentials(value.appId, value.token), storage, fetch: request, lock, signal,
-      active: () => revision === accountRevision() && gate.epoch === epoch && gate.service === "qobuz" });
+      active: () => revision === accountRevision() && gate.epoch === epoch && allowed() });
   }
   return {
     get provider() { return gate.service; },
@@ -354,46 +354,70 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     },
     releaseMetadata(album) { return releaseMetadata.get(album?.id) || {}; },
     async albumDuration(album, { signal: externalSignal, withProvenance = false } = {}) {
-      const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
-      const target = catalogTarget(storage, album, provider);
-      if (!target) {
-        const label = { tidal: "TIDAL", qobuz: "Qobuz", spotify: "Spotify" }[provider];
-        throw new Error(`Album non associato a ${label}: scegli la sua edizione nel catalogo. Non uso altri servizi.`);
+      const selected = gate.service, epoch = gate.epoch, revision = accountRevision();
+      const candidates = [...new Set([selected, ...["spotify", "tidal", "qobuz"].filter((service) =>
+        catalogTarget(storage, album, service) === album.id), "tidal", "qobuz", "spotify"])]
+        .map((service) => [service, catalogTarget(storage, album, service)]).filter(([, id]) => id);
+      if (!candidates.length) throw new Error("Nessuna edizione identificata per recuperare la durata.");
+      const attempts = candidates.slice(0, candidates[0][0] === selected ? 2 : 1);
+      let missingEdition;
+      for (const [index, [provider, target]] of attempts.entries()) {
+        try {
+          return await read(provider, target);
+        } catch (error) {
+          if (index + 1 === attempts.length || error !== missingEdition) throw error;
+        }
       }
-      const timeout = AbortSignal.timeout(provider === "spotify" ? 1_800_000 : 90_000);
-      const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
-      const guard = () => {
-        signal.throwIfAborted();
-        gate.assert(provider, epoch);
-        if (revision !== accountRevision()) throw new Error("Account cambiato: durata scartata.");
-        if (catalogTarget(storage, album, provider) !== target) throw new Error("Associazione edizione cambiata: durata scartata.");
-      };
-      let api;
-      if (provider === "qobuz") {
-        api = qobuz(signal);
-      } else if (provider === "spotify") {
-        const token = await spotifyAccess(signal);
-        api = { request: async (path) => { guard(); const result = await spotifyRead(path, token, signal, true); guard(); return result; } };
-      } else {
-        const token = await tidalAuth.access(tidalClientId(), { signal });
-        const profile = await tidal.request("users/me", token, { signal });
-        const country = profile.data?.attributes?.country;
-        if (!/^[A-Z]{2}$/.test(country || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
-        api = { completionPage: async (path) => {
+
+      async function read(provider, target) {
+        const timeout = AbortSignal.timeout(provider === "spotify" ? 1_800_000 : 90_000);
+        const signal = externalSignal ? AbortSignal.any([externalSignal, timeout]) : timeout;
+        const guard = () => {
+          signal.throwIfAborted();
+          gate.assert(selected, epoch);
+          if (revision !== accountRevision()) throw new Error("Account cambiato: durata scartata.");
+          if (catalogTarget(storage, album, provider) !== target) throw new Error("Associazione edizione cambiata: durata scartata.");
+        };
+        guard();
+        let api;
+        if (provider === "qobuz") {
+          api = qobuz(signal, () => !signal.aborted && gate.service === selected);
+        } else if (provider === "spotify") {
+          const token = await spotifyAccess(signal);
+          api = { request: async (path) => { guard(); const result = await spotifyRead(path, token, signal, true); guard(); return result; } };
+        } else {
+          const transport = provider === selected ? tidal : createTidalTransport({
+            storage, fetch: request, lock, revision: accountRevision,
+            active: () => !signal.aborted && gate.service === selected && gate.epoch === epoch,
+          });
+          const token = await tidalAuth.access(tidalClientId(), { signal });
           guard();
-          const url = new URL(path, "https://openapi.tidal.com/v2/");
-          url.searchParams.set("countryCode", country);
-          const result = await tidal.request(url.href, token, { signal });
+          const profile = await transport.request("users/me", token, { signal });
+          const country = profile.data?.attributes?.country;
+          if (!/^[A-Z]{2}$/.test(country || "")) throw new Error("Paese dell'account TIDAL non verificabile.");
+          api = { completionPage: async (path) => {
+            guard();
+            const url = new URL(path, "https://openapi.tidal.com/v2/");
+            url.searchParams.set("countryCode", country);
+            const result = await transport.request(url.href, token, { signal });
+            guard();
+            return result;
+          } };
+        }
+        guard();
+        let result;
+        try {
+          result = await readAlbumDuration(provider, api, target, { signal, maxReads: 20 });
+        } catch (error) {
           guard();
-          return result;
-        } };
+          if (/\bHTTP 404\b/.test(error.message)) missingEdition = error;
+          throw error;
+        }
+        guard();
+        return withProvenance ? { duration: result.duration, provenance: { source: provider, target,
+          identity: [album.id, album.artist, album.name], complete_tracks: result.total,
+          updated: new Date().toISOString(), duration_ms: result.duration } } : result.duration;
       }
-      guard();
-      const result = await readAlbumDuration(provider, api, target, { signal });
-      guard();
-      return withProvenance ? { duration: result.duration, provenance: { source: provider, target,
-        identity: [album.id, album.artist, album.name], complete_tracks: result.total,
-        updated: new Date().toISOString(), duration_ms: result.duration } } : result.duration;
     },
   };
 }

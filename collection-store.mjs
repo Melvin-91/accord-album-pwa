@@ -1,5 +1,5 @@
 import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=54";
-import { catalogTarget } from "./music-completion.mjs?v=6";
+import { catalogTarget } from "./music-completion.mjs?v=7";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
 const DURATIONS_KEY = "accord-listening-album-durations-v1";

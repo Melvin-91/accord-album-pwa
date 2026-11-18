@@ -503,7 +503,7 @@ test("collection services read the exact TIDAL and Qobuz editions", async () => 
     } });
   assert.equal(await tidal.albumDuration(album("tidal:12")), 123000);
   assert.equal(tidal.provider, "tidal");
-  await assert.rejects(tidal.albumDuration(album()), /Album non associato a TIDAL/);
+  await assert.rejects(tidal.albumDuration(album()), /Accesso Spotify non attivo/);
   setEditionLink(tidalDisk, album(), "tidal", { id: "tidal:12", name: "Chosen edition" });
   assert.equal(await tidal.albumDuration(album()), 123000);
   assert.equal(tidal.provider, "tidal");
@@ -518,15 +518,41 @@ test("collection services read the exact TIDAL and Qobuz editions", async () => 
     } });
   assert.equal(await qobuz.albumDuration(album("qobuz:abc")), 123000);
 });
-test("duration lookup never accesses Spotify when TIDAL is active without a linked edition", async () => {
+test("duration lookup makes no requests when the alternate catalog is disconnected", async () => {
   const calls = [];
   const services = createCollectionServices({
     storage: storage({ "accord-music-service-v1": "tidal" }), session: storage(),
     pageUrl: "https://example.test/pwa/", fetch: async (url) => { calls.push(url); throw new Error("Unexpected request"); },
   });
-  await assert.rejects(services.albumDuration(album()), /Album non associato a TIDAL/);
+  await assert.rejects(services.albumDuration(album()), /Accesso Spotify non attivo/);
   assert.deepEqual(calls, []);
   assert.equal(services.provider, "tidal");
+});
+test("duration lookup uses only the selected edition except on an explicit not-found response", async () => {
+  const saved = album("tidal:12"), calls = [];
+  const disk = storage({ "accord-music-service-v1": "qobuz",
+    "accord-qobuz-session-v1": JSON.stringify({ appId: "app", token: "token" }),
+    "accord-tidal-client-id-v1": "client",
+    "accord-tidal-token-v1": JSON.stringify({ clientId: "client", access_token: "token", expires: Date.now() + 3600000 }) });
+  let qobuzStatus = 403;
+  const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/pwa/",
+    fetch: async (value) => {
+      const url = new URL(value); calls.push(url.hostname);
+      if (url.hostname.endsWith("qobuz.com")) return new Response("{}", { status: qobuzStatus });
+      if (url.pathname.endsWith("/users/me")) return reply({ data: { attributes: { country: "IT" } } });
+      if (url.pathname.endsWith("/albums/12")) return reply({ data: { type: "albums", id: "12", attributes: { numberOfItems: 1 } } });
+      return reply({ data: [{ type: "tracks", id: "1", attributes: { duration: "PT2M" } }] });
+    } });
+  setEditionLink(disk, saved, "qobuz", { id: "qobuz:abc", name: "Chosen" });
+  await assert.rejects(services.albumDuration(saved), /HTTP 403/);
+  assert.equal(calls.length, 1);
+  qobuzStatus = 404;
+  calls.length = 0;
+  const result = await services.albumDuration(saved, { withProvenance: true });
+  assert.equal(result.duration, 120000);
+  assert.equal(result.provenance.source, "tidal");
+  assert.equal(services.provider, "qobuz");
+  assert.deepEqual(calls.slice(1), Array(3).fill("openapi.tidal.com"));
 });
 test("review choices remove only selected copies and preserve the keeper and pending deletion snapshot", () => {
   const a = album(undefined, { rating: 4, notes: "Keeper" }), b = album("tidal:12", { rating: 2, notes: "Other review" });
@@ -1127,12 +1153,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=22/);
+  assert.match(html, /collection-app\.mjs\?v=23/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.3/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.35\.4/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
