@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.35.3 · Calcolo della durata TIDAL
+
+Accord segue i cursori TIDAL fino all'ultima pagina, anche se il conteggio
+dichiarato e' gia' raggiunto. Se il conteggio finale e' inferiore, salva la
+somma dei brani solo se la durata ufficiale della stessa edizione la conferma
+e non sono stati rilevati video. Altrimenti mostra i due conteggi e non salva.
+
 ### PWA 1.35.2 · Discografia TIDAL
 
 Con **Artista** compilato, **Aggiungi album** risolve il nome nel catalogo artisti

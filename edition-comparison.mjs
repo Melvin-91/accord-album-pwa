@@ -1,4 +1,4 @@
-import { isoDurationMs } from "./music-completion.mjs?v=5";
+import { isoDurationMs } from "./music-completion.mjs?v=6";
 
 function availableInteger(record, keys) {
   for (const key of keys) {

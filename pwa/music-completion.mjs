@@ -84,8 +84,10 @@ export function continueCompletion(previous, proposed) {
 export function acceptDurationPage(row, page) {
   if (page.id !== row.target) throw new Error("Il catalogo ha restituito un'edizione diversa.");
   const videos = page.videos || [];
+  const tidal = row.target.startsWith("tidal:"), next = page.next ?? null;
+  const terminalProbe = tidal && next === null && row.tracks.length > 0;
   if (!Number.isSafeInteger(page.total) || page.total <= 0 || page.total > 10000
-      || !Array.isArray(page.tracks) || !Array.isArray(videos) || !(page.tracks.length || videos.length)
+      || !Array.isArray(page.tracks) || !Array.isArray(videos) || !(page.tracks.length || videos.length || terminalProbe)
       || row.total !== null && row.total !== page.total) {
     throw new Error("Elenco brani incompleto o conteggio instabile: nessuna durata salvata.");
   }
@@ -106,14 +108,17 @@ export function acceptDurationPage(row, page) {
     }
     excluded.push(id);
   }
-  const next = page.next ?? null;
   if (next !== null && (row.seen.includes(next) || next === row.cursor)) throw new Error("Cursore del catalogo ripetuto.");
   const tracks = [...row.tracks, ...additions];
   const count = tracks.length + excluded.length;
-  if (count > page.total || next === null && count !== page.total
-      || next !== null && count >= page.total) throw new Error("Elenco brani non completo o paginazione incoerente.");
-  if (next === null && !tracks.length) throw new Error("L'album TIDAL non contiene brani audio: nessuna durata salvata.");
   const total = tracks.reduce((sum, track) => sum + track.duration_ms, 0);
+  const corroborated = tidal && next === null && tracks.length > 0 && !excluded.length
+    && Number.isSafeInteger(row.tidalAlbumDurationMs) && Math.abs(total - row.tidalAlbumDurationMs) < 1000;
+  if (count > page.total || next === null && count !== page.total && !corroborated
+      || next !== null && count >= page.total && !tidal) {
+    throw new Error(`Elenco brani non completo o paginazione incoerente (${count} elementi letti, ${page.total} dichiarati dal catalogo).`);
+  }
+  if (next === null && !tracks.length) throw new Error("L'album TIDAL non contiene brani audio: nessuna durata salvata.");
   if (!Number.isSafeInteger(total)) throw new Error("Totale durata fuori intervallo.");
   Object.assign(row, { total: page.total, tracks, cursor: next, pages: row.pages + 1 });
   if (excluded.length) row.videos = excluded;
@@ -291,6 +296,11 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
       throw new Error("Identita' o conteggio brani TIDAL non confermati.");
     }
     row.total = document.data.attributes.numberOfItems;
+    delete row.tidalAlbumDurationMs;
+    if (document.data.attributes.duration != null) {
+      try { row.tidalAlbumDurationMs = isoDurationMs(document.data.attributes.duration); }
+      catch { /* Optional evidence, never a substitute for reading the tracks. */ }
+    }
     row.cursor = `albums/${number}/relationships/items?include=items`;
     return readCatalogPage(provider, api, row, consume, countHttp);
   }
@@ -319,7 +329,7 @@ export async function readCatalogPage(provider, api, row, consume, countHttp = f
   }
   let next = typeof document.links?.next === "string" ? document.links.next : document.links?.next?.href || null;
   if (next) {
-    const url = new URL(next, "https://openapi.tidal.com/v2/");
+    const url = new URL(next, savedUrl);
     if (url.origin !== "https://openapi.tidal.com" || url.username || url.password || url.hash
         || ![`/v2/albums/${number}/relationships/items`, `/albums/${number}/relationships/items`].includes(url.pathname)) {
       throw new Error("Cursore TIDAL cambia album.");

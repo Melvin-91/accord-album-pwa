@@ -249,6 +249,23 @@ test("TIDAL numberOfItems requires every track and valid metadata", async () => 
   await assert.rejects(readAlbumDuration("tidal", api, "tidal:54460298"), /non riconosciuto/);
 });
 
+test("TIDAL follows a terminal cursor and corroborates a count mismatch using album duration", async () => {
+  const attributes = { numberOfItems: 1, duration: "PT1M" };
+  const metadata = { data: { type: "albums", id: "42", attributes } };
+  const track = { type: "tracks", id: "1", attributes: { duration: "PT1M" } };
+  const calls = [];
+  let pages = [metadata, { data: [track], links: { next: "?page%5Bcursor%5D=end" } }, { data: [] }];
+  const api = { completionPage: async (path) => { calls.push(path); return pages.shift(); } };
+  assert.deepEqual(await readAlbumDuration("tidal", api, "tidal:42"), { duration: 60000, total: 1 });
+  assert.match(calls.at(-1), /^albums\/42\/relationships\/items\?/);
+  attributes.numberOfItems = 2;
+  pages = [metadata, { data: [track] }];
+  assert.deepEqual(await readAlbumDuration("tidal", api, "tidal:42"), { duration: 60000, total: 1 });
+  attributes.duration = "PT2M";
+  pages = [metadata, { data: [track] }];
+  await assert.rejects(readAlbumDuration("tidal", api, "tidal:42"), /1 elementi letti, 2 dichiarati/);
+});
+
 test("TIDAL video-only final pages count toward completeness but not audio duration", async () => {
   const metadata = { data: { type: "albums", id: "42", attributes: { numberOfItems: 2 } } };
   const track = { type: "tracks", id: "1", attributes: { duration: "PT1M" } };

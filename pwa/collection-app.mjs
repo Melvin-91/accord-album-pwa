@@ -1,13 +1,13 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=7";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=8";
 import { createCollectionSync } from "./collection-sync.mjs?v=7";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
-import { showEditionComparison } from "./edition-comparison.mjs?v=2";
-import { durationProvenanceText } from "./music-completion.mjs?v=5";
+import { showEditionComparison } from "./edition-comparison.mjs?v=3";
+import { durationProvenanceText } from "./music-completion.mjs?v=6";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
 
@@ -88,7 +88,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=13")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=14")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
