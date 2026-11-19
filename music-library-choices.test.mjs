@@ -7,6 +7,7 @@ import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, validateL
   libraryAssociationState, changeLibraryChoice, groupEditionRows, localDay } from "./music-library-choices.mjs";
 import { duplicateAlbumGroups } from "./ui.mjs";
 import { prepareAssociations, openPlaybackServiceDialog } from "./album-association.mjs";
+import { openAssociatedEditionDialog } from "./music-app-links.mjs";
 import { sourceIdentity } from "./music-continuity.mjs";
 
 const album = { id: "local:1", artist: "Band", name: "Album", year: "2024" };
@@ -114,6 +115,39 @@ test("the last alternative is first and manually unavailable alternatives remain
     dialog = openPlaybackServiceDialog({ storage: saved, album: source, provider: "tidal", report() {} });
     assert.match(dialog.children[2].children[0].textContent, /Spotify/);
     assert.equal(dialog.children.length, 4);
+  } finally { globalThis.document = previous; }
+});
+
+test("collection alternate opening uses only current links and leaves preferences and associations unchanged", () => {
+  const saved = storage();
+  const source = { ...album, id: "A".repeat(22), url: `https://open.spotify.com/album/${"A".repeat(22)}` };
+  const links = { [source.id]: { tidal: { id: "tidal:123", name: source.name, source: sourceIdentity(source) } } };
+  saved.setItem("accord-music-edition-links-v1", JSON.stringify(links));
+  saved.setItem("accord-music-service-v1", "spotify");
+  saved.setItem("accord-music-link-target-v1", "web");
+  const before = ["accord-music-edition-links-v1", "accord-music-service-v1", "accord-music-link-target-v1"]
+    .map(key => saved.getItem(key));
+  const previous = globalThis.document;
+  globalThis.document = { createElement: tag => new Node(tag), body: new Node("body") };
+  try {
+    let dialog = openAssociatedEditionDialog({ storage: saved, album: source, provider: "spotify", report() {} });
+    const link = dialog.children[2].children[0];
+    assert.equal(link.textContent, "Apri in TIDAL");
+    assert.equal(link.href, "https://listen.tidal.com/album/123");
+    link.events.click({ preventDefault() {}, stopImmediatePropagation() {} });
+    assert.equal(dialog.open, false);
+    assert.deepEqual(["accord-music-edition-links-v1", "accord-music-service-v1", "accord-music-link-target-v1"]
+      .map(key => saved.getItem(key)), before);
+
+    dialog = openAssociatedEditionDialog({ storage: saved, album: source, provider: "spotify", report() {} });
+    const staleLink = dialog.children[2].children[0];
+    saved.setItem("accord-music-edition-links-v1", JSON.stringify({}));
+    let prevented = false;
+    staleLink.events.click({ preventDefault() { prevented = true; }, stopImmediatePropagation() {} });
+    assert.equal(prevented, true);
+    assert.equal(dialog.open, true);
+    assert.deepEqual(["accord-music-service-v1", "accord-music-link-target-v1"]
+      .map(key => saved.getItem(key)), before.slice(1));
   } finally { globalThis.document = previous; }
 });
 

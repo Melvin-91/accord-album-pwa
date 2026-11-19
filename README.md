@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.37.0 · Anteprima di sincronizzazione e Apri con...
+
+Prima di sincronizzare, controlla cosa cambia su GitHub e su questo
+dispositivo, con i valori prima e dopo e le scelte sui conflitti.
+Con **Apri con...** puoi aprire un'edizione gia' associata in un altro
+servizio senza cambiare quello predefinito o avviare una nuova ricerca.
+
 ### PWA 1.36.2 · Sblocco dopo la verifica GitHub
 
 Se il file remoto manca o non corrisponde all'invio precedente, la verifica

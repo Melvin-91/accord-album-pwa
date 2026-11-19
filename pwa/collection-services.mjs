@@ -1,6 +1,6 @@
 import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=54";
 import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
-  tidalAlbumId, tidalResources } from "./tidal.mjs?v=16";
+  tidalAlbumId, tidalResources } from "./tidal.mjs?v=17";
 import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=7";

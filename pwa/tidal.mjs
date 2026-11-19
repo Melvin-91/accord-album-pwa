@@ -1,5 +1,5 @@
 // Only the THIRD_PARTY operations in the official TIDAL OpenAPI are exposed.
-import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=4";
+import { nativeMusicLink, musicLinkTarget, webMusicLink } from "./music-app-links.mjs?v=5";
 import { abortable, createServiceRequests } from "./service-requests.mjs?v=4";
 export const TIDAL_API = "https://openapi.tidal.com/v2/";
 export const TIDAL_SCOPES = "user.read search.read collection.read collection.write playlists.read playlists.write recommendations.read";

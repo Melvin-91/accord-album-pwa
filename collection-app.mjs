@@ -1,7 +1,7 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=10";
 import { createCollectionSync } from "./collection-sync.mjs?v=9";
-import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
+import { configureMusicAppLink, openAssociatedEditionDialog, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=5";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
@@ -89,7 +89,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=16")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=17")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -447,7 +447,14 @@ function albumCard(album, favorite, duration) {
     });
     management.append(preview);
   }
-  footer.append(favoriteButton, open); card.append(footer, options);
+  const openWith = node("button", "Apri con…", { type: "button", class: "secondary" });
+  openWith.addEventListener("click", () => {
+    try {
+      openAssociatedEditionDialog({ storage: localStorage, album, provider: album.id.startsWith("tidal:")
+        ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz" : "spotify", report });
+    } catch (error) { report(error.message, true); }
+  });
+  footer.append(favoriteButton, open, openWith); card.append(footer, options);
   return card;
 }
 function closeAlbumOptions(except = null) {
@@ -665,22 +672,27 @@ async function performSync() {
     return;
   }
   report("Lettura della raccolta condivisa...");
+  const reviewedConflicts = [];
+  const labels = { album: "Album", status: "Stato", rating: "Voto", genres: "Generi",
+    primary_genre: "Genere principale", collections: "Collezioni", tags: "Tag", notes: "Note",
+    favorite: "Preferito", pinned: "In evidenza", year: "Anno", url: "Collegamento",
+    cover_sha256: "Copertina", duration_ms: "Durata" };
+  const valueText = (value, fieldName, record) => {
+    if (value === null || value === undefined || value === "") return record ? "Vuoto" : "Non presente";
+    if (fieldName === "album" && typeof value === "object") return `${value.artist} - ${value.name}`;
+    if (fieldName === "cover_sha256") return "Aggiornata";
+    if (Array.isArray(value)) return value.length ? value.join(", ") : "Vuoto";
+    if (typeof value === "boolean") return value ? "Si" : "No";
+    if (fieldName === "status" && Object.hasOwn(states, value)) return states[value];
+    if (fieldName === "rating" && typeof value === "number") return `${value} / 5`;
+    if (fieldName === "duration_ms" && typeof value === "number") return durationText(value);
+    if (typeof value === "object") return record?.artist && record?.name ? `${record.artist} - ${record.name}` : JSON.stringify(value);
+    return String(value);
+  };
   const completed = await sync.sync({
     onProgress: (message) => report(message),
     async chooseConflicts(conflicts) {
       const content = [node("p", "Scegli quale versione mantenere per ogni modifica.")], controls = [];
-      const labels = { album: "Album", status: "Stato", rating: "Voto", genres: "Generi",
-        collections: "Collezioni", tags: "Tag", notes: "Note", favorite: "Preferito", pinned: "In evidenza", duration_ms: "Durata" };
-      const valueText = (value, fieldName) => {
-        if (value === null || value === undefined || value === "") return "Vuoto";
-        if (Array.isArray(value)) return value.length ? value.join(", ") : "Vuoto";
-        if (typeof value === "boolean") return value ? "Si" : "No";
-        if (typeof value === "object") return value.artist && value.name ? `${value.artist} - ${value.name}` : "Modifica album";
-        if (fieldName === "status" && Object.hasOwn(states, value)) return states[value];
-        if (fieldName === "rating" && typeof value === "number") return `${value} / 5`;
-        if (fieldName === "duration_ms" && typeof value === "number") return durationText(value);
-        return String(value);
-      };
       conflicts.forEach((conflict) => {
         const album = conflict.local || conflict.remote || conflict.base;
         content.push(node("h3", `${album.artist} - ${album.name}`));
@@ -688,8 +700,8 @@ async function performSync() {
           const label = node("label", labels[field.field] || field.field);
           const value = node("select");
           value.append(node("option", "Scegli...", { value: "" }),
-            node("option", `Mantieni questo dispositivo: ${valueText(field.local, field.field)}`, { value: "local" }),
-            node("option", `Usa la raccolta condivisa: ${valueText(field.remote, field.field)}`, { value: "remote" }));
+            node("option", `Mantieni questo dispositivo: ${valueText(field.local, field.field, conflict.local)}`, { value: "local" }),
+            node("option", `Usa la raccolta condivisa: ${valueText(field.remote, field.field, conflict.remote)}`, { value: "remote" }));
           label.append(value); content.push(label); controls.push({ id: conflict.id, field: field.field, value });
         });
       });
@@ -698,24 +710,46 @@ async function performSync() {
       if (answer !== "continue") return null;
       const choices = {};
       controls.forEach(({ id, field, value }) => { choices[id] ||= {}; choices[id][field] = value.value; });
+      conflicts.forEach((conflict) => reviewedConflicts.push({
+        ...conflict,
+        fields: conflict.fields.map((field) => ({
+          ...field, selected: choices[conflict.id]?.[field.field],
+        })),
+      }));
       return choices;
     },
     async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [], coversOutgoing }) {
-      const changes = (previous) => {
-        const next = new Map(albums.map((album) => [album.id, album])), old = new Map(previous.map((album) => [album.id, album]));
+      const changesTo = (previous) => {
+        const old = new Map(previous.map((album) => [album.id, album]));
+        const next = new Map(albums.map((album) => [album.id, album]));
         return [...new Set([...old.keys(), ...next.keys()])].flatMap((id) => {
-          const left = old.get(id), right = next.get(id);
-          if (JSON.stringify(left) === JSON.stringify(right)) return [];
-          const album = right || left;
-          return [`${!right ? "Rimuovi" : !left ? "Aggiungi" : "Aggiorna"}: ${album.artist} - ${album.name} (${providerName(album)})`];
+          const before = old.get(id), after = next.get(id);
+          const album = after || before, title = `${album.artist} - ${album.name} (${providerName(album)})`;
+          if (!before) return [`Aggiungi: ${title}`];
+          if (!after) return [`Rimuovi: ${title}`];
+          const fields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+            .filter((field) => !["id", "updated_at"].includes(field)
+              && JSON.stringify(before[field]) !== JSON.stringify(after[field])).sort();
+          if (!fields.length) return [];
+          return [`Modifica: ${title}`, ...fields.map((field) =>
+            `  ${labels[field] || field}: ${valueText(before[field], field, before)} → ${valueText(after[field], field, after)}`)];
         });
       };
+      const conflictLines = reviewedConflicts.flatMap((conflict) => {
+        const album = conflict.local || conflict.remote || conflict.base;
+        return [`${album.artist} - ${album.name}`, ...conflict.fields.map((field) =>
+          `  ${labels[field.field] || field.field}: base ${valueText(field.base, field.field, conflict.base)} · `
+            + `questo dispositivo ${valueText(field.local, field.field, conflict.local)} · `
+            + `raccolta condivisa ${valueText(field.remote, field.field, conflict.remote)} · `
+            + `mantenuto ${field.selected === "local" ? "questo dispositivo" : "raccolta condivisa"}`)];
+      });
       const content = [node("p", "Controlla le modifiche prima di sincronizzare."),
-        node("h3", "Raccolta condivisa"), node("pre", [...changes(remote),
+        node("h3", "Da inviare"), node("pre", [...changesTo(remote),
           ...(coversOutgoing ? ["Aggiorna l'archivio delle copertine."] : []),
           ...durationOutgoing.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
-        node("h3", "Questo dispositivo"), node("pre", [...changes(local),
-          ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica.")];
+        node("h3", "Da ricevere"), node("pre", [...changesTo(local),
+          ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
+        node("h3", "Conflitti"), node("pre", conflictLines.join("\n") || "Nessun conflitto.")];
       return await choice("Conferma sincronizzazione", content, [["cancel", "Annulla"], ["sync", "Sincronizza"]]) === "sync";
     },
   });
@@ -937,7 +971,8 @@ $("linkTarget").addEventListener("change", () => {
 });
 document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => $(button.dataset.close).close()));
 window.addEventListener("storage", (event) => {
-  if ([MUSIC_LINK_TARGET_KEY, "accord-listening-album-durations-v1", "accord-listening-queue-v1"].includes(event.key)) render();
+  if ([MUSIC_LINK_TARGET_KEY, "accord-listening-album-durations-v1", "accord-listening-queue-v1",
+    "accord-music-edition-links-v1"].includes(event.key)) render();
   if (event.key === null || event.key === "accord-album-pwa-v1") {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }

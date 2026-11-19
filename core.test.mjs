@@ -1832,7 +1832,7 @@ test("installable shell links resolve locally and are present in the offline cac
   assert.ok(workerFiles, "The service worker must declare its offline shell");
   assert.match(app, /navigator\.serviceWorker\.register\(["']\.\/sw\.js["']\)/);
 
-  const normalizePath = (path) => path.split("?")[0].replace(/^\.\//, "");
+  const normalizePath = (path) => path.replace(/^\.\//, "");
   const cachedPaths = new Set([...workerFiles.matchAll(/"([^"]+)"/g)].map((match) => normalizePath(match[1])));
   const resources = [stylesheet, manifestPath, appPath, ...manifest.icons.map((icon) => icon.src)];
   for (const resource of resources) {
@@ -1840,10 +1840,16 @@ test("installable shell links resolve locally and are present in the offline cac
     assert.doesNotThrow(() => readFileSync(new URL(path, import.meta.url)), `${resource} must exist`);
     assert.ok(cachedPaths.has(path), `${resource} must be available offline`);
   }
-  for (const [, modulePath] of app.matchAll(/from\s+["'](\.\/[^"']+)["']/g)) {
-    const path = normalizePath(modulePath);
-    assert.doesNotThrow(() => readFileSync(new URL(path, import.meta.url)), `${modulePath} must exist`);
-    assert.ok(cachedPaths.has(path), `${modulePath} must be available offline`);
+  const visited = new Set([normalizePath(appPath)]);
+  const pending = [app];
+  while (pending.length) {
+    for (const [, modulePath] of pending.pop().matchAll(/(?:from\s+|import\(\s*)["'](\.\/[^"']+)["']/g)) {
+      const path = normalizePath(modulePath);
+      if (visited.has(path)) continue;
+      visited.add(path);
+      assert.ok(cachedPaths.has(path), `${modulePath} must be available offline`);
+      pending.push(readFileSync(new URL(path, import.meta.url), "utf8"));
+    }
   }
 });
 
@@ -1893,12 +1899,12 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=26", "collection.css?v=11"]) {
+  for (const file of ["collection-app.mjs?v=27", "collection.css?v=11"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
   for (const file of ["core.mjs?v=54", "collection-store.mjs?v=10", "collection-sync.mjs?v=9",
-    "music-app-links.mjs?v=4", "collection-services.mjs?v=16", "music-suggestion-filters.mjs?v=4",
+    "music-app-links.mjs?v=5", "collection-services.mjs?v=17", "music-suggestion-filters.mjs?v=4",
     "command-icons.mjs?v=1", "ui.mjs?v=25", "tidal-preview.mjs?v=1"]) {
     assert.ok(active.includes(file));
     assert.ok(sw.includes(file));

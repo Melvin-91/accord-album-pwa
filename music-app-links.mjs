@@ -1,3 +1,5 @@
+import { validEdition, editionLink } from "./music-continuity.mjs?v=13";
+
 const linkUpdates = new WeakMap();
 const tidalAlbumResolvers = new WeakMap();
 
@@ -137,6 +139,48 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
     }
   });
   return link;
+}
+
+export function openAssociatedEditionDialog({ storage = globalThis.localStorage, album, provider, report = () => {} }) {
+  const editions = ["spotify", "tidal", "qobuz"].filter(target => target !== provider).flatMap(target => {
+    const edition = validEdition(target, album.id) ? album : editionLink(storage, album, target);
+    return edition ? [{ provider: target, album: edition }] : [];
+  });
+  const dialog = document.createElement("dialog"); dialog.setAttribute("aria-label", "Apri album con un altro servizio");
+  const heading = document.createElement("h2"); heading.textContent = "Apri con…";
+  const notice = document.createElement("p");
+  notice.textContent = `${album.artist} · ${album.name}. Usiamo solo edizioni gia' associate; `
+    + "nessun catalogo viene cercato e preferenze o associazioni non cambiano.";
+  dialog.append(heading, notice);
+  for (const row of editions) {
+    const link = document.createElement("a");
+    link.textContent = `Apri in ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[row.provider]}`;
+    configureMusicAppLink(link, row.album.url, {
+      query: `${album.artist} ${album.name}`, report, storage,
+    });
+    link.addEventListener("click", event => {
+      try {
+        const current = validEdition(row.provider, album.id) ? album : editionLink(storage, album, row.provider);
+        if (!current || current.id !== row.album.id || current.url !== row.album.url) {
+          throw new Error("Associazione cambiata: riapri la scelta del servizio.");
+        }
+        dialog.close();
+      } catch (error) {
+        event.preventDefault(); event.stopImmediatePropagation(); report(error.message, true);
+      }
+    });
+    const paragraph = document.createElement("p"); paragraph.append(link); dialog.append(paragraph);
+  }
+  if (!editions.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "Non ci sono altre edizioni gia' associate.";
+    dialog.append(empty);
+  }
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Annulla";
+  cancel.addEventListener("click", () => dialog.close()); dialog.append(cancel);
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+  return dialog;
 }
 export const MUSIC_LINK_TARGET_KEY = "accord-music-link-target-v1";
 
