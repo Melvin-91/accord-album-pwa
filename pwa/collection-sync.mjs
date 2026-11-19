@@ -173,6 +173,8 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       progress(`Invio GitHub: ${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB). Attesa massima: 120 s.`);
       const marker = { owner: connectionOwner, branch, file, blobSha: await gitBlobSha(bytes),
         createdAt: new Date().toISOString() };
+      assertCurrent();
+      if (uncertainWrite()) throw new Error("Un altro invio GitHub richiede una verifica. Nessun nuovo invio eseguito.");
       storage.setItem(UNCERTAIN_WRITE_KEY, JSON.stringify(marker));
       try {
         const result = await send(`${root}/contents/${file}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -197,10 +199,10 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
           assertCurrent();
         } catch (verificationError) {
           throw new Error(`${detail} Verifica in sola lettura non riuscita: ${verificationError.message} `
-            + "Nessun invio ripetuto. Riprova Sincronizza; non cancellare i dati locali.");
+            + "Nessun invio ripetuto. Usa Verifica su GitHub; non cancellare i dati locali.");
         }
         if (!verified) throw new Error(`${detail} Il contenuto remoto non conferma l'invio. `
-          + "Nessun invio ripetuto. Rileggi con Sincronizza prima di riprovare; non cancellare i dati locali.");
+          + "Nessun invio ripetuto. Usa Verifica su GitHub; non cancellare i dati locali.");
         storage.removeItem(UNCERTAIN_WRITE_KEY);
       }
     }
@@ -214,6 +216,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
   return {
     uncertainWrite,
     async verifyUncertainWrite() {
+      const saved = storage.getItem(UNCERTAIN_WRITE_KEY);
       const marker = uncertainWrite();
       if (!marker) return { pending: false, verified: false };
       const connection = client();
@@ -221,9 +224,15 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         throw new Error("L'invio incerto appartiene a un altro account GitHub. Ripristina quel collegamento prima di verificare.");
       }
       const metadata = await connection.verify(marker);
+      if (metadata !== null && (metadata.type !== "file" || !/^[a-f0-9]{40}$/.test(metadata.sha || ""))) {
+        throw new Error(`Verifica di ${marker.file} non conclusa: metadati GitHub non validi.`);
+      }
+      if (storage.getItem(UNCERTAIN_WRITE_KEY) !== saved) {
+        throw new Error("Lo stato dell'invio e' cambiato durante la verifica. Nessun dato inviato.");
+      }
       const verified = metadata?.sha === marker.blobSha;
-      if (verified) storage.removeItem(UNCERTAIN_WRITE_KEY);
-      return { pending: true, verified, file: marker.file };
+      storage.removeItem(UNCERTAIN_WRITE_KEY);
+      return { pending: true, verified, missing: metadata === null, file: marker.file };
     },
     async checkAddition(album) {
       if (!storage.getItem("accord-album-owner") && !storage.getItem("accord-album-token")) return null;
@@ -231,6 +240,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       return findCollectionAlbum(remote.albums, album, store.links());
     },
     async sync({ chooseConflicts, confirm, onProgress = () => {} }) {
+      if (uncertainWrite()) throw new Error("Usa Verifica su GitHub prima di sincronizzare.");
       const durationSnapshot = store.durationSnapshot(), before = store.state;
       const connection = client(() => {
         store.assertDurationSnapshot(durationSnapshot);
@@ -303,9 +313,6 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       for (const id of retained) deleted.delete(id);
       const deletedAlbums = [...deleted.values()].sort((a, b) => a.id.localeCompare(b.id));
       const deletionsChanged = !equalAlbums(remote.deletedAlbums, deletedAlbums);
-      if ((outgoing || incoming || durationOutgoing.length || durationIncoming.length || deletionsChanged || !remote.deletionSync || !remote.deletionHistory)
-          && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums, durationOutgoing, durationIncoming })) return false;
-      connection.assertCurrent();
       const selected = new Map();
       for (const album of merged.albums) {
         if (!album.cover_sha256) continue;
@@ -314,14 +321,20 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         if (!data || await hash(data) !== album.cover_sha256) throw new Error(`Copertina non verificabile per ${album.name}. Sincronizza prima dal desktop; nessun invio eseguito.`);
         selected.set(album.id, data);
       }
-      for (const [id, data] of selected) await covers.put(id, data);
       const archive = await encodeCoverArchive(selected);
       await decodeCoverArchive(archive);
+      const coversOutgoing = Boolean((selected.size || remote.archive.length) && (archive.length !== remote.archive.length
+        || archive.some((byte, index) => byte !== remote.archive[index])));
+      if ((outgoing || incoming || durationOutgoing.length || durationIncoming.length || deletionsChanged
+          || !remote.deletionSync || !remote.deletionHistory || coversOutgoing)
+          && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums,
+            durationOutgoing, durationIncoming, coversOutgoing })) return false;
+      connection.assertCurrent();
+      for (const [id, data] of selected) await covers.put(id, data);
       let coversWritten = false, albumsWritten = false, durationsWritten = false;
       try {
         connection.assertCurrent();
-        if ((selected.size || remote.archive.length) && (archive.length !== remote.archive.length
-            || archive.some((byte, index) => byte !== remote.archive[index]))) {
+        if (coversOutgoing) {
           await connection.write("covers.bin", archive, remote.coversSha, remote.branch);
           coversWritten = true;
         }

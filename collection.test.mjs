@@ -418,9 +418,64 @@ test("uncertain upload marker survives reopening and verification is read-only",
   assert.equal(reopened.uncertainWrite().blobSha, marker.blobSha);
   const writesBefore = remote.writes.length;
   const result = await reopened.verifyUncertainWrite();
-  assert.deepEqual(result, { pending: true, verified: true, file: "albums.json" });
+  assert.deepEqual(result, { pending: true, verified: true, missing: false, file: "albums.json" });
   assert.equal(remote.writes.length, writesBefore);
   assert.equal(disk.getItem("accord-album-sync-uncertain-v1"), null);
+});
+test("a missing or different GitHub file unlocks a fresh sync without replaying the upload", async () => {
+  for (const missing of [true, false]) {
+    const saved = album(), disk = local([saved], []), store = createCollectionStore(disk), remote = github([]);
+    const key = "accord-album-sync-uncertain-v1", before = store.state;
+    disk.setItem(key, JSON.stringify({ owner: store.state.syncOwner || disk.getItem("accord-album-owner"),
+      branch: "main", file: "albums.json", blobSha: "a".repeat(40) }));
+    let checking = true;
+    const methods = [];
+    const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: (url, options) => {
+      methods.push(options.method);
+      if (checking) return reply(missing ? {} : { type: "file", sha: "b".repeat(40) }, missing ? 404 : 200);
+      return remote.request(url, options);
+    } });
+    const callbacks = { chooseConflicts: () => assert.fail(), confirm: () => assert.fail() };
+    await assert.rejects(sync.sync(callbacks), /Verifica su GitHub/);
+    assert.deepEqual(await sync.verifyUncertainWrite(), { pending: true, verified: false, missing, file: "albums.json" });
+    assert.deepEqual(methods, ["GET"]);
+    assert.equal(disk.getItem(key), null);
+    assert.equal(store.state, before);
+    checking = false;
+    assert.equal(await sync.sync({ ...callbacks, confirm: ({ albums, remote }) => {
+      assert.deepEqual(albums, [saved]); assert.deepEqual(remote, []); return false;
+    } }), false);
+    assert.equal(remote.writes.length, 0);
+    assert.equal(store.state, before);
+  }
+});
+test("sync asks for confirmation even if only the cover archive needs uploading", async () => {
+  const image = new Uint8Array([0xff, 0xd8, 0xff, 1]);
+  const saved = album(undefined, { cover_sha256: createHash("sha256").update(image).digest("hex") });
+  const disk = local([saved], [saved]), store = createCollectionStore(disk), remote = github([saved]);
+  const sync = createCollectionSync({ storage: disk, store,
+    covers: { get: async () => image, put: () => assert.fail("Cancelled") }, fetch: remote.request });
+  let confirmed = false;
+  assert.equal(await sync.sync({ chooseConflicts: () => assert.fail(), confirm: ({ coversOutgoing }) => {
+    confirmed = true;
+    assert.equal(coversOutgoing, true);
+    return false;
+  } }), false);
+  assert.equal(confirmed, true);
+  assert.equal(remote.writes.length, 0);
+});
+test("failed or invalid GitHub verification keeps the pending upload marker", async () => {
+  const disk = local([album()], []), store = createCollectionStore(disk), key = "accord-album-sync-uncertain-v1";
+  const marker = JSON.stringify({ owner: disk.getItem("accord-album-owner"),
+    branch: "main", file: "albums.json", blobSha: "a".repeat(40) });
+  disk.setItem(key, marker);
+  for (const [status, message] of [[503, /HTTP 503/], [200, /metadati GitHub non validi/]]) {
+    const sync = createCollectionSync({ storage: disk, store, covers: coverCache, fetch: (url, options) => {
+      assert.equal(options.method, "GET"); return reply({}, status);
+    } });
+    await assert.rejects(sync.verifyUncertainWrite(), message);
+    assert.equal(disk.getItem(key), marker);
+  }
 });
 test("conflicts and server-imposed waits never trigger recovery reads or retries", async () => {
   for (const [status, headers] of [[409, {}], [503, { "Retry-After": "60" }], [502, { "X-RateLimit-Remaining": "0" }]]) {
@@ -1197,12 +1252,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=25/);
+  assert.match(html, /collection-app\.mjs\?v=26/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.36\.1/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.36\.2/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

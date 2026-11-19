@@ -2,6 +2,12 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.36.2 · Sblocco dopo la verifica GitHub
+
+Se il file remoto manca o non corrisponde all'invio precedente, la verifica
+in sola lettura riabilita Sincronizza. Il nuovo tentativo riparte da una
+lettura remota e richiede conferma prima di inviare modifiche.
+
 ### PWA 1.36.1 · Informazioni album
 
 La scheda mostra di nuovo il genere e visualizza la durata senza la voce

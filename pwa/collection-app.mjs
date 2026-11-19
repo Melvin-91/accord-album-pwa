@@ -1,6 +1,6 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=10";
-import { createCollectionSync } from "./collection-sync.mjs?v=8";
+import { createCollectionSync } from "./collection-sync.mjs?v=9";
 import { configureMusicAppLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=4";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
@@ -658,9 +658,10 @@ async function performSync() {
   if (sync.uncertainWrite()) {
     const result = await sync.verifyUncertainWrite();
     render();
-    report(result.verified
-      ? `Invio di ${result.file} verificato su GitHub in sola lettura. Nessun dato inviato; avvia Sincronizza solo dopo aver controllato lo stato locale.`
-      : `Invio GitHub ancora non confermato. Nessun dato inviato; ripeti Verifica su GitHub prima di sincronizzare.`, !result.verified);
+    const outcome = result.verified ? `GitHub conferma l'invio di ${result.file}.`
+      : result.missing ? `GitHub non mostra ${result.file}: l'invio precedente non è confermato.`
+        : `Su GitHub ${result.file} è diverso da quello atteso: l'invio precedente non è confermato.`;
+    report(`${outcome} Nessun dato inviato. Premi Sincronizza per rileggere la raccolta e rivedere eventuali modifiche.`);
     return;
   }
   report("Lettura della raccolta condivisa...");
@@ -699,7 +700,7 @@ async function performSync() {
       controls.forEach(({ id, field, value }) => { choices[id] ||= {}; choices[id][field] = value.value; });
       return choices;
     },
-    async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [] }) {
+    async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [], coversOutgoing }) {
       const changes = (previous) => {
         const next = new Map(albums.map((album) => [album.id, album])), old = new Map(previous.map((album) => [album.id, album]));
         return [...new Set([...old.keys(), ...next.keys()])].flatMap((id) => {
@@ -711,6 +712,7 @@ async function performSync() {
       };
       const content = [node("p", "Controlla le modifiche prima di sincronizzare."),
         node("h3", "Raccolta condivisa"), node("pre", [...changes(remote),
+          ...(coversOutgoing ? ["Aggiorna l'archivio delle copertine."] : []),
           ...durationOutgoing.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
         node("h3", "Questo dispositivo"), node("pre", [...changes(local),
           ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica.")];
