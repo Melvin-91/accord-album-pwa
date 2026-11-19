@@ -1051,6 +1051,35 @@ test("TIDAL finds artists and follows their discography past 50 albums without l
     assert.deepEqual((await f.services.search(options.query, options)).map((row) => row.id), expected);
   }
 });
+test("TIDAL broad and truncated artist results wait for a selection and read only the chosen discographies", async () => {
+  for (const partial of [false, true]) {
+    const f = tidalSearchFixture(({ url }, doc) => {
+      if (url.pathname.endsWith("/relationships/artists")) {
+        const page = Number(url.searchParams.get("cursor") || 1);
+        const count = partial ? 1 : 6;
+        return reply({ data: Array.from({ length: count }, (_, i) =>
+          ({ type: "artists", id: String(page + i), attributes: { name: "Rebellion" } })),
+        ...(partial ? { links: { next: `?cursor=${page + 1}` } } : {}) });
+      }
+      if (url.pathname.includes("/artists/")) return reply(doc);
+      return null;
+    });
+    const options = catalogSearchInput("tidal", { artist: "Rebellion", title: "Search Album", reference: "" });
+    const controller = new AbortController();
+    const paths = () => f.calls.map(({ url }) => url.pathname).filter((path) => path.startsWith("/v2/artists/"));
+    await assert.rejects(f.services.search(options.query, { ...options, signal: controller.signal,
+      chooseArtists: () => { controller.abort(); return ["1"]; } }), { name: "AbortError" });
+    assert.deepEqual(paths(), []);
+    const results = await f.services.search(options.query, { ...options, chooseArtists: (artists, { complete }) => {
+      assert.equal(complete, !partial);
+      assert.equal(artists.length, partial ? 12 : 6);
+      assert.deepEqual(paths(), []);
+      return ["2", "6"];
+    } });
+    assert.deepEqual(paths(), ["/v2/artists/2/relationships/albums", "/v2/artists/6/relationships/albums"]);
+    assert.deepEqual(results.map(({ id }) => id), ["tidal:12"]);
+  }
+});
 test("TIDAL search hydrates identifier-only results instead of silently dropping albums", async () => {
   const f = tidalSearchFixture(({ url }) => url.pathname.endsWith("/relationships/albums")
     ? reply({ data: [{ type: "albums", id: "12" }] }) : null);
@@ -1252,12 +1281,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=27/);
+  assert.match(html, /collection-app\.mjs\?v=28/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.37\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.37\.1/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

@@ -2,6 +2,12 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.37.1 · Scelta degli artisti nella ricerca album TIDAL
+
+Se ci sono molte corrispondenze o l'elenco degli artisti e' parziale,
+seleziona fino a cinque artisti e premi **Cerca album**. Accord legge
+solo le discografie selezionate e mantiene il filtro per titolo.
+
 ### PWA 1.37.0 · Anteprima di sincronizzazione e Apri con...
 
 Prima di sincronizzare, controlla cosa cambia su GitHub e su questo

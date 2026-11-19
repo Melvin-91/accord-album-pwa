@@ -89,7 +89,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=17")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=18")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -241,7 +241,8 @@ function mutate(action) {
   try { action(); render(); report("Modifica salvata sul dispositivo. Sincronizza per aggiornare la raccolta condivisa."); return true; }
   catch (error) { report(error.message, true); return false; }
 }
-async function choice(title, content, actions, validate = () => true) {
+async function choice(title, content, actions, validate = () => true, signal) {
+  signal?.throwIfAborted();
   const dialog = $("choiceDialog"), form = node("form", "", { method: "dialog" });
   dialog.setAttribute("aria-label", title);
   form.append(node("h2", title));
@@ -254,7 +255,12 @@ async function choice(title, content, actions, validate = () => true) {
   });
   form.append(footer); dialog.replaceChildren(form); dialog.returnValue = "cancel";
   return new Promise((resolve) => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue), { once: true });
+    const abort = () => dialog.close("cancel");
+    dialog.addEventListener("close", () => {
+      signal?.removeEventListener("abort", abort);
+      resolve(dialog.returnValue);
+    }, { once: true });
+    signal?.addEventListener("abort", abort, { once: true });
     dialog.showModal();
   });
 }
@@ -897,6 +903,34 @@ $("compareCatalogEditions").addEventListener("click", () => {
     showEditionComparison(selected, $("catalogService").value);
   } catch (error) { report(error.message, true); }
 });
+async function chooseTidalSearchArtists(artists, { complete }, controller) {
+  const fieldset = node("fieldset"), count = node("p", "0 artisti selezionati", { "aria-live": "polite" });
+  fieldset.append(node("legend", "Artisti TIDAL corrispondenti"));
+  const options = artists.map(({ id, name }) => {
+    const checkbox = node("input", "", { type: "checkbox" });
+    const label = node("label");
+    label.append(checkbox, document.createTextNode(` ${name} · ID ${id}`));
+    const row = node("div"); row.append(label); fieldset.append(row);
+    return { id, checkbox };
+  });
+  const selected = () => options.filter(({ checkbox }) => checkbox.checked).map(({ id }) => id);
+  const canConfirm = () => selected().length > 0 && selected().length <= 5;
+  fieldset.addEventListener("change", () => {
+    const size = selected().length;
+    count.textContent = `${size} artisti selezionati${size > 5 ? " · Riduci la selezione a 5." : ""}`;
+    $("choiceDialog").querySelector('button[value="search"]').disabled = !canConfirm();
+  });
+  const answer = choice("Scegli gli artisti TIDAL", [
+    node("p", "Seleziona fino a 5 artisti. Leggeremo solo le discografie selezionate."),
+    ...(!complete ? [node("p", "Elenco parziale: il catalogo ha altre pagine non lette.")] : []),
+    fieldset, count,
+  ], [["cancel", "Annulla"], ["search", "Cerca album"]], canConfirm, controller.signal);
+  const confirm = $("choiceDialog").querySelector('button[value="search"]');
+  if (confirm) confirm.disabled = true;
+  if (await answer !== "search") controller.abort();
+  controller.signal.throwIfAborted();
+  return selected();
+}
 $("catalogForm").addEventListener("submit", (event) => {
   event.preventDefault();
   run(async () => {
@@ -907,9 +941,10 @@ $("catalogForm").addEventListener("submit", (event) => {
     refreshCatalogSearches();
     const controller = new AbortController();
     catalogAbort = controller; resultAlbums = []; renderResults(); disable();
-    report("Ricerca in corso (massimo 45 secondi). Puoi annullarla.");
+    report("Ricerca in corso. Puoi annullarla.");
     try {
-      const albums = await client.search(query, { signal: controller.signal, reference, criteria });
+      const albums = await client.search(query, { signal: controller.signal, reference, criteria,
+        chooseArtists: (artists, info) => chooseTidalSearchArtists(artists, info, controller) });
       if (current !== generation) throw new Error("Ricerca cambiata: risultati scartati.");
       resultAlbums = albums.map(validateAlbum);
       resultCoverUrls = new Map(resultAlbums.map((album) => [album.id, client.coverUrl(album)]).filter(([, url]) => url));
