@@ -1057,8 +1057,15 @@ test("TIDAL broad and truncated artist results wait for a selection and read onl
       if (url.pathname.endsWith("/relationships/artists")) {
         const page = Number(url.searchParams.get("cursor") || 1);
         const count = partial ? 1 : 6;
-        return reply({ data: Array.from({ length: count }, (_, i) =>
-          ({ type: "artists", id: String(page + i), attributes: { name: "Rebellion" } })),
+        if (page === 1) assert.match(url.searchParams.get("include"), /artists\.profileArt/);
+        return reply({ data: Array.from({ length: count }, (_, i) => ({
+          type: "artists", id: String(page + i), attributes: { name: "Rebellion" },
+          ...((page + i === 1) ? { relationships: { profileArt: { data: [{ type: "artworks", id: "profile" }] } } } : {}),
+        })),
+        ...(page === 1 ? { included: [{ type: "artworks", id: "profile", attributes: { files: [
+          { href: "https://other.invalid/images/artist.jpg" },
+          { href: "https://resources.tidal.com/images/artists/rebellion.jpg" },
+        ] } }] } : {}),
         ...(partial ? { links: { next: `?cursor=${page + 1}` } } : {}) });
       }
       if (url.pathname.includes("/artists/")) return reply(doc);
@@ -1073,6 +1080,8 @@ test("TIDAL broad and truncated artist results wait for a selection and read onl
     const results = await f.services.search(options.query, { ...options, chooseArtists: (artists, { complete }) => {
       assert.equal(complete, !partial);
       assert.equal(artists.length, partial ? 12 : 6);
+      assert.equal(artists.find(({ id }) => id === "1").photoUrl, "https://resources.tidal.com/images/artists/rebellion.jpg");
+      assert.equal(artists.find(({ id }) => id === "2").photoUrl, null);
       assert.deepEqual(paths(), []);
       return ["2", "6"];
     } });
@@ -1281,12 +1290,12 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=28/);
+  assert.match(html, /collection-app\.mjs\?v=29/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.37\.1/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.37\.2/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

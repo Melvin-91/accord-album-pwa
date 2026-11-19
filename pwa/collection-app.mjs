@@ -89,7 +89,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=18")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=19")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -906,10 +906,19 @@ $("compareCatalogEditions").addEventListener("click", () => {
 async function chooseTidalSearchArtists(artists, { complete }, controller) {
   const fieldset = node("fieldset"), count = node("p", "0 artisti selezionati", { "aria-live": "polite" });
   fieldset.append(node("legend", "Artisti TIDAL corrispondenti"));
-  const options = artists.map(({ id, name }) => {
+  const options = artists.map(({ id, name, photoUrl }) => {
     const checkbox = node("input", "", { type: "checkbox" });
-    const label = node("label");
-    label.append(checkbox, document.createTextNode(` ${name} · ID ${id}`));
+    const label = node("label", "", { class: "tidal-artist-option" });
+    const photo = node("span", "", { class: "tidal-artist-photo", title: "Foto non disponibile", "aria-hidden": "true" });
+    if (photoUrl) {
+      const image = node("img", "", { alt: "", width: "44", height: "44", loading: "lazy",
+        decoding: "async", referrerpolicy: "no-referrer" });
+      image.addEventListener("load", () => photo.removeAttribute("title"), { once: true });
+      image.addEventListener("error", () => image.remove(), { once: true });
+      image.src = photoUrl;
+      photo.append(image);
+    }
+    label.append(checkbox, photo, node("span", name));
     const row = node("div"); row.append(label); fieldset.append(row);
     return { id, checkbox };
   });

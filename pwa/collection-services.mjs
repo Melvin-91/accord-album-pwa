@@ -29,6 +29,21 @@ function tidalCoverUrl(value) {
       && !url.username && !url.password ? url.href : null;
   } catch { return null; }
 }
+function tidalArtistPhoto(artist, artworks) {
+  const data = artist.relationships?.profileArt?.data;
+  for (const ref of Array.isArray(data) ? data : data ? [data] : []) {
+    if (ref?.type !== "artworks") continue;
+    const files = artworks.get(ref.id)?.attributes?.files;
+    if (!Array.isArray(files)) continue;
+    for (const file of files) {
+      const href = file?.href;
+      if (typeof href !== "string" || href.includes("\\") || !href.startsWith("https://resources.tidal.com/images/")) continue;
+      const url = new URL(href);
+      if (url.pathname.startsWith("/images/") && !url.hash) return url.href;
+    }
+  }
+  return null;
+}
 const random = (length) => base64url(crypto.getRandomValues(new Uint8Array(length)));
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 export function createCollectionServices({ storage, session: tabSession, pageUrl, fetch: request = globalThis.fetch,
@@ -263,14 +278,16 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         byTidalArtist = !direct && Boolean(criteria?.artist);
         let paths;
         if (byTidalArtist) {
-          const path = await tidal.searchPath(criteria.artist, "artists", token, { countryCode, include: "artists", signal });
+          const path = await tidal.searchPath(criteria.artist, "artists", token, {
+            countryCode, include: "artists,artists.profileArt", signal });
           const page = await tidal.pages(path, token, { ...limits, signal });
           const key = catalogNameKey(criteria.artist);
           const artistIds = new Set(page.documents.flatMap(({ data }) => data).slice(0, limits.maxItems).map((row) => {
             if (row?.type !== "artists") throw new Error("Risultati artista TIDAL non validi.");
             return tidalAlbumId(row.id);
           }));
-          const artists = tidalResources(page.documents).filter((row) => row.type === "artists" && artistIds.has(row.id));
+          const resources = tidalResources(page.documents);
+          const artists = resources.filter((row) => row.type === "artists" && artistIds.has(row.id));
           if (artists.some((row) => typeof row.attributes?.name !== "string" || !row.attributes.name.trim())) {
             throw new Error("Metadati degli artisti TIDAL incompleti.");
           }
@@ -287,7 +304,10 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
           }
           if (matches.length > 5 || !complete) {
             signal.throwIfAborted();
-            const candidates = [...exact, ...similar].map(({ id, attributes }) => ({ id, name: attributes.name }));
+            const artworks = new Map(resources.filter((row) => row.type === "artworks").map((row) => [row.id, row]));
+            const candidates = [...exact, ...similar].map((artist) => ({
+              id: artist.id, name: artist.attributes.name, photoUrl: tidalArtistPhoto(artist, artworks),
+            }));
             if (!chooseArtists) throw new Error("Seleziona gli artisti prima di leggere le discografie TIDAL.");
             const allowed = new Set(candidates.map(({ id }) => id));
             const selection = await chooseArtists(candidates, { complete });

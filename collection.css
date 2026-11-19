@@ -145,6 +145,9 @@ dialog section h3 { margin-bottom: 0; font-size: 1rem; font-weight: 600; }
 .catalog-criteria { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .catalog-criteria > :is(.catalog-reference, small) { grid-column: 1 / -1; }
 #catalogForm fieldset { display: flex; flex-wrap: wrap; gap: 12px; border: 1px solid var(--line); border-radius: 8px; margin: 0; min-width: 0; }
+.tidal-artist-option { display: flex; align-items: center; gap: 10px; padding: 4px 0; cursor: pointer; }
+.tidal-artist-photo { display: block; flex: 0 0 44px; height: 44px; background: var(--line); border-radius: 8px; overflow: hidden; }
+.tidal-artist-photo img { display: block; object-fit: cover; }
 #catalogForm legend { color: var(--muted); font-size: .75rem; padding: 0 6px; }
 #catalogResults { display: grid; gap: 12px; }
 .catalog-result { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--raised); }

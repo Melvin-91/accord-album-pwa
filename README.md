@@ -2,6 +2,11 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.37.2 · Foto degli artisti TIDAL
+
+Il selettore mostra il nome e la foto profilo dal catalogo TIDAL al posto
+dell'ID. Se la foto manca, resta visibile il nome con un segnaposto.
+
 ### PWA 1.37.1 · Scelta degli artisti nella ricerca album TIDAL
 
 Se ci sono molte corrispondenze o l'elenco degli artisti e' parziale,
