@@ -7,8 +7,9 @@ import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.m
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
+import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=1";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
+  filteredCollection, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=5";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -30,11 +31,12 @@ let resultCoverUrls = new Map();
 let resultMetadata = new Map();
 const comparedEditions = new Set();
 let revealedAlbum = null, revealOrigin = null, quickReview = null;
-const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value,
+const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value, genre: $("genreFilter").value,
   favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
 const matchingAlbums = () => filteredCollection(store.state.albums, collectionFilters());
 function revealCollectionAlbum(id) {
   if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
+  physicalCollection.showMusic();
   if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
   revealedAlbum = id;
   $("addDialog").close(); $("settingsDialog").close();
@@ -470,6 +472,18 @@ function closeAlbumOptions(except = null) {
 }
 function render() {
   if (!store) return;
+  const genreSelect = $("genreFilter"), selectedGenre = genreSelect.value;
+  const genres = collectionGenres(store.state.albums);
+  const options = [["", "Tutti i generi"], ["none", "Senza genere"],
+    ...genres.map(([key, label]) => [`g:${key}`, label])];
+  if (selectedGenre && !options.some(([value]) => value === selectedGenre)) {
+    const label = genreSelect.selectedOptions[0].textContent;
+    options.push([selectedGenre, label.endsWith(" (non più presente)") ? label : `${label} (non più presente)`]);
+  }
+  if (JSON.stringify(options) !== JSON.stringify([...genreSelect.options].map((option) => [option.value, option.textContent]))) {
+    genreSelect.replaceChildren(...options.map(([value, label]) => node("option", label, { value })));
+    genreSelect.value = selectedGenre;
+  }
   const favorites = new Set(store.state.preferences.favoriteIds || []);
   const durations = store.durations();
   document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
@@ -777,6 +791,7 @@ async function serviceSettings() {
   $("redirectUri").value = settings.redirectUri || "";
   $("redirectField").hidden = provider !== "spotify"; $("clientField").hidden = provider === "qobuz";
 }
+const physicalCollection = initializePhysicalCollection({ getAlbums: () => store?.state.albums || [], report });
 try {
   store = createCollectionStore(localStorage);
   sync = createCollectionSync({ storage: localStorage, store, covers });
@@ -789,13 +804,14 @@ const dockObserver = new ResizeObserver(() => {
 });
 dockObserver.observe($("collectionDock"));
 $("collectionHome").addEventListener("click", () => {
+  physicalCollection.showMusic();
   window.scrollTo({ top: 0, behavior: "auto" });
   $("collectionTitle").focus({ preventScroll: true });
 });
 $("search").addEventListener("input", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 });
-["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
+["statusFilter", "genreFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
@@ -820,7 +836,10 @@ $("returnToFilters").addEventListener("click", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = origin?.limit || 40; render();
   requestAnimationFrame(() => window.scrollTo({ top: origin?.scroll || 0, behavior: "auto" }));
 });
-$("sync").addEventListener("click", () => run(performSync));
+$("sync").addEventListener("click", () => {
+  physicalCollection.showMusic();
+  run(performSync);
+});
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
   const client = await services(), known = store.durations();
@@ -846,6 +865,7 @@ $("duplicates").addEventListener("click", () => {
   try { $("settingsDialog").close(); showDuplicates(); } catch (error) { report(error.message, true); }
 });
 $("openAdd").addEventListener("click", async () => {
+  physicalCollection.showMusic();
   await run(async () => {
   const client = await services(); $("catalogService").value = client.provider;
   refreshCatalogSearches();

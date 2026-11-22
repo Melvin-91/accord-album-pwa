@@ -6,16 +6,17 @@
   <meta name="theme-color" content="#15191e">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; frame-src https://embed.tidal.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.37.2 · La mia raccolta</title>
+  <title>Accord v1.39.0 · La mia raccolta</title>
   <link rel="icon" href="./assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./collection.css?v=12">
+  <link rel="stylesheet" href="./physical-collection.css?v=1">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <span class="orbit-monogram" aria-hidden="true">a.</span>
-      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.37.2</span></div>
+      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.39.0</span></div>
     </div>
     <span id="headerSyncState" class="sync-state">Solo sul dispositivo</span>
   </header>
@@ -32,6 +33,8 @@
             <option value="listening">In ascolto</option><option value="neutral">Neutri</option>
             <option value="liked">Mi piace</option><option value="disliked">Non mi piace</option>
           </select></label>
+          <label>Genere<select id="genreFilter"><option value="">Tutti i generi</option>
+            <option value="none">Senza genere</option></select></label>
           <label class="check"><input id="favoritesFilter" type="checkbox">Solo preferiti</label>
         </div>
       </details>
@@ -47,6 +50,7 @@
   </main>
   <nav id="collectionDock" class="orbit-dock" aria-label="Navigazione musicale">
     <button id="collectionHome" type="button" data-command-icon="album" aria-current="page">Raccolta</button>
+    <button id="physicalOpen" type="button" data-command-icon="album" aria-controls="physicalSection">CD e vinili</button>
     <button id="openAdd" type="button" data-command-icon="plus">Aggiungi album</button>
     <button id="sync" type="button" data-command-icon="sync">Sincronizza</button>
     <small id="syncSummary" class="sync-summary" aria-live="polite"></small>
@@ -136,6 +140,6 @@
   <dialog id="quickReviewDialog" aria-label="Revisione rapida degli album"></dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=29"></script>
+  <script type="module" src="./collection-app.mjs?v=32"></script>
 </body>
 </html>

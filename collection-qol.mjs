@@ -85,10 +85,21 @@ export function catalogSearchCorrections(query, candidates) {
   }
   return [...ranked.values()].sort((a, b) => b.score - a.score || a.value.localeCompare(b.value)).slice(0, 3).map(({ value }) => value);
 }
-export function filteredCollection(albums, { query = "", status = "", favoritesOnly = false, favoriteIds = [] } = {}) {
+export function collectionGenres(albums) {
+  const genres = new Map();
+  for (const album of albums) for (const value of album.genres) {
+    const key = normalized(value);
+    if (key && !genres.has(key)) genres.set(key, value);
+  }
+  return [...genres].sort((a, b) => a[1].localeCompare(b[1], "it"));
+}
+export function filteredCollection(albums, { query = "", status = "", genre = "", favoritesOnly = false, favoriteIds = [] } = {}) {
   const text = normalized(query), favorites = new Set(favoriteIds);
   return albums.filter((album) => (!text || normalized(`${album.artist} ${album.name}`).includes(text))
-    && (!status || album.status === status) && (!favoritesOnly || favorites.has(album.id)))
+    && (!status || album.status === status)
+    && (!genre || (genre === "none" ? !album.genres.length
+      : genre.startsWith("g:") && album.genres.some((value) => normalized(value) === genre.slice(2))))
+    && (!favoritesOnly || favorites.has(album.id)))
     .sort((a, b) => a.artist.localeCompare(b.artist, "it") || a.name.localeCompare(b.name, "it"));
 }
 export function collectionAnomalies(albums, durations = {}, provenance = {}) {

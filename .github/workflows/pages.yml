@@ -35,12 +35,20 @@ jobs:
           node --check tidal.mjs
           node --check tidal-ui.mjs
           node --check sw.js
+          node --check collection-app.mjs
+          node --check physical-collection.mjs
+          node --check physical-collection-sync.mjs
+          node --check physical-collection-ui.mjs
           node --check pwa/app.mjs
           node --check pwa/core.mjs
           node --check pwa/ui.mjs
           node --check pwa/tidal.mjs
           node --check pwa/tidal-ui.mjs
           node --check pwa/sw.js
+          node --check pwa/collection-app.mjs
+          node --check pwa/physical-collection.mjs
+          node --check pwa/physical-collection-sync.mjs
+          node --check pwa/physical-collection-ui.mjs
       - name: Run root and nested PWA test suites
         run: node --test
       - name: Configure Pages

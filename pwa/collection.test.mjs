@@ -5,7 +5,7 @@ import { createHash, webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
 import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
 import { recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies, catalogSearchInput, catalogSearchFields } from "./collection-qol.mjs";
+  filteredCollection, collectionGenres, collectionAnomalies, catalogSearchInput, catalogSearchFields } from "./collection-qol.mjs";
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
@@ -70,6 +70,22 @@ test("review snapshots retain original filtered IDs and anomalies do not modify 
   assert.deepEqual(ids, [records[0].id, records[1].id]);
   assert.deepEqual(filteredCollection(records, { status: "queued", favoritesOnly: true, favoriteIds: [records[1].id] })
     .map(({ id }) => id), [records[1].id]);
+});
+test("genre choices and filters include all saved genres and combine with listening state and favorites", () => {
+  const records = [
+    album("A".repeat(22), { genres: ["Metal", "Progressive"], status: "liked" }),
+    album("B".repeat(22), { genres: ["metal", "Rock"], status: "queued" }),
+    album("C".repeat(22), { genres: [], status: "liked" }),
+  ];
+  assert.deepEqual(collectionGenres(records).map(([key]) => key), ["metal", "progressive", "rock"]);
+  const ids = (filters) => filteredCollection(records, filters).map(({ id }) => id);
+  assert.deepEqual(ids({ genre: "g:metal" }), [records[0].id, records[1].id]);
+  assert.deepEqual(ids({ genre: "g:progressive", query: "Debut", status: "liked", favoritesOnly: true,
+    favoriteIds: [records[0].id] }), [records[0].id]);
+  assert.deepEqual(ids({ genre: "g:metal", status: "queued", favoritesOnly: true,
+    favoriteIds: [records[0].id] }), []);
+  assert.deepEqual(ids({ genre: "none" }), [records[2].id]);
+  assert.deepEqual(ids({ genre: "g:missing" }), []);
 });
 
 const album = (id = "A".repeat(22), changes = {}) => validateAlbum({
@@ -1290,17 +1306,20 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=29/);
+  assert.match(html, /collection-app\.mjs\?v=32/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=12">/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=1">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.37\.2/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.39\.0/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
-  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs"];
+  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs",
+    "physical-collection-ui.mjs", "physical-collection-sync.mjs", "physical-collection.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
   }
