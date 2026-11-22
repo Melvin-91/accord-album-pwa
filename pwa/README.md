@@ -2,6 +2,29 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.38.0 · Possesso CD e vinili senza duplicare album
+
+Aggiunta una sezione separata **CD e vinili**, con un'unica voce per album
+e due marcatori indipendenti (CD/Vinile). Se possiedi entrambi i formati,
+il titolo compare una sola volta. L'identita' normalizzata ignora anche
+le usuali diciture finali di rimasterizzazione/deluxe.
+
+La sezione fisica permette ricerca, filtri, importazione ed esportazione CSV,
+backup JSON e inserimento manuale di album anche se non presenti fra gli album
+valutati. Le schede della Raccolta musicale mostrano i marcatori CD/Vinile.
+Voti, generi, preferiti e ID restano invariati.
+
+L'archivio dei supporti è disponibile offline dopo l'installazione della
+cache PWA. **Sincronizza supporti** usa il file `physical-library.json`
+nel repository privato `accord-music-data` e chiede conferma prima di
+inviare modifiche. Se l'esito di un invio è incerto, riapri **Sincronizza
+supporti** con una connessione per verificare l'invio e sbloccare le modifiche.
+Il pulsante esistente **Sincronizza** continua a gestire la raccolta musicale.
+
+Prima di una futura pubblicazione dal workspace desktop, riporta questa
+modifica anche in `Accord/accord/pwa`. Il processo di release copia quella
+sorgente nel mirror e potrebbe sovrascrivere le modifiche di questa versione.
+
 ### PWA 1.37.2 · Foto degli artisti TIDAL
 
 Il selettore mostra il nome e la foto profilo dal catalogo TIDAL al posto

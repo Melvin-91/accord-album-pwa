@@ -7,6 +7,7 @@ import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.m
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
+import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=1";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
 
@@ -35,6 +36,7 @@ const collectionFilters = () => ({ query: $("search").value, status: $("statusFi
 const matchingAlbums = () => filteredCollection(store.state.albums, collectionFilters());
 function revealCollectionAlbum(id) {
   if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
+  physicalCollection.showMusic();
   if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
   revealedAlbum = id;
   $("addDialog").close(); $("settingsDialog").close();
@@ -777,6 +779,7 @@ async function serviceSettings() {
   $("redirectUri").value = settings.redirectUri || "";
   $("redirectField").hidden = provider !== "spotify"; $("clientField").hidden = provider === "qobuz";
 }
+const physicalCollection = initializePhysicalCollection({ getAlbums: () => store?.state.albums || [], report });
 try {
   store = createCollectionStore(localStorage);
   sync = createCollectionSync({ storage: localStorage, store, covers });
@@ -789,6 +792,7 @@ const dockObserver = new ResizeObserver(() => {
 });
 dockObserver.observe($("collectionDock"));
 $("collectionHome").addEventListener("click", () => {
+  physicalCollection.showMusic();
   window.scrollTo({ top: 0, behavior: "auto" });
   $("collectionTitle").focus({ preventScroll: true });
 });
@@ -820,7 +824,10 @@ $("returnToFilters").addEventListener("click", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = origin?.limit || 40; render();
   requestAnimationFrame(() => window.scrollTo({ top: origin?.scroll || 0, behavior: "auto" }));
 });
-$("sync").addEventListener("click", () => run(performSync));
+$("sync").addEventListener("click", () => {
+  physicalCollection.showMusic();
+  run(performSync);
+});
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
   const client = await services(), known = store.durations();
@@ -846,6 +853,7 @@ $("duplicates").addEventListener("click", () => {
   try { $("settingsDialog").close(); showDuplicates(); } catch (error) { report(error.message, true); }
 });
 $("openAdd").addEventListener("click", async () => {
+  physicalCollection.showMusic();
   await run(async () => {
   const client = await services(); $("catalogService").value = client.provider;
   refreshCatalogSearches();
