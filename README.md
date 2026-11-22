@@ -2,7 +2,11 @@
 
 ## Stato corrente e gerarchia
 
-### PWA 1.38.0 · Possesso CD e vinili senza duplicare album
+### PWA 1.39.0 · Archivio CD e vinili e filtro per genere
+
+Nella raccolta musicale il filtro **Genere** include tutti i generi salvati,
+anche quelli secondari, e puo' essere combinato con ricerca, stato e preferiti.
+La voce **Senza genere** mostra gli album privi di genere.
 
 Aggiunta una sezione separata **CD e vinili**, con un'unica voce per album
 e due marcatori indipendenti (CD/Vinile). Se possiedi entrambi i formati,
@@ -20,10 +24,6 @@ nel repository privato `accord-music-data` e chiede conferma prima di
 inviare modifiche. Se l'esito di un invio è incerto, riapri **Sincronizza
 supporti** con una connessione per verificare l'invio e sbloccare le modifiche.
 Il pulsante esistente **Sincronizza** continua a gestire la raccolta musicale.
-
-Prima di una futura pubblicazione dal workspace desktop, riporta questa
-modifica anche in `Accord/accord/pwa`. Il processo di release copia quella
-sorgente nel mirror e potrebbe sovrascrivere le modifiche di questa versione.
 
 ### PWA 1.37.2 · Foto degli artisti TIDAL
 

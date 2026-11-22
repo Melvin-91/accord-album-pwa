@@ -9,7 +9,7 @@ import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=1";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=4";
+  filteredCollection, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=5";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -31,7 +31,7 @@ let resultCoverUrls = new Map();
 let resultMetadata = new Map();
 const comparedEditions = new Set();
 let revealedAlbum = null, revealOrigin = null, quickReview = null;
-const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value,
+const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value, genre: $("genreFilter").value,
   favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
 const matchingAlbums = () => filteredCollection(store.state.albums, collectionFilters());
 function revealCollectionAlbum(id) {
@@ -472,6 +472,18 @@ function closeAlbumOptions(except = null) {
 }
 function render() {
   if (!store) return;
+  const genreSelect = $("genreFilter"), selectedGenre = genreSelect.value;
+  const genres = collectionGenres(store.state.albums);
+  const options = [["", "Tutti i generi"], ["none", "Senza genere"],
+    ...genres.map(([key, label]) => [`g:${key}`, label])];
+  if (selectedGenre && !options.some(([value]) => value === selectedGenre)) {
+    const label = genreSelect.selectedOptions[0].textContent;
+    options.push([selectedGenre, label.endsWith(" (non più presente)") ? label : `${label} (non più presente)`]);
+  }
+  if (JSON.stringify(options) !== JSON.stringify([...genreSelect.options].map((option) => [option.value, option.textContent]))) {
+    genreSelect.replaceChildren(...options.map(([value, label]) => node("option", label, { value })));
+    genreSelect.value = selectedGenre;
+  }
   const favorites = new Set(store.state.preferences.favoriteIds || []);
   const durations = store.durations();
   document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
@@ -799,7 +811,7 @@ $("collectionHome").addEventListener("click", () => {
 $("search").addEventListener("input", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 });
-["statusFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
+["statusFilter", "genreFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
