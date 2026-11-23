@@ -5,13 +5,14 @@ import { createHash, webcrypto } from "node:crypto";
 import { ALBUM_STATES, validateAlbum, findCollectionAlbum, addPlaylistAlbums, threeWayMerge, encodeCoverArchive } from "./core.mjs";
 import { createCollectionStore, duplicateCollectionGroups, suggestDuplicateMerge, COLLECTION_KEY } from "./collection-store.mjs";
 import { recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionGenres, collectionAnomalies, catalogSearchInput, catalogSearchFields } from "./collection-qol.mjs";
+  filteredCollection, collectionGenres, collectionRows, collectionAnomalies, catalogSearchInput, catalogSearchFields } from "./collection-qol.mjs";
 import { createCollectionSync } from "./collection-sync.mjs";
 import { createCollectionServices } from "./collection-services.mjs";
 import { createTidalAuth, tidalAlbumRecords } from "./tidal.mjs";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs";
 import { setEditionLink } from "./music-continuity.mjs";
 import { durationProvenanceText, COMPLETION_PROVENANCE_KEY } from "./music-completion.mjs";
+import { createPhysicalStore, PHYSICAL_KEY } from "./physical-collection.mjs";
 globalThis.crypto ||= webcrypto;
 
 test("album search keeps separate criteria, accepts either text field and recalls legacy queries", () => {
@@ -100,6 +101,43 @@ const storage = (values = {}) => {
   return { getItem: (key) => data.get(key) ?? null, setItem: (key, value) => data.set(key, String(value)),
     removeItem: (key) => data.delete(key), data };
 };
+
+test("unified collection joins owned albums before filtering and includes physical-only titles once", () => {
+  const music = album(undefined, { genres: ["Pop", "Electronic"], rating: 4 });
+  const owned = [
+    { artist: "Björk", title: "Debut (Deluxe Edition)", cd: true, vinyl: true },
+    { artist: "Nina Simone", title: "Pastel Blues", cd: false, vinyl: true },
+    { artist: "Other", title: "Previously Owned", cd: false, vinyl: false },
+  ];
+  const names = (filters) => collectionRows([music], owned, filters).visible.map(({ name }) => name);
+  assert.equal(collectionRows([music], owned).total, 2);
+  assert.deepEqual(names({ format: "both", genre: "g:electronic", query: "debut", favoritesOnly: true, favoriteIds: [music.id] }), ["Debut"]);
+  assert.deepEqual(names({ format: "vinyl", genre: "none" }), ["Pastel Blues"]);
+  assert.deepEqual(names({ format: "vinyl", status: "queued" }), ["Debut"]);
+  assert.deepEqual(names({ format: "none" }), []);
+  assert.deepEqual(collectionRows([], owned, { format: "cd" }).visible.map(({ name }) => name), ["Debut (Deluxe Edition)"]);
+  assert.equal(music.rating, 4);
+});
+
+test("unified local state adopts legacy support bases and keeps the recovery copy intact", () => {
+  const disk = storage();
+  const old = createPhysicalStore(disk);
+  old.addMany([{ artist: "Björk", title: "Debut", cd: true, vinyl: true }]);
+  old.commitSync(old.state.records, "owner", "saved-sha");
+  const previous = disk.getItem(PHYSICAL_KEY);
+  const store = createCollectionStore(disk);
+  assert.equal(store.state.physicalSha, "saved-sha");
+  assert.equal(store.state.physicalOwner, "owner");
+  assert.equal(store.pendingChanges(), 0);
+  store.setPhysicalFormat("Bjork", "Debut", "cd", false);
+  assert.equal(store.pendingChanges(), 1);
+  assert.equal(disk.getItem(PHYSICAL_KEY), previous);
+  assert.deepEqual(createCollectionStore(disk).state.physical, [{ artist: "Björk", title: "Debut", cd: false, vinyl: true }]);
+  assert.equal(createCollectionStore(disk).state.physicalBase[0].cd, true);
+  disk.setItem("accord-library-sync-pending-v1", "{}");
+  assert.throws(() => store.setPhysicalFormat("Bjork", "Debut", "cd", true), /Completa la verifica/);
+  assert.equal(store.state.physical[0].cd, false);
+});
 const local = (records, base = records, extras = {}) => storage({ [COLLECTION_KEY]: JSON.stringify({ albums: records, base, ...extras }),
   "accord-album-owner": "owner", "accord-album-token": "synthetic-test-token" });
 const reply = (value, status = 200) => new Response(JSON.stringify(value), { status });
@@ -1306,20 +1344,22 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=32/);
+  assert.match(html, /collection-app\.mjs\?v=33/);
   assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=12">/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=1">/);
-  assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|app\.mjs\?v=124/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=2">/);
+  assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.39\.0/);
-  for (const id of ["catalogArtist", "catalogTitle", "catalogReference"]) assert.ok(html.includes(`id="${id}"`));
+  assert.match(html, /class="app-version" id="version">App attiva v1\.40\.0/);
+  for (const id of ["catalogArtist", "catalogTitle", "catalogReference", "formatFilter", "openPhysicalTools"]) {
+    assert.ok(html.includes(`id="${id}"`));
+  }
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
   const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs",
-    "physical-collection-ui.mjs", "physical-collection-sync.mjs", "physical-collection.mjs"];
+    "collection-qol.mjs", "unified-library.mjs", "physical-collection-ui.mjs", "physical-collection.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
   }

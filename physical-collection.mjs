@@ -54,6 +54,32 @@ export function summaryPhysical(records) {
     vinyl: active.filter((r) => r.vinyl).length };
 }
 const byKey = (records) => new Map(records.map((record) => [physicalKey(record.artist, record.title), record]));
+
+export function addPhysicalRecords(records, rows) {
+  const all = byKey(records);
+  for (const input of rows) {
+    const artist = validateName(input.artist, 'Artista');
+    const title = validateName(input.title, 'Album');
+    if (typeof input.cd !== 'boolean' || typeof input.vinyl !== 'boolean') throw new Error('Valori CD/vinile non validi.');
+    const key = physicalKey(artist, title);
+    const existing = all.get(key);
+    const cd = Boolean(existing?.cd || input.cd), vinyl = Boolean(existing?.vinyl || input.vinyl);
+    if (cd || vinyl) all.set(key, { artist: existing?.artist || artist, title: existing?.title || title, cd, vinyl });
+  }
+  return validatePhysicalRecords([...all.values()]);
+}
+
+export function setPhysicalRecordFormat(records, artist, title, format, checked) {
+  if (!['cd', 'vinyl'].includes(format) || typeof checked !== 'boolean') throw new Error('Formato non valido.');
+  const key = physicalKey(artist, title), all = byKey(records);
+  const current = all.get(key);
+  if (!current && !checked) return records;
+  const record = current || { artist: validateName(artist, 'Artista'),
+    title: validateName(title, 'Album'), cd: false, vinyl: false };
+  all.set(key, { ...record, [format]: checked });
+  return validatePhysicalRecords([...all.values()]);
+}
+
 export function mergePhysicalRecords(base, local, remote) {
   // Merge a tre vie, campo per campo, con marcatori tombstone (CD e vinile false).
   const original = byKey(validatePhysicalRecords(base));
@@ -96,19 +122,7 @@ export function createPhysicalStore(storage) {
     state = nextState;
   }
   function addMany(rows) {
-    const all = byKey(state.records);
-    for (const input of rows) {
-      const artist = validateName(input.artist, 'Artista');
-      const title = validateName(input.title, 'Album');
-      const key = physicalKey(artist, title);
-      const existing = all.get(key);
-      const cd = existing?.cd || input.cd === true;
-      const vinyl = existing?.vinyl || input.vinyl === true;
-      if (typeof input.cd !== 'boolean' || typeof input.vinyl !== 'boolean') throw new Error('Valori CD/vinile non validi.');
-      if (!cd && !vinyl) continue;
-      all.set(key, { artist: existing?.artist || artist, title: existing?.title || title, cd, vinyl });
-    }
-    commit({ ...state, records: [...all.values()] });
+    commit({ ...state, records: addPhysicalRecords(state.records, rows) });
   }
   return {
     get state() { return state; },
@@ -119,12 +133,7 @@ export function createPhysicalStore(storage) {
     get(artist, title) { return byKey(state.records).get(physicalKey(artist, title)) || null; },
     addMany,
     setFormat(artist, title, format, checked) {
-      if (!['cd', 'vinyl'].includes(format) || typeof checked !== 'boolean') throw new Error('Formato non valido.');
-      const key = physicalKey(artist, title), all = byKey(state.records);
-      const record = all.get(key) || { artist: validateName(artist, 'Artista'),
-        title: validateName(title, 'Album'), cd: false, vinyl: false };
-      all.set(key, { ...record, [format]: checked });
-      commit({ ...state, records: [...all.values()] });
+      commit({ ...state, records: setPhysicalRecordFormat(state.records, artist, title, format, checked) });
     },
     pending() { return JSON.stringify(state.records) !== JSON.stringify(state.base); },
     commitSync(records, owner, sha) {

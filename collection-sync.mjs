@@ -1,9 +1,14 @@
-import { validateDocument, createSyncDocument, threeWayMerge, decodeCoverArchive, encodeCoverArchive,
+import { createSyncDocument, threeWayMerge, decodeCoverArchive, encodeCoverArchive,
   findCollectionAlbum, archiveAlbumNoteVersions } from "./core.mjs?v=54";
 import { validateDurationDocument, validateDurationEntries, durationDocument, mergeDurations } from "./duration-sync.mjs?v=1";
+import { readPhysicalDocument, mergePhysicalRecords } from "./physical-collection.mjs?v=2";
+import { createUnifiedLibrary, readUnifiedLibrary, readMusicDocument, LIBRARY_FILE,
+  LEGACY_LIBRARY_FILES } from "./unified-library.mjs?v=1";
 
 const API = "https://api.github.com";
 const UNCERTAIN_WRITE_KEY = "accord-album-sync-uncertain-v1";
+const LEGACY_PHYSICAL_WRITE_KEY = "accord-physical-sync-pending-v1";
+const LIBRARY_WRITE_KEY = "accord-library-sync-pending-v1";
 class UncertainGitHubWrite extends Error {}
 
 export function githubCollectionSettings(storage) {
@@ -21,6 +26,8 @@ function base64(bytes) {
 }
 const equalAlbums = (left, right) => JSON.stringify([...left].sort((a, b) => a.id.localeCompare(b.id)))
   === JSON.stringify([...right].sort((a, b) => a.id.localeCompare(b.id)));
+const equalPhysical = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+const hasOtherOwner = (saved, owner) => Boolean(saved) && (typeof saved !== "string" || saved.toLowerCase() !== owner);
 const hash = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 async function gitBlobSha(bytes) {
@@ -31,13 +38,25 @@ async function gitBlobSha(bytes) {
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function createCollectionSync({ storage, store, covers, fetch: request = globalThis.fetch }) {
+function readPendingLibraryWrite(text) {
+  if (text === null) return null;
+  let marker;
+  try { marker = JSON.parse(text); } catch { /* handled below */ }
+  if (!marker || typeof marker.owner !== "string" || !marker.owner || typeof marker.branch !== "string"
+      || !marker.branch || !/^[0-9a-f]{40}$/.test(marker.blobSha || "")
+      || (marker.confirmed !== undefined && typeof marker.confirmed !== "boolean")) {
+    throw new Error("Registro dell’ultimo invio del catalogo condiviso non valido. Nessun invio eseguito.");
+  }
+  return marker;
+}
+
+export function createCollectionSync({ storage, store, covers, unified = false, fetch: request = globalThis.fetch }) {
   const uncertainWrite = () => {
     const saved = storage.getItem(UNCERTAIN_WRITE_KEY);
     if (saved === null) return null;
     const marker = JSON.parse(saved);
     if (!marker || typeof marker !== "object" || Array.isArray(marker)
-        || !["albums.json", "covers.bin", "durations.json"].includes(marker.file)
+        || !["albums.json", "covers.bin", "durations.json", LIBRARY_FILE].includes(marker.file)
         || typeof marker.owner !== "string" || typeof marker.branch !== "string"
         || !/^[a-f0-9]{40}$/.test(marker.blobSha)) {
       throw new Error("Registro dell'invio GitHub incerto non valido. Nessun invio eseguito.");
@@ -46,12 +65,14 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
   };
   function client(assertExtra = () => {}, progress = () => {}) {
     const settings = githubCollectionSettings(storage);
+    if (unified) settings.owner = settings.owner.toLowerCase();
     const root = `${API}/repos/${encodeURIComponent(settings.owner)}/accord-music-data`;
     function assertCurrent() {
       store.assertCurrent();
       assertExtra();
       const current = githubCollectionSettings(storage);
-      if (current.owner !== settings.owner || current.token !== settings.token) throw new Error("Collegamento GitHub cambiato: operazione interrotta.");
+      const currentOwner = unified ? current.owner.toLowerCase() : current.owner;
+      if (currentOwner !== settings.owner || current.token !== settings.token) throw new Error("Collegamento GitHub cambiato: operazione interrotta.");
     }
     async function send(url, { method = "GET", body, missing = false, raw = false, label } = {}) {
       assertCurrent();
@@ -75,7 +96,10 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       }
       function assertAfterResponse() {
         try { assertCurrent(); } catch (error) {
-          if (writing) throw new Error(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
+          if (writing) {
+            const Failure = unified ? UncertainGitHubWrite : Error;
+            throw new Failure(`${error.message} Invio GitHub forse completato; rileggi con Sincronizza.`);
+          }
           throw error;
         }
       }
@@ -83,7 +107,8 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       if (missing && response.status === 404) return null;
       if (!response.ok) {
         if (response.headers.get("Retry-After") || response.headers.get("X-RateLimit-Remaining") === "0") {
-          throw new Error(`GitHub HTTP ${response.status}. Il server richiede un'attesa: riprova Sincronizza piu' tardi.`
+          const Failure = unified && writing && response.status >= 500 ? UncertainGitHubWrite : Error;
+          throw new Failure(`GitHub HTTP ${response.status}. Il server richiede un'attesa: riprova Sincronizza piu' tardi.`
             + (writing && response.status >= 500 ? " Esito dell'invio incerto; nessun invio ripetuto." : ""));
         }
         if (response.status >= 500 && writing) {
@@ -108,70 +133,101 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       }
       return result;
     }
-    async function read(withCovers = false) {
+    function readFile(file, branch, options) {
+      if (options?.raw) progress(`Download GitHub: ${file}. Attesa massima: 120 s.`);
+      return send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, { label: file, ...options });
+    }
+    function fileSha(metadata, file) {
+      if (metadata === null) return null;
+      if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha
+          || (unified && !/^[a-f0-9]{40}$/.test(metadata.sha))) throw new Error(`${file} non leggibile.`);
+      return metadata.sha;
+    }
+    async function readJson(file, branch, metadata) {
+      const sha = fileSha(metadata, file);
+      let bytes;
+      if (metadata.encoding === "none") {
+        bytes = await readFile(file, branch, { raw: true });
+        const currentSha = unified ? await gitBlobSha(bytes) : (await readFile(file, branch)).sha;
+        if (currentSha !== sha) throw new Error(`${file} e' cambiato durante la lettura. Riprova Sincronizza.`);
+      } else {
+        if (typeof metadata.content !== "string" || !metadata.content || (unified && metadata.encoding !== "base64")) {
+          throw new Error(`${file} non leggibile.`);
+        }
+        bytes = Uint8Array.from(atob(metadata.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
+        if (unified && await gitBlobSha(bytes) !== sha) throw new Error(`${file} non corrisponde alla revisione GitHub.`);
+      }
+      return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    }
+    async function verifyLegacy(branch, expected) {
+      const files = Object.entries(LEGACY_LIBRARY_FILES);
+      const revisions = await Promise.all(files.map(async ([key, file]) => {
+        const metadata = await readFile(file, branch, { missing: true });
+        return { file, matches: fileSha(metadata, file) === expected[key] };
+      }));
+      const changed = revisions.filter(({ matches }) => !matches).map(({ file }) => file);
+      if (changed.length) {
+        throw new Error(`Gli archivi precedenti sono cambiati: ${changed.join(", ")}. `
+          + "Sospendi la sincronizzazione dai dispositivi con la versione precedente e riconcilia gli archivi prima di continuare.");
+      }
+    }
+    async function read(withCovers = false, requireLibrary = false) {
       const repository = await send(root, { label: "accord-music-data" });
       if (repository.private !== true || typeof repository.default_branch !== "string" || !repository.default_branch) {
         throw new Error("accord-music-data deve essere un repository privato con un branch predefinito.");
       }
       const branch = repository.default_branch;
-      function readFile(file, options) {
-        if (options?.raw) progress(`Download GitHub: ${file}. Attesa massima: 120 s.`);
-        return send(`${root}/contents/${file}?ref=${encodeURIComponent(branch)}`, { label: file, ...options });
-      }
-      const metadata = await readFile("albums.json", { missing: true });
-      let albums = [], deletedAlbums = [], sha = null, deletionSync = false, deletionHistory = false;
-      if (metadata !== null) {
-        if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("albums.json non leggibile.");
-        let bytes;
-        if (metadata.encoding === "none") {
-          bytes = await readFile("albums.json", { raw: true });
-          const current = await readFile("albums.json");
-          if (current.sha !== metadata.sha) throw new Error("albums.json e' cambiato durante la lettura. Riprova Sincronizza.");
-        } else {
-          if (typeof metadata.content !== "string" || !metadata.content) throw new Error("albums.json non leggibile.");
-          bytes = Uint8Array.from(atob(metadata.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
+      const remote = { albums: [], deletedAlbums: [], sha: null, branch, deletionSync: false, deletionHistory: false,
+        covers: new Map(), coversSha: null, archive: new Uint8Array(), durations: [], durationsSha: null,
+        librarySha: null, physical: [], migration: null, extensions: {} };
+      const libraryMetadata = unified ? await readFile(LIBRARY_FILE, branch, { missing: true }) : null;
+      if (libraryMetadata) {
+        const library = readUnifiedLibrary(await readJson(LIBRARY_FILE, branch, libraryMetadata));
+        const sha = libraryMetadata.sha;
+        Object.assign(remote, library, { librarySha: sha, sha, durationsSha: sha });
+        if (withCovers) await verifyLegacy(branch, remote.migration);
+      } else {
+        if (unified && (store.state.libraryOwner || requireLibrary)) {
+          throw new Error("library.json e' assente su GitHub. Ripristinalo prima di sincronizzare di nuovo.");
         }
-        const document = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-        albums = validateDocument(document); sha = metadata.sha; deletionSync = document.deletion_sync === true;
-        deletionHistory = document.deletion_history === true;
-        if (document.deleted_albums !== undefined) deletedAlbums = validateDocument({
-          format: document.format, version: 4, albums: document.deleted_albums });
-        if (deletedAlbums.some((album) => albums.some((live) => live.id === album.id))) {
-          throw new Error("Archivio rimozioni incoerente con gli album presenti. Nessun dato modificato.");
+        const metadata = await readFile("albums.json", branch, { missing: true });
+        if (metadata) {
+          const music = readMusicDocument(await readJson("albums.json", branch, metadata));
+          Object.assign(remote, music, { sha: metadata.sha });
         }
-      }
-      const remote = { albums, deletedAlbums, sha, branch, deletionSync, deletionHistory, covers: new Map(), coversSha: null, archive: new Uint8Array(),
-        durations: [], durationsSha: null };
-      if (withCovers) {
-        const coverMetadata = await readFile("covers.bin", { missing: true });
-        if (coverMetadata !== null) {
-          if (coverMetadata.type !== "file" || typeof coverMetadata.sha !== "string") throw new Error("covers.bin non leggibile.");
-          remote.coversSha = coverMetadata.sha;
-          remote.archive = await readFile("covers.bin", { raw: true });
-          remote.covers = await decodeCoverArchive(remote.archive);
-        }
-        const metadata = await readFile("durations.json", { missing: true });
-        if (metadata !== null) {
-          if (metadata.type !== "file" || typeof metadata.sha !== "string" || !metadata.sha) throw new Error("Archivio durate non leggibile.");
-          let bytes;
-          if (metadata.encoding === "none") {
-            bytes = await readFile("durations.json", { raw: true });
-            const current = await readFile("durations.json");
-            if (current.sha !== metadata.sha) throw new Error("Le durate GitHub sono cambiate durante la lettura. Riprova.");
-          } else {
-            if (typeof metadata.content !== "string" || !metadata.content) throw new Error("Archivio durate non leggibile.");
-            bytes = Uint8Array.from(atob(metadata.content.replace(/\s/g, "")), (char) => char.charCodeAt(0));
+        if (withCovers) {
+          const durationsMetadata = await readFile("durations.json", branch, { missing: true });
+          if (durationsMetadata) {
+            remote.durations = validateDurationDocument(await readJson("durations.json", branch, durationsMetadata));
+            remote.durationsSha = durationsMetadata.sha;
           }
-          remote.durations = validateDurationDocument(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
-          remote.durationsSha = metadata.sha;
+          if (unified) {
+            const physicalMetadata = await readFile("physical-library.json", branch, { missing: true });
+            if (physicalMetadata) {
+              remote.physical = readPhysicalDocument(await readJson("physical-library.json", branch, physicalMetadata));
+            }
+            remote.migration = { albums_sha: remote.sha, durations_sha: remote.durationsSha,
+              physical_sha: physicalMetadata?.sha || null };
+          }
+        }
+      }
+      if (withCovers) {
+        const coverMetadata = await readFile("covers.bin", branch, { missing: true });
+        if (coverMetadata) {
+          remote.coversSha = fileSha(coverMetadata, "covers.bin");
+          remote.archive = await readFile("covers.bin", branch, { raw: true });
+          if (unified && await gitBlobSha(remote.archive) !== remote.coversSha) {
+            throw new Error("covers.bin e' cambiato durante la lettura. Riprova Sincronizza.");
+          }
+          remote.covers = await decodeCoverArchive(remote.archive);
         }
       }
       return remote;
     }
-    async function write(file, bytes, sha, branch) {
+    async function write(file, bytes, sha, branch, blobSha) {
       const payload = { message: `Sync Accord ${file}`, content: base64(bytes), branch, ...(sha ? { sha } : {}) };
       progress(`Invio GitHub: ${file} (${(bytes.length / 1024 / 1024).toFixed(2)} MiB). Attesa massima: 120 s.`);
-      const marker = { owner: connectionOwner, branch, file, blobSha: await gitBlobSha(bytes),
+      const marker = { owner: connectionOwner, branch, file, blobSha: blobSha ?? await gitBlobSha(bytes),
         createdAt: new Date().toISOString() };
       assertCurrent();
       if (uncertainWrite()) throw new Error("Un altro invio GitHub richiede una verifica. Nessun nuovo invio eseguito.");
@@ -179,7 +235,8 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       try {
         const result = await send(`${root}/contents/${file}`, { method: "PUT", body: JSON.stringify(payload) });
         if (typeof result?.content?.sha !== "string" || !result.content.sha
-            || typeof result?.commit?.sha !== "string" || !result.commit.sha) {
+            || typeof result?.commit?.sha !== "string" || !result.commit.sha
+            || (unified && result.content.sha !== marker.blobSha)) {
           throw new UncertainGitHubWrite("Conferma dell'invio GitHub incompleta.");
         }
         storage.removeItem(UNCERTAIN_WRITE_KEY);
@@ -211,7 +268,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       return send(url, { label: marker.file, missing: true });
     }
     const connectionOwner = settings.owner;
-    return { read, write, verify, assertCurrent, settings };
+    return { read, write, verify, verifyLegacy, assertCurrent, settings };
   }
   return {
     uncertainWrite,
@@ -220,7 +277,7 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       const marker = uncertainWrite();
       if (!marker) return { pending: false, verified: false };
       const connection = client();
-      if (marker.owner !== connection.settings.owner) {
+      if (unified ? hasOtherOwner(marker.owner, connection.settings.owner) : marker.owner !== connection.settings.owner) {
         throw new Error("L'invio incerto appartiene a un altro account GitHub. Ripristina quel collegamento prima di verificare.");
       }
       const metadata = await connection.verify(marker);
@@ -231,6 +288,13 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
         throw new Error("Lo stato dell'invio e' cambiato durante la verifica. Nessun dato inviato.");
       }
       const verified = metadata?.sha === marker.blobSha;
+      if (unified && verified && marker.file === LIBRARY_FILE) {
+        const pending = readPendingLibraryWrite(storage.getItem(LIBRARY_WRITE_KEY));
+        if (!pending || pending.owner !== marker.owner || pending.branch !== marker.branch || pending.blobSha !== marker.blobSha) {
+          throw new Error("Il registro dell’ultimo invio del catalogo è cambiato. Riapri Verifica su GitHub.");
+        }
+        storage.setItem(LIBRARY_WRITE_KEY, JSON.stringify({ ...pending, confirmed: true }));
+      }
       storage.removeItem(UNCERTAIN_WRITE_KEY);
       return { pending: true, verified, missing: metadata === null, file: marker.file };
     },
@@ -242,21 +306,55 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
     async sync({ chooseConflicts, confirm, onProgress = () => {} }) {
       if (uncertainWrite()) throw new Error("Usa Verifica su GitHub prima di sincronizzare.");
       const durationSnapshot = store.durationSnapshot(), before = store.state;
+      const physicalPendingText = unified ? storage.getItem(LEGACY_PHYSICAL_WRITE_KEY) : null;
+      const previousLibraryWrite = unified ? storage.getItem(LIBRARY_WRITE_KEY) : null;
+      const pendingLibrary = readPendingLibraryWrite(previousLibraryWrite);
+      let expectedLibraryWrite = previousLibraryWrite;
       const connection = client(() => {
         store.assertDurationSnapshot(durationSnapshot);
         if (store.state !== before) throw new Error("Raccolta cambiata durante la sincronizzazione. Riapri Sincronizza.");
-      }, onProgress), remote = await connection.read(true);
+        if (unified && (storage.getItem(LEGACY_PHYSICAL_WRITE_KEY) !== physicalPendingText
+            || storage.getItem(LIBRARY_WRITE_KEY) !== expectedLibraryWrite)) {
+          throw new Error("Sta cambiando lo stato dell’ultimo invio. Riapri Sincronizza.");
+        }
+      }, onProgress);
+      const owner = connection.settings.owner;
+      if (unified && [before.libraryOwner, before.syncOwner, before.physicalOwner, before.durationBase?.owner, pendingLibrary?.owner]
+        .some((previous) => hasOtherOwner(previous, owner))) {
+        throw new Error("Il catalogo locale è associato a un altro proprietario GitHub. Ripristina il collegamento precedente.");
+      }
+      const remote = await connection.read(true, pendingLibrary?.confirmed === true);
       connection.assertCurrent();
-      const durationState = before.durationBase ?? { owner: connection.settings.owner, albums: [] };
+      if (pendingLibrary && pendingLibrary.branch !== remote.branch) {
+        throw new Error("Il branch predefinito è cambiato dopo l’ultimo invio. Ripristinalo prima di sincronizzare.");
+      }
+      const migrating = unified && !remote.librarySha;
+      if (migrating && (before.physicalSha || before.physicalBase?.length) && !remote.migration.physical_sha) {
+        throw new Error("physical-library.json è assente su GitHub. Ripristinalo prima di migrare.");
+      }
+      if (physicalPendingText !== null) {
+        const pending = JSON.parse(physicalPendingText);
+        if (!pending || typeof pending.owner !== "string" || !pending.owner || hasOtherOwner(pending.owner, owner)
+            || pending.branch !== remote.branch || !/^[0-9a-f]{40}$/.test(pending.blobSha || "")
+            || pending.blobSha !== remote.migration.physical_sha) {
+          throw new Error("Non è possibile confermare l’ultimo invio dei supporti. Verificalo con Sincronizza supporti nella versione precedente di Accord prima di migrare.");
+        }
+      }
+      const localPhysical = unified ? before.physical : [];
+      const physical = unified ? mergePhysicalRecords(before.physicalBase, localPhysical, remote.physical) : [];
+      const physicalOutgoing = unified && !equalPhysical(physical, remote.physical);
+      const physicalIncoming = unified && !equalPhysical(physical, localPhysical);
+      const durationState = before.durationBase ?? { owner, albums: [] };
       if (!durationState || typeof durationState !== "object" || Array.isArray(durationState)
           || typeof durationState.owner !== "string") throw new Error("Base durate locale non valida.");
-      const durationBase = durationState.owner === connection.settings.owner ? validateDurationEntries(durationState.albums) : [];
+      const durationOwnerMatches = unified ? !hasOtherOwner(durationState.owner, owner) : durationState.owner === owner;
+      const durationBase = durationOwnerMatches ? validateDurationEntries(durationState.albums) : [];
       if (durationBase.length && !remote.durationsSha) throw new Error("L'archivio durate non e' piu' presente su GitHub. Ripristinalo prima di sincronizzare.");
-      if (before.syncOwner && before.syncOwner !== connection.settings.owner && (before.pendingRemovals.length || before.deletedAlbums.length)) {
+      if (!unified && before.syncOwner && before.syncOwner !== owner && (before.pendingRemovals.length || before.deletedAlbums.length)) {
         throw new Error("Le rimozioni pendenti appartengono al precedente collegamento GitHub. Ripristina quel proprietario e sincronizza prima di cambiarlo.");
       }
       if ((before.base.length || before.deletedAlbums.length) && !remote.sha) throw new Error("albums.json non e' piu' presente. Ripristinalo su GitHub prima di sincronizzare: nessuna cancellazione automatica.");
-      const base = new Map((!before.syncOwner || before.syncOwner === connection.settings.owner ? before.base : []).map((album) => [album.id, album]));
+      const base = new Map((unified || !before.syncOwner || before.syncOwner === owner ? before.base : []).map((album) => [album.id, album]));
       before.pendingRemovals.forEach((album) => { if (!base.has(album.id)) base.set(album.id, album); });
       const remoteIds = new Set(remote.albums.map((album) => album.id));
       // A history-aware peer can deliberately restore an ID already absent from our base.
@@ -325,37 +423,73 @@ export function createCollectionSync({ storage, store, covers, fetch: request = 
       await decodeCoverArchive(archive);
       const coversOutgoing = Boolean((selected.size || remote.archive.length) && (archive.length !== remote.archive.length
         || archive.some((byte, index) => byte !== remote.archive[index])));
-      if ((outgoing || incoming || durationOutgoing.length || durationIncoming.length || deletionsChanged
-          || !remote.deletionSync || !remote.deletionHistory || coversOutgoing)
+      const musicOutgoing = outgoing || deletionsChanged || !remote.deletionSync || !remote.deletionHistory;
+      const libraryOutgoing = unified && (migrating || musicOutgoing || durationOutgoing.length || physicalOutgoing);
+      if ((musicOutgoing || incoming || durationOutgoing.length || durationIncoming.length || coversOutgoing
+          || migrating || physicalOutgoing || physicalIncoming)
           && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums,
-            durationOutgoing, durationIncoming, coversOutgoing })) return false;
+            durationOutgoing, durationIncoming, coversOutgoing,
+            ...(unified ? { physicalOutgoing, physicalIncoming, migrating } : {}) })) return false;
       connection.assertCurrent();
+      const libraryBytes = libraryOutgoing ? new TextEncoder().encode(JSON.stringify(createUnifiedLibrary({
+        albums: merged.albums, deletedAlbums, physical, durations: durationMerge.entries,
+        migration: remote.migration, extensions: remote.extensions,
+      })) + "\n") : null;
+      if (libraryBytes?.length > 100 * 1024 * 1024) throw new Error("library.json supera il limite GitHub di 100 MiB.");
+      if (unified) await connection.verifyLegacy(remote.branch, remote.migration);
       for (const [id, data] of selected) await covers.put(id, data);
-      let coversWritten = false, albumsWritten = false, durationsWritten = false;
+      let coversWritten = false, albumsWritten = false, durationsWritten = false, libraryWritten = false;
       try {
         connection.assertCurrent();
         if (coversOutgoing) {
           await connection.write("covers.bin", archive, remote.coversSha, remote.branch);
           coversWritten = true;
         }
-        if (outgoing || deletionsChanged || !remote.deletionSync || !remote.deletionHistory) {
-          const document = { ...createSyncDocument(merged.albums), deletion_sync: true, deletion_history: true, deleted_albums: deletedAlbums };
-          await connection.write("albums.json", new TextEncoder().encode(JSON.stringify(document, null, 2)), remote.sha, remote.branch);
-          albumsWritten = true;
-        }
-        if (durationOutgoing.length) {
-          await connection.write("durations.json", new TextEncoder().encode(JSON.stringify(durationDocument(durationMerge.entries), null, 2)),
-            remote.durationsSha, remote.branch);
-          durationsWritten = true;
+        if (unified) {
+          if (libraryBytes) {
+            const blobSha = await gitBlobSha(libraryBytes);
+            connection.assertCurrent();
+            expectedLibraryWrite = JSON.stringify({ owner, branch: remote.branch, blobSha });
+            storage.setItem(LIBRARY_WRITE_KEY, expectedLibraryWrite);
+            try {
+              await connection.write(LIBRARY_FILE, libraryBytes, remote.librarySha, remote.branch, blobSha);
+            } catch (error) {
+              if (!uncertainWrite() && storage.getItem(LIBRARY_WRITE_KEY) === expectedLibraryWrite) {
+                if (previousLibraryWrite === null) storage.removeItem(LIBRARY_WRITE_KEY);
+                else storage.setItem(LIBRARY_WRITE_KEY, previousLibraryWrite);
+              }
+              throw error;
+            }
+            libraryWritten = true;
+            connection.assertCurrent();
+            expectedLibraryWrite = JSON.stringify({ owner, branch: remote.branch, blobSha, confirmed: true });
+            storage.setItem(LIBRARY_WRITE_KEY, expectedLibraryWrite);
+          }
+          if (coversWritten || libraryWritten) await connection.verifyLegacy(remote.branch, remote.migration);
+        } else {
+          if (musicOutgoing) {
+            const document = { ...createSyncDocument(merged.albums), deletion_sync: true, deletion_history: true, deleted_albums: deletedAlbums };
+            await connection.write("albums.json", new TextEncoder().encode(JSON.stringify(document, null, 2)), remote.sha, remote.branch);
+            albumsWritten = true;
+          }
+          if (durationOutgoing.length) {
+            await connection.write("durations.json", new TextEncoder().encode(JSON.stringify(durationDocument(durationMerge.entries), null, 2)),
+              remote.durationsSha, remote.branch);
+            durationsWritten = true;
+          }
         }
         connection.assertCurrent();
         store.commitSync({ ...before, albums: merged.albums, base: merged.albums, pendingRemovals: [],
           deletedAlbums, restoredAlbumIds: [],
-          durationBase: { owner: connection.settings.owner, albums: durationMerge.entries },
-          syncOwner: connection.settings.owner, lastSync: new Date().toISOString() }, durationSnapshot,
+          durationBase: { owner, albums: durationMerge.entries },
+          syncOwner: owner, lastSync: new Date().toISOString(),
+          ...(unified ? { physical, physicalBase: physical, physicalOwner: owner, libraryOwner: owner,
+            physicalSha: remote.migration.physical_sha } : {}) }, durationSnapshot,
         durationMerge.entries.filter((row) => retained.has(row.id)));
+        if (physicalPendingText !== null) storage.removeItem(LEGACY_PHYSICAL_WRITE_KEY);
+        if (expectedLibraryWrite !== null) storage.removeItem(LIBRARY_WRITE_KEY);
       } catch (error) {
-        throw new Error(`${error.message}${coversWritten || albumsWritten || durationsWritten
+        throw new Error(`${error.message}${coversWritten || albumsWritten || durationsWritten || libraryWritten
           ? " Invio parziale gia' completato su GitHub; copia locale non confermata. Rileggi con Sincronizza." : ""}`);
       }
       return true;

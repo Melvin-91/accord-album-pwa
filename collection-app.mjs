@@ -1,15 +1,16 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=10";
-import { createCollectionSync } from "./collection-sync.mjs?v=9";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=11";
+import { createCollectionSync } from "./collection-sync.mjs?v=10";
 import { configureMusicAppLink, openAssociatedEditionDialog, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=5";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
 import { installCommandIcons } from "./command-icons.mjs?v=1";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
-import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=1";
+import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=2";
+import { PHYSICAL_KEY } from "./physical-collection.mjs?v=2";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
-  filteredCollection, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=5";
+  collectionRows, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=6";
 
 installCommandIcons(document);
 installSelectWheelGuard(document);
@@ -25,18 +26,16 @@ const node = (tag, text = "", attributes = {}) => {
   Object.entries(attributes).forEach(([key, item]) => value.setAttribute(key, item));
   return value;
 };
-let store, sync, servicesPromise, catalogAbort, durationAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
+let store, sync, physicalCollection, servicesPromise, catalogAbort, durationAbort, busy = false, visibleLimit = 40, resultAlbums = [], generation = 0;
 const covers = createCollectionCoverCache(indexedDB), cards = new Map(), urls = new Map();
 let resultCoverUrls = new Map();
 let resultMetadata = new Map();
 const comparedEditions = new Set();
 let revealedAlbum = null, revealOrigin = null, quickReview = null;
 const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value, genre: $("genreFilter").value,
-  favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
-const matchingAlbums = () => filteredCollection(store.state.albums, collectionFilters());
+  format: $("formatFilter").value, favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
 function revealCollectionAlbum(id) {
   if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
-  physicalCollection.showMusic();
   if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
   revealedAlbum = id;
   $("addDialog").close(); $("settingsDialog").close();
@@ -99,6 +98,7 @@ async function services() {
 function disable() {
   document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #openQuickReview, #returnToFilters, #quickReviewDialog button, #quickReviewDialog select, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
+  physicalCollection?.setBusy(busy);
   $("collection").setAttribute("aria-busy", String(busy));
   $("cancelCatalogSearch").hidden = !catalogAbort;
   $("cancelCatalogSearch").disabled = !catalogAbort;
@@ -489,23 +489,35 @@ function render() {
   document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
   document.documentElement.dataset.contrast = store.state.preferences.contrast === "high" ? "high" : "standard";
   document.documentElement.dataset.density = store.state.preferences.density === "compact" ? "compact" : "touch";
-  const filtered = matchingAlbums();
-  const revealed = store.state.albums.find((album) => album.id === revealedAlbum);
-  if (revealed && !filtered.some((album) => album.id === revealedAlbum)) filtered.unshift(revealed);
-  if (revealed) visibleLimit = Math.max(visibleLimit, filtered.findIndex((album) => album.id === revealedAlbum) + 1);
+  const { total, visible: filtered } = collectionRows(store.state.albums, store.state.physical, collectionFilters());
+  if (revealedAlbum) {
+    const rowIndex = filtered.findIndex((row) => row.id === revealedAlbum);
+    if (rowIndex >= 0) visibleLimit = Math.max(visibleLimit, rowIndex + 1);
+    else {
+      const album = store.state.albums.find((item) => item.id === revealedAlbum);
+      if (album) filtered.unshift(collectionRows([album], store.state.physical).visible.find((row) => row.id === album.id));
+    }
+  }
   $("returnToFilters").hidden = !revealedAlbum;
   const active = document.activeElement, activeId = active?.closest(".album-card")?.dataset.id, control = active?.dataset.control;
-  const wanted = filtered.slice(0, visibleLimit).map((album) => {
-    const signature = JSON.stringify([album, favorites.has(album.id), durations[album.id], localStorage.getItem(MUSIC_LINK_TARGET_KEY)]);
-    const old = cards.get(album.id);
+  const wanted = filtered.slice(0, visibleLimit).map(({ id, album, physical }) => {
+    const signature = JSON.stringify(album
+      ? [album, favorites.has(id), durations[id], localStorage.getItem(MUSIC_LINK_TARGET_KEY)]
+      : [physical.artist, physical.title]);
+    const old = cards.get(id);
     if (!old || old.signature !== signature) {
       const oldImage = old?.element.querySelector("img");
       if (oldImage) coverObserver.unobserve(oldImage);
-      const element = albumCard(album, favorites.has(album.id), durations[album.id]);
-      element.querySelector(".album-options").open = Boolean(old?.element.querySelector(".album-options")?.open);
-      cards.set(album.id, { signature, element });
+      const element = album ? albumCard(album, favorites.has(id), durations[id]) : physicalCollection.physicalCard(physical, physical);
+      element.dataset.id = id;
+      const options = element.querySelector(".album-options");
+      if (options) options.open = Boolean(old?.element.querySelector(".album-options")?.open);
+      cards.set(id, { signature, element });
     }
-    return cards.get(album.id).element;
+    const { element } = cards.get(id);
+    physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
+      physical || { cd: false, vinyl: false });
+    return element;
   });
   reconcileAlbumCards($("albumList"), wanted);
   const retained = new Set(filtered.slice(0, visibleLimit).map((album) => album.id));
@@ -515,11 +527,15 @@ function render() {
     cards.delete(id);
     if (urls.has(id)) { URL.revokeObjectURL(urls.get(id)); urls.delete(id); }
   }
-  if (activeId && control) [...$("albumList").children].find((card) => card.dataset.id === activeId)
-    ?.querySelector(`[data-control="${control}"]`)?.focus({ preventScroll: true });
-  $("count").textContent = `${filtered.length} album${filtered.length !== store.state.albums.length ? ` su ${store.state.albums.length}` : ""}`;
+  if (activeId && control) {
+    const target = [...$("albumList").children].find((card) => card.dataset.id === activeId)
+      ?.querySelector(`[data-control="${control}"]`);
+    if (target) target.focus({ preventScroll: true });
+    else if (control.startsWith("physical-")) $("search").focus({ preventScroll: true });
+  }
+  $("count").textContent = `${filtered.length} album${filtered.length !== total ? ` su ${total}` : ""}`;
   $("empty").hidden = filtered.length > 0;
-  $("empty").textContent = store.state.albums.length ? "Nessun album corrisponde ai filtri." : "La raccolta e' vuota. Aggiungi un album oppure sincronizza con GitHub.";
+  $("empty").textContent = total ? "Nessun album corrisponde ai filtri." : "La raccolta è vuota. Aggiungi un album oppure sincronizza con GitHub.";
   $("moreAlbums").hidden = filtered.length <= visibleLimit;
   const pending = store.pendingChanges();
   const confirmed = store.state.lastSync ? new Date(store.state.lastSync).toLocaleString("it") : "mai";
@@ -738,7 +754,8 @@ async function performSync() {
       }));
       return choices;
     },
-    async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [], coversOutgoing }) {
+    async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [], coversOutgoing,
+      physicalOutgoing, physicalIncoming, migrating }) {
       const changesTo = (previous) => {
         const old = new Map(previous.map((album) => [album.id, album]));
         const next = new Map(albums.map((album) => [album.id, album]));
@@ -763,11 +780,15 @@ async function performSync() {
             + `raccolta condivisa ${valueText(field.remote, field.field, conflict.remote)} · `
             + `mantenuto ${field.selected === "local" ? "questo dispositivo" : "raccolta condivisa"}`)];
       });
-      const content = [node("p", "Controlla le modifiche prima di sincronizzare."),
+      const content = [node("p", migrating
+        ? "La prima sincronizzazione riunisce gli archivi in library.json. Le copie precedenti restano su GitHub. Usa un desktop compatibile con library.json per sincronizzare questa raccolta."
+        : "Controlla le modifiche prima di sincronizzare."),
         node("h3", "Da inviare"), node("pre", [...changesTo(remote),
           ...(coversOutgoing ? ["Aggiorna l'archivio delle copertine."] : []),
+          ...(physicalOutgoing ? ["Aggiorna i supporti CD e Vinile."] : []),
           ...durationOutgoing.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
         node("h3", "Da ricevere"), node("pre", [...changesTo(local),
+          ...(physicalIncoming ? ["Aggiorna i supporti CD e Vinile su questo dispositivo."] : []),
           ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
         node("h3", "Conflitti"), node("pre", conflictLines.join("\n") || "Nessun conflitto.")];
       return await choice("Conferma sincronizzazione", content, [["cancel", "Annulla"], ["sync", "Sincronizza"]]) === "sync";
@@ -791,10 +812,10 @@ async function serviceSettings() {
   $("redirectUri").value = settings.redirectUri || "";
   $("redirectField").hidden = provider !== "spotify"; $("clientField").hidden = provider === "qobuz";
 }
-const physicalCollection = initializePhysicalCollection({ getAlbums: () => store?.state.albums || [], report });
 try {
   store = createCollectionStore(localStorage);
-  sync = createCollectionSync({ storage: localStorage, store, covers });
+  physicalCollection = initializePhysicalCollection({ store, report, render });
+  sync = createCollectionSync({ storage: localStorage, store, covers, unified: true });
   render();
   renderDurationFailures();
 } catch (error) { report(error.message, true); }
@@ -804,20 +825,20 @@ const dockObserver = new ResizeObserver(() => {
 });
 dockObserver.observe($("collectionDock"));
 $("collectionHome").addEventListener("click", () => {
-  physicalCollection.showMusic();
   window.scrollTo({ top: 0, behavior: "auto" });
   $("collectionTitle").focus({ preventScroll: true });
 });
 $("search").addEventListener("input", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 });
-["statusFilter", "genreFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
+["statusFilter", "genreFilter", "formatFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
 $("openQuickReview").addEventListener("click", () => {
   if (busy || !store) return;
-  const ids = matchingAlbums().map((album) => album.id);
+  const { visible } = collectionRows(store.state.albums, store.state.physical, collectionFilters());
+  const ids = visible.filter(({ album }) => album).map(({ id }) => id);
   if (!ids.length) { report("Nessun album nei filtri correnti da rivedere."); return; }
   quickReview = { ids, index: 0, scroll: scrollY };
   showQuickReview();
@@ -836,10 +857,7 @@ $("returnToFilters").addEventListener("click", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = origin?.limit || 40; render();
   requestAnimationFrame(() => window.scrollTo({ top: origin?.scroll || 0, behavior: "auto" }));
 });
-$("sync").addEventListener("click", () => {
-  physicalCollection.showMusic();
-  run(performSync);
-});
+$("sync").addEventListener("click", () => run(performSync));
 $("cancelDurations").addEventListener("click", () => durationAbort?.abort());
 $("updateDurations").addEventListener("click", () => run(async () => {
   const client = await services(), known = store.durations();
@@ -865,7 +883,6 @@ $("duplicates").addEventListener("click", () => {
   try { $("settingsDialog").close(); showDuplicates(); } catch (error) { report(error.message, true); }
 });
 $("openAdd").addEventListener("click", async () => {
-  physicalCollection.showMusic();
   await run(async () => {
   const client = await services(); $("catalogService").value = client.provider;
   refreshCatalogSearches();
@@ -1037,7 +1054,7 @@ document.querySelectorAll("[data-close]").forEach((button) => button.addEventLis
 window.addEventListener("storage", (event) => {
   if ([MUSIC_LINK_TARGET_KEY, "accord-listening-album-durations-v1", "accord-listening-queue-v1",
     "accord-music-edition-links-v1"].includes(event.key)) render();
-  if (event.key === null || event.key === "accord-album-pwa-v1") {
+  if (event.key === null || event.key === "accord-album-pwa-v1" || event.key === PHYSICAL_KEY) {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }
 });

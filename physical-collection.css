@@ -1,45 +1,66 @@
-/* Accord physical library: only ownership badges and a separate CD/vinyl view. */
-.physical-heading { margin: 10px 0 26px; }
-.physical-heading h2 { font-size: clamp(2rem, 7vw, 3.8rem); line-height: 1.06; letter-spacing: -.06em; margin: 8px 0 12px; }
-.physical-help { color: var(--muted); font-size: .86rem; line-height: 1.6; }
-.physical-count { color: var(--accent); font-size: 1rem; font-weight: 700; margin: 0 0 16px; }
-.physical-filter { display: flex; gap: 12px; align-items: end; margin-bottom: 20px; }
-.physical-filter label:first-child { flex: 1 1 65%; }
-.physical-filter label:last-child { flex: 1 1 35%; }
-.physical-filter label, .physical-form label { display: flex; flex-direction: column; gap: 7px; font-size: .82rem; color: var(--muted); }
-.physical-filter input, .physical-filter select, .physical-form input:not([type=checkbox]) { width: 100%; min-width: 0; background: var(--raised); color: inherit; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-.physical-form { margin: 16px 0 20px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; }
-.physical-form h3 { font-size: 1.14rem; margin: 0 0 16px; }
-.physical-form-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.physical-form-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
-.physical-form-actions label { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; color: inherit; cursor: pointer; }
-.physical-form-actions button, #physicalSync { background: var(--accent); color: var(--on-accent); }
-.physical-form-actions button { margin-left: auto; }
-.physical-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 6px; }
-.physical-actions button, .physical-import { font-size: .85rem; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; }
-.physical-actions .secondary { background: var(--raised); color: inherit; }
-.physical-import { display: inline-flex; align-items: center; cursor: pointer; background: var(--raised); }
-.physical-import input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.physical-import:focus-within { outline: 2px solid var(--focus); }
-#physicalStatus { min-height: 1.6em; color: var(--accent); font-size: .85rem; }
+.album-card.physical-only-card {
+  grid-template-areas: "cover" "title" "artist" "formats";
+  contain-intrinsic-size: auto 380px;
+}
+.physical-card-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.physical-only-card .physical-card-control { grid-area: formats; }
+.album-options > .physical-card-control { padding-block: 10px; }
+.physical-badges { display: inline-flex; flex-wrap: wrap; gap: 5px; }
+.physical-badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--accent);
+  font-size: .75rem;
+  font-weight: 600;
+}
+.physical-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 44px;
+  padding-inline: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.physical-check:has(input:checked) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--soft);
+}
+.physical-check:has(input:disabled) { cursor: default; opacity: .65; }
+.physical-check input { margin: 0; }
+#openPhysicalTools { margin-bottom: 14px; }
+#physicalToolsDialog { width: min(520px, calc(100vw - 24px)); }
+.physical-form-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.physical-formats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-inline-size: 0;
+  margin: 14px 0;
+  padding: 0;
+  border: 0;
+}
+.physical-formats legend { margin-bottom: 6px; color: var(--muted); font-size: .8125rem; }
+.physical-import-export { margin-top: 18px; }
+.physical-import-export summary { cursor: pointer; }
+.physical-import-export label, .physical-import-export .dialog-actions { margin-top: 10px; }
+#physicalStatus { margin: 0; color: var(--accent); font-size: .85rem; }
+#physicalStatus:not(:empty) { margin-top: 10px; }
 #physicalStatus.error { color: #f5a0a0; }
-.physical-list { display: grid; gap: 8px; }
-.physical-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); padding: 13px 16px; border-radius: 14px; }
-.physical-row-info { flex: 1 1 220px; min-width: 0; }
-.physical-row-info h3 { font-size: .94rem; margin: 0 0 3px; overflow-wrap: anywhere; }
-.physical-row-info p { margin: 0; color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
-.physical-row label { white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; padding: 8px 5px; cursor: pointer; font-size: .8rem; }
-.physical-empty { color: var(--muted); padding: 24px; border: 1px dashed var(--line); border-radius: 12px; }
-#physicalMore { margin-top: 16px; width: 100%; }
-.physical-badges { color: var(--accent); font-weight: 600; }
-.physical-badges[hidden] { display: none; }
-.physical-card-control { display: flex; flex-wrap: wrap; gap: 9px 14px; align-items: center; padding: 12px 0 0; border-top: 1px solid var(--line); }
-.physical-card-control > span { font-size: .78rem; color: var(--muted); }
-.physical-card-control label { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; cursor: pointer; }
-@media (max-width: 600px) {
+@media (max-width: 480px) {
   .physical-form-columns { grid-template-columns: 1fr; }
-  .physical-form-actions button { width: 100%; margin-left: 0; }
-  .physical-row-info { flex-basis: 100%; }
-  .physical-filter { gap: 8px; }
-  #collectionDock #physicalOpen { padding-inline: 2px; font-size: .66rem; }
 }
