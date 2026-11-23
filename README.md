@@ -2,13 +2,42 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.42.0 · CD e vinili mentre aggiungi un album
+
+Nei risultati del catalogo puoi segnare CD e/o Vinile mentre aggiungi un
+album: album e formati posseduti vengono salvati insieme, senza duplicare
+un'edizione gia' presente. **Aggiungi album non presente nei servizi**
+consente di inserire manualmente un supporto nello stesso dialogo; da li'
+puoi anche importare o esportare l'archivio fisico. Se il catalogo segnala
+una possibile copia, i formati si salvano solo dopo la scelta; annullando il
+confronto, la raccolta non cambia. Per una corrispondenza certa puoi
+mantenere esplicitamente l'album esistente e registrare i formati selezionati;
+i casi dubbi non offrono questa scorciatoia. La copertina viene memorizzata
+solo dopo una scelta esplicita.
+
+### PWA 1.41.0 · Associazioni per tutta la raccolta
+
+In **Impostazioni → Servizi musicali**, scegli Spotify, TIDAL o Qobuz e premi
+**Controlla collegamenti in tutta la raccolta**. La ricerca controlla tutti gli
+album, indipendentemente da filtri e paginazione. Propone solo corrispondenze
+con artista e titolo esatti, anno compatibile e risultati completi; prima del
+salvataggio locale mostra un riepilogo e chiede conferma. Risultati ambigui,
+parziali, assenti o con errori restano espliciti e non vengono indovinati.
+Le letture non modificano album, voti o preferiti e le associazioni non vengono
+inviate ai servizi musicali.
+
+**Apri** usa il servizio selezionato se l'album e' nativo o ha un'edizione
+associata valida. Se manca il collegamento, mostra **Nessun link** invece di
+aprire Spotify come ripiego; **Apri con...** resta disponibile per scegliere
+esplicitamente un'altra edizione gia' collegata.
+
 ### PWA 1.40.0 · Raccolta unica
 
 La **Raccolta** mostra anche gli album posseduti soltanto su CD o vinile.
 Artista e titolo collegano i formati alle schede già presenti. Usa **Supporto**
 in **Filtri** per selezionare CD, Vinile, entrambi o nessun supporto e combina
 la scelta con ricerca, genere, stato o preferiti. Per inserire un disco
-manualmente o importare un CSV, apri **Aggiungi album → Aggiungi CD o vinile**.
+manualmente o importare un CSV, apri **Aggiungi album → Aggiungi album non presente nei servizi**.
 
 **Sincronizza** riunisce album, durate e supporti in `library.json` nel
 repository privato `accord-music-data`. La prima sincronizzazione propone

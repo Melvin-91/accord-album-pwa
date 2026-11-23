@@ -243,7 +243,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
     },
-    async search(query, { signal: externalSignal, reference, criteria, chooseArtists } = {}) {
+    async search(query, { signal: externalSignal, reference, criteria, chooseArtists, withCompleteness = false } = {}) {
       query = query.trim();
       if (!query || query.length > 100) throw new Error("Inserisci titolo, artista o link album (massimo 100 caratteri).");
       const requestSignal = () => {
@@ -255,14 +255,15 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       const provider = gate.service, epoch = gate.epoch, revision = accountRevision();
       const direct = reference ?? (/^https:/i.test(query) || new RegExp(`^${provider}:`, "i").test(query)
         || provider === "tidal" && /^\d+$/.test(query));
-      let records, byTidalArtist = false;
+      let records, complete = true, byTidalArtist = false;
       coverUrls.clear();
       releaseMetadata.clear();
       if (provider === "qobuz") {
         const id = direct ? qobuzAlbumId(query) : null;
         const client = qobuz(signal);
-        const rows = id ? [await client.album(id)]
-          : (await client.search(query)).rows;
+        const page = id ? null : await client.search(query);
+        const rows = id ? [await client.album(id)] : page.rows;
+        complete = id !== null || page.next === null;
         records = rows.map((row) => {
           if (row.coverUrl) coverUrls.set(row.album.id, qobuzCoverUrl(row.coverUrl));
           releaseMetadata.set(row.album.id, row.edition || {});
@@ -334,6 +335,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
           if (byTidalArtist && !page.complete) {
             throw new Error("Discografia TIDAL non completa: raggiunto il limite di lettura.");
           }
+          complete &&= page.complete;
           documents.push(...page.documents);
         }
         const ids = [...new Set(documents.flatMap(({ data }) => Array.isArray(data) ? data : [data])
@@ -378,6 +380,8 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         const result = await spotifyRead(id ? `albums/${id}` : `search?${new URLSearchParams({ q: scopedQuery, type: "album", limit: "30" })}`, token, signal);
         if (!id && !Array.isArray(result.albums?.items)) throw new Error("Ricerca Spotify non leggibile.");
         const entries = id ? [result] : result.albums.items;
+        complete = id !== null || Number.isSafeInteger(result.albums.total)
+          && result.albums.total === entries.length && !result.albums.next;
         for (const entry of entries) {
           releaseMetadata.set(entry.id, { album_type: entry.album_type, total_tracks: entry.total_tracks });
           const image = (Array.isArray(entry.images) ? entry.images : [])
@@ -390,8 +394,9 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       signal.throwIfAborted();
       gate.assert(provider, epoch);
       if (revision !== accountRevision()) throw new Error("Account cambiato: risultati scartati.");
-      return !direct && criteria ? records.filter((album) =>
+      const albums = !direct && criteria ? records.filter((album) =>
         catalogCriteriaMatch(album, byTidalArtist ? { title: criteria.title } : criteria)) : records;
+      return withCompleteness ? { albums, complete } : albums;
     },
     coverUrl(album) {
       const url = coverUrls.get(album?.id);

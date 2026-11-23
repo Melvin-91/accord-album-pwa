@@ -5,13 +5,17 @@ const formats = [['cd', 'CD'], ['vinyl', 'Vinile']];
 export function initializePhysicalCollection({ store, report, render }) {
   const openTools = document.getElementById('openPhysicalTools');
   const albumList = document.getElementById('albumList');
-  const dialog = document.createElement('dialog');
-  dialog.id = 'physicalToolsDialog';
-  dialog.setAttribute('aria-labelledby', 'physicalToolsTitle');
-  dialog.innerHTML = `
+  const addDialog = document.getElementById('addDialog');
+  const catalogBody = document.getElementById('catalogBody');
+  const panel = document.createElement('section');
+  panel.id = 'physicalToolsPanel';
+  panel.className = 'physical-tools-panel';
+  panel.setAttribute('aria-labelledby', 'physicalToolsTitle');
+  panel.hidden = true;
+  panel.innerHTML = `
     <div class="dialog-heading">
-      <h2 id="physicalToolsTitle">Aggiungi CD o vinile</h2>
-      <button type="button" class="secondary" id="closePhysicalTools">Chiudi</button>
+      <h2 id="physicalToolsTitle">Aggiungi album non presente nei servizi</h2>
+      <button type="button" class="secondary" id="closePhysicalTools">Torna al catalogo</button>
     </div>
     <form id="physicalAddForm">
       <div class="physical-form-columns">
@@ -35,7 +39,7 @@ export function initializePhysicalCollection({ store, report, render }) {
     </details>
     <p id="physicalStatus" role="status" aria-live="polite"></p>
   `;
-  document.body.append(dialog);
+  addDialog.append(panel);
 
   const select = (id) => document.getElementById(id);
   const form = select('physicalAddForm'), inputFile = select('physicalImportCsv');
@@ -50,8 +54,8 @@ export function initializePhysicalCollection({ store, report, render }) {
 
   function updateBusy() {
     const locked = busy || importing;
-    dialog.setAttribute('aria-busy', String(locked));
-    dialog.querySelectorAll('input, button:not(#closePhysicalTools)').forEach((control) => {
+    panel.setAttribute('aria-busy', String(locked));
+    panel.querySelectorAll('input, button:not(#closePhysicalTools)').forEach((control) => {
       control.disabled = locked;
     });
     openTools.disabled = locked;
@@ -65,13 +69,25 @@ export function initializePhysicalCollection({ store, report, render }) {
     updateBusy();
   }
 
-  openTools.setAttribute('aria-controls', dialog.id);
-  openTools.setAttribute('aria-haspopup', 'dialog');
+  function showCatalog() {
+    panel.hidden = true;
+    catalogBody.hidden = false;
+    openTools.setAttribute('aria-expanded', 'false');
+  }
+
+  openTools.setAttribute('aria-controls', panel.id);
+  openTools.setAttribute('aria-expanded', 'false');
   openTools.addEventListener('click', () => {
     notice('');
-    dialog.showModal();
+    catalogBody.hidden = true;
+    panel.hidden = false;
+    openTools.setAttribute('aria-expanded', 'true');
+    form.elements.namedItem('artist').focus();
   });
-  select('closePhysicalTools').addEventListener('click', () => dialog.close());
+  select('closePhysicalTools').addEventListener('click', () => {
+    showCatalog();
+    openTools.focus();
+  });
 
   function decorateCard(card, album, flags) {
     let controls = card.querySelector('.physical-card-control');
@@ -200,7 +216,7 @@ export function initializePhysicalCollection({ store, report, render }) {
     try {
       if (file.size > 10_000_000) throw new Error('CSV troppo grande (massimo 10 MB).');
       const rows = parsePhysicalCsv(await file.text()).filter((row) => row.cd || row.vinyl);
-      if (!dialog.open || busy) return;
+      if (!addDialog.open || panel.hidden || busy) return;
       if (!rows.length) throw new Error('Il CSV non contiene CD o vinili contrassegnati.');
       if (!confirm(`Importare ${rows.length} righe nella raccolta?`)) return;
       store.addPhysical(rows);
@@ -214,5 +230,5 @@ export function initializePhysicalCollection({ store, report, render }) {
     }
   });
 
-  return { decorateCard, physicalCard, setBusy };
+  return { decorateCard, physicalCard, setBusy, showCatalog };
 }

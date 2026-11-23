@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { configureMusicAppLink, desktopAppLinks, nativeMusicLink, webMusicLink,
-  musicLinkTarget, MUSIC_LINK_TARGET_KEY, refreshMusicAppLinks } from "./music-app-links.mjs";
+  musicLinkTarget, MUSIC_LINK_TARGET_KEY, refreshMusicAppLinks, selectedMusicEdition } from "./music-app-links.mjs";
 import { setTidalAlbumLinkResolver } from "./music-app-links.mjs";
 import { musicAlbumLink } from "./tidal.mjs";
 
@@ -181,4 +181,21 @@ test("cross-catalogue albums require an explicit catalogue choice, never web sea
   assert.equal(musicAlbumLink(qobuz, "qobuz", { desktop: false }), null);
   assert.equal(musicAlbumLink(qobuz, "qobuz", { desktop: true }), "qobuzapp://album/00123");
   assert.equal(musicAlbumLink(qobuz, "spotify"), "spotify:search:Artist%20Album");
+});
+
+test("the selected provider opens only its native or explicitly associated edition", () => {
+  const source = { id: "A".repeat(22), artist: "Band", name: "Album",
+    url: `https://open.spotify.com/album/${"A".repeat(22)}` };
+  const saved = new Map(), storage = { getItem: key => saved.get(key) ?? null };
+  assert.equal(selectedMusicEdition(storage, source, "spotify"), source);
+  assert.equal(selectedMusicEdition(storage, source, "tidal"), null);
+  saved.set("accord-music-edition-links-v1", JSON.stringify({ [source.id]: {
+    tidal: { id: "tidal:123", name: "Album", source: JSON.stringify([source.id, source.artist, source.name]) },
+  } }));
+  assert.deepEqual(selectedMusicEdition(storage, source, "tidal"), {
+    id: "tidal:123", name: "Album", artist: "Band", url: "https://tidal.com/browse/album/123",
+  });
+  const native = { id: "tidal:456", url: "https://tidal.com/browse/album/456" };
+  assert.equal(selectedMusicEdition(storage, native, "tidal"), native);
+  assert.throws(() => selectedMusicEdition(storage, source, "unknown"), /Servizio musicale non valido/);
 });

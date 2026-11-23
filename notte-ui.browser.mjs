@@ -1,4 +1,4 @@
-import { installCommandIcons } from "./command-icons.mjs?v=1";
+import { installCommandIcons } from "./command-icons.mjs?v=2";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 
 export async function runNotteUIBrowserTests(document) {

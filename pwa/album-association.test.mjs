@@ -489,8 +489,8 @@ test("failed local persistence rolls back the complete batch", async () => {
 test("dialog defers writes until explicit apply and waits for an in-flight read when cancelled", async () => {
   const previous = globalThis.document;
   class Node {
-    constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.open = false; }
-    setAttribute() {}
+    constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.attributes = {}; this.open = false; }
+    setAttribute(name, value) { this.attributes[name] = value; }
     append(...nodes) { this.children.push(...nodes); }
     addEventListener(name, callback) { this.events[name] = callback; }
     showModal() { this.open = true; }
@@ -503,6 +503,8 @@ test("dialog defers writes until explicit apply and waits for an in-flight read 
     const dialog = openAssociationDialog({ albums: [source], links: {}, provider: "tidal",
       search: () => new Promise(resolve => { release = resolve; }), guard() {},
       save() { writes += 1; }, report() {}, closed() { closed += 1; } });
+    assert.equal(dialog.attributes["aria-label"], "Associa gli album della raccolta");
+    assert.match(dialog.children[1].textContent, /1 album dell'intera raccolta/);
     const [start, apply, cancel] = dialog.children.at(-1).children;
     const task = start.events.click();
     assert.equal(start.disabled, true); assert.equal(apply.disabled, true);

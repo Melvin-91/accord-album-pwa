@@ -6,17 +6,17 @@
   <meta name="theme-color" content="#15191e">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; frame-src https://embed.tidal.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord v1.40.0 · La mia raccolta</title>
+  <title>Accord v1.42.0 · La mia raccolta</title>
   <link rel="icon" href="../assets/malt_metal.ico">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="./collection.css?v=12">
-  <link rel="stylesheet" href="./physical-collection.css?v=2">
+  <link rel="stylesheet" href="./physical-collection.css?v=3">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <span class="orbit-monogram" aria-hidden="true">a.</span>
-      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.40.0</span></div>
+      <div><h1>accord</h1><span class="app-version" id="version">App attiva v1.42.0</span></div>
     </div>
     <span id="headerSyncState" class="sync-state">Solo sul dispositivo</span>
   </header>
@@ -62,7 +62,7 @@
   <dialog id="addDialog" aria-labelledby="addTitle">
     <div class="dialog-heading"><h2 id="addTitle">Aggiungi album</h2><button type="button" data-close="addDialog" aria-label="Chiudi aggiunta album">Chiudi</button></div>
     <div id="catalogBody" role="region" aria-label="Ricerca e risultati album" tabindex="0">
-      <button id="openPhysicalTools" class="secondary" type="button" data-command-icon="album">Aggiungi CD o vinile</button>
+      <button id="openPhysicalTools" class="secondary" type="button" data-command-icon="record">Aggiungi album non presente nei servizi</button>
       <form id="catalogForm">
         <label>Catalogo<select id="catalogService"><option value="spotify">Spotify</option><option value="tidal">TIDAL</option><option value="qobuz">Qobuz</option></select></label>
         <div class="catalog-criteria" aria-describedby="catalogSearchHelp">
@@ -115,6 +115,8 @@
         <p class="muted">Usa il token di sessione Qobuz, non la password.</p>
       </div>
       <div class="dialog-actions"><button id="connectService" type="button">Collega servizio</button><button id="disconnectService" type="button" class="secondary">Scollega</button></div>
+      <button id="checkAlbumLinks" type="button" class="secondary">Controlla collegamenti in tutta la raccolta</button>
+      <p class="muted">Cerca nel servizio selezionato. Collega solo una corrispondenza esatta e univoca dopo conferma; gli esiti dubbi restano da verificare.</p>
       <p class="muted">Gli accessi restano salvati in questo browser. Scollega il servizio sui dispositivi condivisi.</p>
     </section>
     <section>
@@ -143,6 +145,6 @@
   <dialog id="quickReviewDialog" aria-label="Revisione rapida degli album"></dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=33"></script>
+  <script type="module" src="./collection-app.mjs?v=36"></script>
 </body>
 </html>

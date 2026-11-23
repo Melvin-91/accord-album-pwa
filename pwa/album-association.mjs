@@ -1,6 +1,6 @@
 import { validEdition, sourceIdentity, editionLink } from "./music-continuity.mjs?v=13";
-import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=4";
-import { showEditionComparison } from "./edition-comparison.mjs?v=2";
+import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=6";
+import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { associationCaptions, libraryChoice, manuallyUnavailable, readLibraryChoices,
   writeLibraryChoice } from "./music-library-choices.mjs?v=2";
 
@@ -268,10 +268,11 @@ export function openAssociationDialog({ albums, links, provider, search, guard, 
   unavailableIds = [], observed = () => {} }) {
   const count = targetIds === null ? albums.length : albums.filter(album => targetIds.includes(album.id)).length;
   const dialog = document.createElement("dialog");
-  dialog.setAttribute("aria-label", "Associa gli album filtrati");
+  const scope = targetIds === null ? `${count} album dell'intera raccolta` : `${count} album nei filtri attivi`;
+  dialog.setAttribute("aria-label", targetIds === null ? "Associa gli album della raccolta" : "Associa gli album filtrati");
   const heading = document.createElement("h2"); heading.textContent = `Associa tutti a ${provider.toUpperCase()}`;
   const notice = document.createElement("p");
-  notice.textContent = `${count} album nei filtri attivi, su tutte le pagine. Solo letture del catalogo e collegamenti locali. `
+  notice.textContent = `${scope}, su tutte le pagine. Solo letture del catalogo e collegamenti locali. `
     + "Artista e titolo esatti, anno compatibile e una sola edizione. Associazioni esistenti, album, voti e preferiti non cambiano. "
     + "Gli esiti delle letture restano locali anche annullando. Dopo un errore le letture si fermano: gli album successivi non sono stati cercati.";
   const status = document.createElement("p"); status.setAttribute("role", "status");
