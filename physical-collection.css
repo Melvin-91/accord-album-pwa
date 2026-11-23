@@ -39,7 +39,11 @@
 .physical-check:has(input:disabled) { cursor: default; opacity: .65; }
 .physical-check input { margin: 0; }
 #openPhysicalTools { margin-bottom: 14px; }
-#physicalToolsDialog { width: min(520px, calc(100vw - 24px)); }
+#physicalToolsPanel { flex: 1 1 0%; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 22px 22px; border-top: 0; }
+#physicalToolsPanel .dialog-heading { align-items: center; }
+#physicalToolsPanel .dialog-heading button { flex-shrink: 0; }
+.catalog-physical-formats { margin: 4px 0 12px; }
+.catalog-physical-formats .physical-check { min-height: 38px; }
 .physical-form-columns {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -63,4 +67,5 @@
 #physicalStatus.error { color: #f5a0a0; }
 @media (max-width: 480px) {
   .physical-form-columns { grid-template-columns: 1fr; }
+  #physicalToolsPanel { padding: 0 16px 16px; }
 }

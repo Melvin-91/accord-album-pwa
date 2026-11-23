@@ -295,6 +295,86 @@ test("pending sync count deduplicates album and duration changes by album", () =
   store.remove([saved.id]);
   assert.equal(store.pendingChanges(), 2);
 });
+test("adding a catalog album saves physical formats atomically and duplicate detection does not write", () => {
+  const disk = local([]), store = createCollectionStore(disk);
+  const saved = album();
+  assert.equal(store.add(saved, { physical: { cd: true, vinyl: false } }), null);
+  assert.deepEqual(store.state.albums, [saved]);
+  assert.deepEqual(store.state.physical, [{ artist: saved.artist, title: saved.name, cd: true, vinyl: false }]);
+
+  const edition = album("tidal:42", { artist: "Björk", name: "Debut (Deluxe Edition)" });
+  const before = store.state;
+  const found = store.add(edition, { physical: { cd: false, vinyl: true } });
+  assert.equal(found.album.id, saved.id);
+  assert.equal(store.state, before);
+  assert.equal(store.state.albums.length, 1);
+  assert.equal(store.state.albums[0].year, saved.year);
+  assert.deepEqual(store.state.physical, [{ artist: saved.artist, title: saved.name, cd: true, vinyl: false }]);
+});
+test("explicitly keeping a verified duplicate records formats on the existing album identity", () => {
+  const saved = album(), candidate = album(saved.id, { name: "Debut (Deluxe Edition)" });
+  const store = createCollectionStore(local([saved])), before = store.state;
+  const found = store.duplicate(candidate);
+  assert.equal(found.confidence, "verified");
+  assert.equal(found.album.name, saved.name);
+  assert.equal(store.add(candidate, { physical: { cd: true, vinyl: true } }).album.id, saved.id);
+  assert.equal(store.state, before);
+  assert.deepEqual(store.state.physical, []);
+
+  store.addPhysical([{ artist: found.album.artist, title: found.album.name, cd: true, vinyl: true }]);
+  assert.deepEqual(store.state.physical, [
+    { artist: saved.artist, title: saved.name, cd: true, vinyl: true },
+  ]);
+});
+test("uncertain duplicate cancellation leaves formats unchanged; confirming a distinct edition applies them", () => {
+  const saved = album(), candidate = album("tidal:42", { year: "2011" });
+  const store = createCollectionStore(local([saved])), before = store.state;
+  assert.equal(store.duplicate(candidate).confidence, "uncertain");
+  assert.equal(store.add(candidate, { physical: { cd: true, vinyl: false } }).confidence, "uncertain");
+  assert.equal(store.state, before);
+  assert.deepEqual(store.state.physical, []);
+
+  assert.equal(store.add(candidate, { distinct: true, physical: { cd: true, vinyl: false } }), null);
+  assert.equal(store.state.albums.length, 2);
+  assert.deepEqual(store.state.physical, [{ artist: candidate.artist, title: candidate.name, cd: true, vinyl: false }]);
+});
+test("confirmed replacement applies physical formats only to the replacement", () => {
+  const saved = album(), replacement = album("tidal:42", { name: "Debut (Deluxe Edition)" });
+  const store = createCollectionStore(local([saved]));
+  assert.equal(store.add(replacement, { replaceId: saved.id, physical: { cd: false, vinyl: true } }), null);
+  assert.deepEqual(store.state.albums, [replacement]);
+  assert.deepEqual(store.state.pendingRemovals, [saved]);
+  assert.deepEqual(store.state.physical, [{ artist: replacement.artist, title: replacement.name, cd: false, vinyl: true }]);
+});
+test("catalog duplicate comparison gates format writes on explicit resolution", () => {
+  const app = readFileSync(new URL("collection-app.mjs", import.meta.url), "utf8");
+  const start = app.indexOf("async function compareCandidate("), end = app.indexOf("\nfunction showDuplicates", start);
+  assert.ok(start >= 0 && end > start);
+  const compare = app.slice(start, end);
+  const decision = compare.indexOf('const answer = await choice("Confronta prima di aggiungere"');
+  const keepGate = compare.indexOf('actions.push(["keep", keepLabel])');
+  const keepWrite = compare.indexOf("store.addPhysical([{ artist: found.album.artist");
+  const cancelGate = compare.indexOf('actions.push(["cancel", "Annulla senza modifiche"])');
+  const coverWrite = compare.indexOf("await cacheCatalogCover(found.album.id, candidate.id)");
+  const replaceGate = compare.indexOf('if (confirmed === "replace")');
+  const replaceWrite = compare.indexOf("store.add(candidate, { replaceId: found.album.id, physical })");
+  const distinctGate = compare.indexOf('else if (answer === "distinct")');
+  const distinctWrite = compare.indexOf("store.add(candidate, { distinct: true, physical })");
+  assert.ok(decision >= 0 && keepGate >= 0 && keepGate < decision && decision < keepWrite && decision < coverWrite);
+  assert.ok(cancelGate >= 0 && cancelGate < decision);
+  assert.match(compare, /if \(found\.confidence !== "uncertain"\)/);
+  assert.ok(decision < replaceGate && replaceGate < replaceWrite);
+  assert.ok(distinctGate > decision && distinctGate < distinctWrite);
+  assert.match(compare, /Confronto annullato senza modifiche: i formati selezionati non sono stati registrati/);
+});
+test("failed combined album and physical-format persistence leaves both unchanged", () => {
+  const disk = local([]), store = createCollectionStore(disk), before = store.state;
+  disk.setItem = () => { throw new Error("Quota exceeded"); };
+  assert.throws(() => store.add(album(), { physical: { cd: true, vinyl: false } }), /Quota/);
+  assert.equal(store.state, before);
+  assert.deepEqual(store.state.albums, []);
+  assert.deepEqual(store.state.physical, []);
+});
 test("durations synchronize across devices and include legacy queue values", async () => {
   const saved = album(), disk = local([saved]), first = createCollectionStore(disk), remote = github([saved]);
   disk.setItem("accord-listening-queue-v1", JSON.stringify({ durations: { [saved.id]: 123000 } }));
@@ -1064,6 +1144,20 @@ test("TIDAL collection search resolves the official search identifier and return
   assert.equal(f.calls[2].url.searchParams.get("include"), "albums.artists,albums.coverArt");
   assert.equal(f.calls[2].url.searchParams.get("countryCode"), "IT");
 });
+test("catalog completeness is exposed for association checks without changing the existing search result shape", async () => {
+  const complete = tidalSearchFixture();
+  assert.ok(Array.isArray(await complete.services.search("Search Album")));
+  const page = await tidalSearchFixture().services.search("Search Album", { withCompleteness: true });
+  assert.equal(page.albums[0].id, "tidal:12");
+  assert.equal(page.complete, true);
+
+  const partial = tidalSearchFixture(({ url }, document) => url.pathname.endsWith("/relationships/albums")
+    ? reply({ ...document, links: { next: "https://openapi.tidal.com/v2/searchResults/opaque-result/relationships/albums?cursor=more" } })
+    : null);
+  const incomplete = await partial.services.search("Search Album", { withCompleteness: true });
+  assert.equal(incomplete.albums[0].id, "tidal:12");
+  assert.equal(incomplete.complete, false);
+});
 test("TIDAL uses exact lookup only for the reference field, not a numeric title", async () => {
   const f = tidalSearchFixture();
   await assert.rejects(f.services.search("https://example.test/album/12", { reference: true }), /non valido/i);
@@ -1165,11 +1259,14 @@ test("Spotify and Qobuz collection search retain approved catalog cover URLs", a
       return reply({ albums: { items: [{ id: spotifyId, name: "Search Album", album_type: "album",
         artists: [{ name: "Test Artist" }], release_date: "2020-01-01",
         external_urls: { spotify: `https://open.spotify.com/album/${spotifyId}` },
-        images: [{ url: "https://i.scdn.co/image/cover", width: 640 }] }] } });
+        images: [{ url: "https://i.scdn.co/image/cover", width: 640 }] }], total: 1, next: null } });
     } });
   const spotifyAlbums = await spotify.search("Test Artist Search Album",
     { criteria: { artist: "Test Artist", title: "Search Album" } });
   assert.equal(spotify.coverUrl(spotifyAlbums[0]), "https://i.scdn.co/image/cover");
+  assert.equal((await spotify.search("Test Artist Search Album", {
+    criteria: { artist: "Test Artist", title: "Search Album" }, withCompleteness: true,
+  })).complete, true);
 
   const qobuzDisk = storage({ "accord-music-service-v1": "qobuz",
     "accord-qobuz-session-v1": JSON.stringify({ appId: "qobuz-app", token: "qobuz-token" }) });
@@ -1182,6 +1279,7 @@ test("Spotify and Qobuz collection search retain approved catalog cover URLs", a
     } });
   const qobuzAlbums = await qobuz.search("Search Album");
   assert.equal(qobuz.coverUrl(qobuzAlbums[0]), "https://static.qobuz.com/images/cover.jpg");
+  assert.equal((await qobuz.search("Search Album", { withCompleteness: true })).complete, true);
 });
 test("TIDAL search authentication failures stop without extra calls or collection changes", async () => {
   const f = tidalSearchFixture(() => reply({}, 401));
@@ -1344,26 +1442,32 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=33/);
+  assert.match(html, /collection-app\.mjs\?v=36/);
   assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=12">/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=2">/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=3">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.40\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.42\.0/);
+  assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
+  assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
+  assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference", "formatFilter", "openPhysicalTools"]) {
     assert.ok(html.includes(`id="${id}"`));
   }
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
-  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "service-requests.mjs",
+  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "album-association.mjs", "music-library-choices.mjs", "service-requests.mjs",
     "collection-qol.mjs", "unified-library.mjs", "physical-collection-ui.mjs", "physical-collection.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
   }
   assert.doesNotMatch(sw, /tidal-ui\.mjs|playlist-ui\.mjs|suggestions-ui\.mjs|music-completion-ui\.mjs/);
+  assert.match(html, /id="checkAlbumLinks"/);
+  assert.match(app, /openAssociationDialog\(\{[\s\S]*?albums: store\.state\.albums, links, provider/);
+  assert.match(app, /withCompleteness: true/);
 });
 test("lazy cover images stay observable until their image has loaded", () => {
   const app = readFileSync(new URL("collection-app.mjs", import.meta.url), "utf8");

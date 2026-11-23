@@ -205,3 +205,8 @@ export function webMusicLink(value) {
   }
   throw new Error("Collegamento musicale non valido.");
 }
+
+export function selectedMusicEdition(storage, album, provider) {
+  if (!["spotify", "tidal", "qobuz"].includes(provider)) throw new Error("Servizio musicale non valido.");
+  return validEdition(provider, album.id) ? album : editionLink(storage, album, provider);
+}

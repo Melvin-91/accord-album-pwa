@@ -6,6 +6,7 @@ import { runInNewContext } from "node:vm";
 import { tidalAlbumId } from "./tidal.mjs";
 import { fingerprint } from "./music-continuity.mjs";
 import { createUpdateLifecycle, localCollectionStatus, serviceFailure } from "./runtime-status.mjs";
+import { commandIconName } from "./command-icons.mjs?v=3";
 import {
   buildSimilarityQueue,
   resolveArtistFromTracks,
@@ -1816,6 +1817,37 @@ test("PWA release version matches the title, visible badge and offline cache", (
   assert.ok(sw.includes(`const CACHE = "accord-album-pwa-v${version}";`));
 });
 
+test("command icons distinguish options by action while sharing icons for related actions", () => {
+  const cases = [
+    ["Raccolta", "album"],
+    ["Aggiungi album", "plus"],
+    ["Aggiungi album non presente nei servizi", "record"],
+    ["Aggiorna PWA", "download"],
+    ["Sincronizza", "sync"],
+    ["Riprova solo i falliti", "retry"],
+    ["Collega servizio", "link"],
+    ["Scollega servizio", "unlink"],
+    ["Rimuovi preferito", "heart"],
+    ["Voto 4", "star"],
+    ["Cerca duplicati", "compare"],
+    ["Unisci copie", "merge"],
+    ["Rivedi anomalie dei metadati", "warning"],
+    ["Correzioni suggerite", "wand"],
+    ["Usa per suggerimenti", "choose"],
+    ["Rimanda album", "calendar"],
+    ["Riproduci selezionati", "play"],
+    ["Elenca le mie playlist", "playlist"],
+    ["Salta", "skip"],
+    ["Interrompi durate", "stop"],
+  ];
+  for (const [label, expected] of cases) assert.equal(commandIconName(label), expected, label);
+  assert.equal(new Set(cases.map(([, icon]) => icon)).size, cases.length,
+    "Distinct actions should use distinct icons");
+  assert.equal(commandIconName("Controlla collegamenti in tutta la raccolta"), "link");
+  assert.equal(commandIconName("Rimuovi collegamento"), "unlink");
+  assert.equal(commandIconName("Rimuovi rinvio"), "calendar");
+});
+
 test("installable shell links resolve locally and are present in the offline cache", () => {
   const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
   const app = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
@@ -1899,14 +1931,15 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=33", "collection.css?v=12", "physical-collection.css?v=2"]) {
+  for (const file of ["collection-app.mjs?v=36", "collection.css?v=12", "physical-collection.css?v=3"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
-  for (const file of ["core.mjs?v=54", "collection-store.mjs?v=11", "collection-sync.mjs?v=10",
-    "music-app-links.mjs?v=5", "collection-services.mjs?v=19", "music-suggestion-filters.mjs?v=4",
-    "command-icons.mjs?v=1", "ui.mjs?v=25", "tidal-preview.mjs?v=1", "collection-qol.mjs?v=6",
-    "physical-collection-ui.mjs?v=2"]) {
+  for (const file of ["core.mjs?v=54", "collection-store.mjs?v=12", "collection-sync.mjs?v=10",
+    "music-app-links.mjs?v=6", "album-association.mjs?v=14", "music-library-choices.mjs?v=2",
+    "collection-services.mjs?v=20", "music-suggestion-filters.mjs?v=4",
+    "command-icons.mjs?v=3", "ui.mjs?v=25", "tidal-preview.mjs?v=1", "collection-qol.mjs?v=6",
+    "physical-collection-ui.mjs?v=3"]) {
     assert.ok(active.includes(file));
     assert.ok(sw.includes(file));
   }

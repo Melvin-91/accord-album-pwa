@@ -1,13 +1,15 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=11";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=12";
 import { createCollectionSync } from "./collection-sync.mjs?v=10";
-import { configureMusicAppLink, openAssociatedEditionDialog, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=5";
+import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=6";
+import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=14";
+import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
-import { installCommandIcons } from "./command-icons.mjs?v=1";
+import { installCommandIcons } from "./command-icons.mjs?v=3";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
-import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=2";
+import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=3";
 import { PHYSICAL_KEY } from "./physical-collection.mjs?v=2";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   collectionRows, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=6";
@@ -20,6 +22,9 @@ const states = { queued: "Da ascoltare", listening: "In ascolto",
   liked: "Mi piace", neutral: "Neutro", disliked: "Non mi piace" };
 const providerName = (album) => album.id.startsWith("tidal:") ? "TIDAL" : album.id.startsWith("qobuz:") ? "Qobuz" : "Spotify";
 const musicServiceName = (provider) => ({ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" })[provider] || "non noto";
+const musicService = () => ["spotify", "tidal", "qobuz"].includes(localStorage.getItem("accord-music-service-v1"))
+  ? localStorage.getItem("accord-music-service-v1") : "spotify";
+const EDITION_LINKS_KEY = "accord-music-edition-links-v1";
 const DURATION_FAILURES_KEY = "accord-duration-retry-failures-v1";
 const node = (tag, text = "", attributes = {}) => {
   const value = document.createElement(tag); value.textContent = text;
@@ -90,7 +95,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=19")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=20")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -302,11 +307,17 @@ async function cacheCatalogCover(albumId, sourceId = albumId) {
   catch (error) { return error.message; }
   return "";
 }
-async function compareCandidate(candidate, found) {
-  const coverError = found.confidence !== "uncertain" ? await cacheCatalogCover(found.album.id, candidate.id) : "";
+async function compareCandidate(candidate, found, physical = null) {
+  const hasPhysical = Boolean(physical?.cd || physical?.vinyl);
   const expected = store.state, row = node("div", "", { class: "comparison-grid" });
   row.append(comparison(found.album, (expected.preferences.favoriteIds || []).includes(found.album.id)), comparison(candidate));
-  const actions = [["cancel", "Mantieni la copia in raccolta"]];
+  const actions = [];
+  if (found.confidence !== "uncertain") {
+    const formats = [physical?.cd && "CD", physical?.vinyl && "Vinile"].filter(Boolean).join(" e ");
+    const keepLabel = hasPhysical ? `Mantieni la copia e registra ${formats}` : "Mantieni la copia in raccolta";
+    actions.push(["keep", keepLabel]);
+  }
+  actions.push(["cancel", "Annulla senza modifiche"]);
   if (candidate.id !== found.album.id) actions.push(["replace", "Mantieni la nuova copia"]);
   if (found.confidence === "uncertain" && candidate.id !== found.album.id) actions.push(["distinct", "Sono album diversi: aggiungi"]);
   const answer = await choice("Confronta prima di aggiungere", [
@@ -317,26 +328,33 @@ async function compareCandidate(candidate, found) {
     row,
   ], actions);
   if (store.state !== expected) throw new Error("Raccolta cambiata: riapri il confronto.");
-  if (answer === "replace") {
+  if (answer === "keep") {
+    if (hasPhysical) store.addPhysical([{ artist: found.album.artist, title: found.album.name,
+      cd: physical.cd, vinyl: physical.vinyl }]);
+    const coverError = await cacheCatalogCover(found.album.id, candidate.id);
+    report(coverError ? `${hasPhysical ? "Possesso salvato" : "Copia mantenuta"}, ma copertina non memorizzata: ${coverError}`
+      : hasPhysical ? "Possesso fisico salvato sulla copia in raccolta." : "Copia mantenuta in raccolta.",
+    Boolean(coverError));
+  } else if (answer === "replace") {
     const confirmed = await choice("Sostituisci copia", [node("p",
       "Voti e note della vecchia copia non verranno trasferiti. La rimozione sara' sincronizzata.")],
     [["cancel", "Annulla"], ["replace", "Sostituisci"]]);
     if (confirmed === "replace") {
-      store.add(candidate, { replaceId: found.album.id });
+      store.add(candidate, { replaceId: found.album.id, physical });
       fetchAddedDuration(candidate);
       const saveError = await cacheCatalogCover(candidate.id);
       report(saveError ? `Copia sostituita, ma copertina non salvata: ${saveError}`
         : "Copia sostituita. Sincronizza per aggiornare gli altri dispositivi.", Boolean(saveError));
-    }
+    } else if (hasPhysical) report("Sostituzione annullata: i formati selezionati non sono stati registrati.");
   } else if (answer === "distinct") {
-    const duplicate = store.add(candidate, { distinct: true });
+    const duplicate = store.add(candidate, { distinct: true, physical });
     if (duplicate) throw new Error("Lo stesso identificativo non puo' essere aggiunto due volte.");
     fetchAddedDuration(candidate);
     const saveError = await cacheCatalogCover(candidate.id);
     report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
       : "Album aggiunto come copia distinta.", Boolean(saveError));
-  } else if (coverError) {
-    report(`Album gia' presente; copertina non memorizzata: ${coverError}`, true);
+  } else if (answer === "cancel" && hasPhysical) {
+    report("Confronto annullato senza modifiche: i formati selezionati non sono stati registrati.");
   }
   renderResults();
 }
@@ -404,7 +422,7 @@ function albumCard(album, favorite, duration) {
   const image = node("img", "", { alt: `Copertina di ${album.name}`, loading: "lazy", width: "240", height: "240",
     referrerpolicy: "no-referrer", "data-id": album.id, "data-hash": album.cover_sha256 || "" });
   artwork.append(image); queueMicrotask(() => coverObserver.observe(image));
-  const favoriteButton = node("button", "", { type: "button", "data-command-icon": "star",
+  const favoriteButton = node("button", "", { type: "button", "data-command-icon": "heart",
     class: "favorite", "aria-pressed": String(favorite), "aria-label": `Preferito: ${album.name}`,
     title: favorite ? "Rimuovi dai preferiti" : "Aggiungi ai preferiti" });
   favoriteButton.dataset.control = "favorite";
@@ -438,10 +456,17 @@ function albumCard(album, favorite, duration) {
   rating.value = album.rating === null ? "" : String(album.rating); ratingLabel.append(rating);
   rating.addEventListener("change", () => mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null })));
   controls.append(statusLabel, ratingLabel); options.append(controls);
-  const footer = node("div", "", { class: "card-actions" }), open = node("a", "Apri", {
-    rel: "noopener noreferrer", "aria-label": `Apri album: ${album.name}` });
-  configureMusicAppLink(open, album.url, { storage: localStorage,
+  const footer = node("div", "", { class: "card-actions" }), target = musicService();
+  let playback = null;
+  try { playback = selectedMusicEdition(localStorage, album, target); }
+  catch (error) { report(error.message, true); }
+  const open = node(playback ? "a" : "button", playback ? `Apri in ${musicServiceName(target)}` : `Nessun link ${musicServiceName(target)}`, {
+    ...(playback ? { rel: "noopener noreferrer" } : { type: "button", class: "secondary" }),
+    "aria-label": `${playback ? "Apri" : "Associa"} album ${album.name} su ${musicServiceName(target)}` });
+  if (playback) configureMusicAppLink(open, playback.url, { storage: localStorage,
     query: `${album.artist} ${album.name}`, report: (message) => report(message) });
+  else open.addEventListener("click", () => report(
+    `Nessuna edizione collegata a ${musicServiceName(target)}. Usa “Controlla collegamenti” nelle impostazioni; Spotify non viene aperto come ripiego.`));
   const remove = node("button", "Rimuovi", { type: "button", "data-control": "remove", class: "secondary" });
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
   const management = node("div", "", { class: "dialog-actions" });
@@ -502,7 +527,8 @@ function render() {
   const active = document.activeElement, activeId = active?.closest(".album-card")?.dataset.id, control = active?.dataset.control;
   const wanted = filtered.slice(0, visibleLimit).map(({ id, album, physical }) => {
     const signature = JSON.stringify(album
-      ? [album, favorites.has(id), durations[id], localStorage.getItem(MUSIC_LINK_TARGET_KEY)]
+      ? [album, favorites.has(id), durations[id], localStorage.getItem(MUSIC_LINK_TARGET_KEY),
+        localStorage.getItem("accord-music-service-v1"), localStorage.getItem(EDITION_LINKS_KEY)]
       : [physical.artist, physical.title]);
     const old = cards.get(id);
     if (!old || old.signature !== signature) {
@@ -570,28 +596,47 @@ function renderResults() {
       $("compareCatalogEditions").hidden = comparedEditions.size < 2;
     });
     compareLabel.append(compare, document.createTextNode("Confronta edizione")); row.append(compareLabel);
+    const physical = {};
+    const physicalOptions = node("fieldset", "", { class: "physical-formats catalog-physical-formats" });
+    physicalOptions.append(node("legend", "Possiedo anche"));
+    for (const [format, labelText] of [["cd", "CD"], ["vinyl", "Vinile"]]) {
+      const label = node("label", "", { class: "physical-check" });
+      physical[format] = node("input", "", { type: "checkbox",
+        "aria-label": `Possiedo ${labelText}: ${album.name} di ${album.artist}` });
+      label.append(physical[format], document.createTextNode(` ${labelText}`));
+      physicalOptions.append(label);
+    }
+    row.append(physicalOptions);
     const duplicate = store.duplicate(album), button = node("button", duplicate ? "Gia' presente: confronta" : "Aggiungi", { type: "button" });
     button.addEventListener("click", () => run(async () => {
+      const formats = { cd: physical.cd.checked, vinyl: physical.vinyl.checked };
+      const hasPhysical = formats.cd || formats.vinyl;
+      const addWithFormats = () => store.add(album, { physical: formats });
       const current = store.duplicate(album);
-      if (current) { await compareCandidate(album, current); return; }
+      if (current) { await compareCandidate(album, current, formats); return; }
       const remote = await sync.checkAddition(album);
       if (remote) {
-        const saveError = await cacheCatalogCover(remote.album.id, album.id);
         const answer = await choice("Album gia' presente", [
-          comparison(remote.album), node("p", saveError
-            ? `Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente. La copertina non e' stata memorizzata: ${saveError}`
-            : "Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente.")],
+          comparison(remote.album), node("p",
+            "Non e' stata aggiunta un'altra copia. Sincronizza per caricare quella esistente.")],
         [["cancel", "Chiudi"], ["sync", "Sincronizza"]]);
-        if (answer === "sync") await performSync();
+        if (answer === "sync") {
+          await performSync();
+          const current = store.duplicate(album);
+          if (current) await compareCandidate(album, current, formats);
+        }
         return;
       }
-      const found = store.add(album);
-      if (found) await compareCandidate(album, found);
+      const found = addWithFormats();
+      if (found) await compareCandidate(album, found, formats);
       else {
         fetchAddedDuration(album);
         const saveError = await cacheCatalogCover(album.id);
-        report(saveError ? `Album aggiunto, ma copertina non salvata: ${saveError}`
-          : "Album aggiunto. Sincronizza per condividerlo.", Boolean(saveError));
+        const formatsText = hasPhysical ? ` Possesso registrato: ${[
+          formats.cd ? "CD" : "", formats.vinyl ? "Vinile" : "",
+        ].filter(Boolean).join(" e ")}.` : "";
+        report(saveError ? `Album aggiunto.${formatsText} Copertina non salvata: ${saveError}`
+          : `Album aggiunto.${formatsText} Sincronizza per condividerlo.`, Boolean(saveError));
       }
       renderResults();
     }));
@@ -801,6 +846,7 @@ async function serviceSettings() {
   const client = await services(), provider = $("settingsService").value;
   client.select(provider); $("catalogService").value = provider; generation += 1;
   resultAlbums = []; renderResults();
+  render();
   refreshCatalogSearches();
   document.querySelectorAll("[data-service]").forEach((field) => { field.hidden = field.dataset.service !== provider; });
   const settings = client.settings(provider);
@@ -811,6 +857,62 @@ async function serviceSettings() {
   $("clientId").value = settings.clientId || "";
   $("redirectUri").value = settings.redirectUri || "";
   $("redirectField").hidden = provider !== "spotify"; $("clientField").hidden = provider === "qobuz";
+}
+let collectionAssociationOpen = false;
+async function checkCollectionAssociations() {
+  if (collectionAssociationOpen) return;
+  const client = await services(), provider = $("settingsService").value;
+  client.select(provider);
+  const linksSnapshot = localStorage.getItem(EDITION_LINKS_KEY), links = JSON.parse(linksSnapshot || "{}");
+  let choicesSnapshot = localStorage.getItem(LIBRARY_CHOICES_KEY);
+  const choices = readLibraryChoices(localStorage);
+  const guard = () => {
+    store.assertCurrent();
+    if (client.provider !== provider) throw new Error("Servizio musicale cambiato: ripeti il controllo.");
+    if (localStorage.getItem(EDITION_LINKS_KEY) !== linksSnapshot
+        || localStorage.getItem(LIBRARY_CHOICES_KEY) !== choicesSnapshot) {
+      throw new Error("Collegamenti o scelte locali cambiati: ripeti il controllo.");
+    }
+  };
+  collectionAssociationOpen = true;
+  try {
+    openAssociationDialog({
+      albums: store.state.albums, links, provider,
+      unavailableIds: store.state.albums.filter(album => manuallyUnavailable(choices, album, provider)).map(album => album.id),
+      observed: plan => {
+        guard();
+        let updated = readLibraryChoices(localStorage);
+        for (const row of plan.rows) if (!["native", "linked", "unavailable"].includes(row.state)) {
+          updated = changeLibraryChoice(updated, row.album, { provider, state: row.state });
+        }
+        localStorage.setItem(LIBRARY_CHOICES_KEY, JSON.stringify(updated));
+        choicesSnapshot = localStorage.getItem(LIBRARY_CHOICES_KEY);
+      },
+      search: async album => {
+        guard();
+        const query = `${album.artist} ${album.name}`;
+        if (query.length > 100) return { albums: [], complete: false };
+        const options = { withCompleteness: true };
+        if (provider === "spotify") options.criteria = { artist: album.artist, title: album.name };
+        const page = await client.search(query, options);
+        guard();
+        return page;
+      },
+      save: plan => {
+        guard();
+        const currentLinks = JSON.parse(localStorage.getItem(EDITION_LINKS_KEY) || "{}");
+        const updated = associationUpdates(plan, store.state.albums, currentLinks);
+        localStorage.setItem(EDITION_LINKS_KEY, JSON.stringify(updated));
+        render();
+        report(`${plan.rows.filter(row => row.state === "found").length} album collegati a ${musicServiceName(provider)} su questo dispositivo.`);
+      },
+      report,
+      closed: () => { collectionAssociationOpen = false; },
+    });
+  } catch (error) {
+    collectionAssociationOpen = false;
+    throw error;
+  }
 }
 try {
   store = createCollectionStore(localStorage);
@@ -887,8 +989,9 @@ $("openAdd").addEventListener("click", async () => {
   const client = await services(); $("catalogService").value = client.provider;
   refreshCatalogSearches();
   $("catalogStatus").textContent = "Scegli un catalogo e premi Cerca quando hai compilato i campi.";
-    $("addDialog").showModal();
-    $("catalogBody").scrollTop = 0;
+  physicalCollection.showCatalog();
+  $("addDialog").showModal();
+  $("catalogBody").scrollTop = 0;
   });
   if ($("addDialog").open && !busy) $("catalogArtist").focus();
 });
@@ -1021,6 +1124,7 @@ $("openSettings").addEventListener("click", () => run(async () => {
   await serviceSettings(); $("settingsDialog").showModal();
 }));
 $("settingsService").addEventListener("change", () => run(serviceSettings));
+$("checkAlbumLinks").addEventListener("click", () => run(checkCollectionAssociations));
 $("githubForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const saved = mutate(() => {
@@ -1052,8 +1156,8 @@ $("linkTarget").addEventListener("change", () => {
 });
 document.querySelectorAll("[data-close]").forEach((button) => button.addEventListener("click", () => $(button.dataset.close).close()));
 window.addEventListener("storage", (event) => {
-  if ([MUSIC_LINK_TARGET_KEY, "accord-listening-album-durations-v1", "accord-listening-queue-v1",
-    "accord-music-edition-links-v1"].includes(event.key)) render();
+  if ([MUSIC_LINK_TARGET_KEY, "accord-music-service-v1", EDITION_LINKS_KEY,
+    "accord-listening-album-durations-v1", "accord-listening-queue-v1"].includes(event.key)) render();
   if (event.key === null || event.key === "accord-album-pwa-v1" || event.key === PHYSICAL_KEY) {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }

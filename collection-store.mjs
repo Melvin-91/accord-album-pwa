@@ -249,13 +249,26 @@ export function createCollectionStore(storage) {
           at: new Date().toISOString() }] });
       return proposal;
     },
-    add(candidate, { replaceId = null, distinct = false } = {}) {
+    add(candidate, { replaceId = null, distinct = false, physical = null } = {}) {
       assertCurrent();
       const record = validateAlbum(candidate), found = findCollectionAlbum(state.albums, record, links());
+      if (physical !== null && (!physical || typeof physical !== "object" || Array.isArray(physical)
+          || Object.keys(physical).some((key) => !["cd", "vinyl"].includes(key))
+          || typeof physical.cd !== "boolean" || typeof physical.vinyl !== "boolean")) {
+        throw new Error("Formati posseduti non validi.");
+      }
+      const withPhysical = (records) => {
+        if (!physical || (!physical.cd && !physical.vinyl)) return records;
+        const next = addPhysicalRecords(records, [{ artist: record.artist, title: record.name,
+          cd: physical.cd, vinyl: physical.vinyl }]);
+        if (JSON.stringify(next) === JSON.stringify(records)) return records;
+        assertPhysicalEditable();
+        return next;
+      };
       if (found && (!distinct || found.album.id === record.id) && found.album.id !== replaceId) return found;
       let next = replaceId ? removeFrom(state, [replaceId]) : state;
       if (next.albums.some((album) => album.id === record.id)) throw new Error("Questo identificativo e' gia' presente.");
-      next = { ...next, albums: [...next.albums, record],
+      next = { ...next, albums: [...next.albums, record], physical: withPhysical(next.physical),
         pendingRemovals: next.pendingRemovals.filter((album) => album.id !== record.id),
         restoredAlbumIds: [...new Set([...(next.restoredAlbumIds || []),
           ...next.deletedAlbums.filter((album) => album.id === record.id).map((album) => album.id)])] };
