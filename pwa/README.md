@@ -2,6 +2,21 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.40.0 · Raccolta unica
+
+La **Raccolta** mostra anche gli album posseduti soltanto su CD o vinile.
+Artista e titolo collegano i formati alle schede già presenti. Usa **Supporto**
+in **Filtri** per selezionare CD, Vinile, entrambi o nessun supporto e combina
+la scelta con ricerca, genere, stato o preferiti. Per inserire un disco
+manualmente o importare un CSV, apri **Aggiungi album → Aggiungi CD o vinile**.
+
+**Sincronizza** riunisce album, durate e supporti in `library.json` nel
+repository privato `accord-music-data`. La prima sincronizzazione propone
+la migrazione dagli archivi precedenti, che restano disponibili per il
+recupero. Le copertine continuano a usare `covers.bin`. I preferiti
+rimangono una preferenza del dispositivo. Per sincronizzare la stessa
+raccolta dal desktop serve una versione compatibile con `library.json`.
+
 ### PWA 1.39.0 · Archivio CD e vinili e filtro per genere
 
 Nella raccolta musicale il filtro **Genere** include tutti i generi salvati,

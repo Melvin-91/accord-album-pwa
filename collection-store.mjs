@@ -1,10 +1,13 @@
 import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumIdentity } from "./core.mjs?v=54";
 import { catalogTarget } from "./music-completion.mjs?v=7";
+import { addPhysicalRecords, createPhysicalStore, PHYSICAL_KEY, physicalKey,
+  setPhysicalRecordFormat, validatePhysicalRecords } from "./physical-collection.mjs?v=2";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
 const DURATIONS_KEY = "accord-listening-album-durations-v1";
 const QUEUE_KEY = "accord-listening-queue-v1";
 const PROVENANCE_KEY = "accord-music-completion-provenance-v1";
+const PENDING_LIBRARY_KEY = "accord-library-sync-pending-v1";
 const albums = (records) => validateDocument({ format: "accord-album-collection", version: 4, albums: records });
 
 export function duplicateCollectionGroups(records, links = {}) {
@@ -62,9 +65,16 @@ export function createCollectionStore(storage) {
   let serialized = storage.getItem(COLLECTION_KEY);
   const raw = serialized === null ? {} : JSON.parse(serialized);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Raccolta locale non leggibile. Nessun dato sovrascritto.");
+  const legacySnapshot = raw.physical === undefined ? storage.getItem(PHYSICAL_KEY) : undefined;
+  const legacy = raw.physical === undefined ? createPhysicalStore(storage).state : null;
   let state = { ...raw, albums: albums(raw.albums === undefined ? [] : raw.albums), base: albums(raw.base === undefined ? [] : raw.base),
     pendingRemovals: albums(raw.pendingRemovals === undefined ? [] : raw.pendingRemovals),
     deletedAlbums: albums(raw.deletedAlbums === undefined ? [] : raw.deletedAlbums),
+    physical: legacy ? legacy.records : validatePhysicalRecords(raw.physical),
+    physicalBase: legacy ? legacy.base : validatePhysicalRecords(raw.physicalBase === undefined ? [] : raw.physicalBase),
+    physicalOwner: legacy ? legacy.owner : raw.physicalOwner || "",
+    physicalSha: legacy ? legacy.sha : raw.physicalSha || null,
+    libraryOwner: raw.libraryOwner || "",
     syncOwner: raw.syncOwner || storage.getItem("accord-album-owner") || null,
     preferences: raw.preferences === undefined ? JSON.parse(storage.getItem("accord-collection-ui-v1") || "{}") : raw.preferences };
   if (!state.preferences || typeof state.preferences !== "object" || Array.isArray(state.preferences)) {
@@ -86,6 +96,19 @@ export function createCollectionStore(storage) {
   }
   function assertCurrent() {
     if (storage.getItem(COLLECTION_KEY) !== serialized) throw new Error("Raccolta cambiata in un'altra scheda. Ricarica prima di continuare.");
+    if (legacySnapshot !== undefined && storage.getItem(PHYSICAL_KEY) !== legacySnapshot) {
+      throw new Error("I supporti sono cambiati nell’archivio precedente. Ricarica Accord prima di continuare.");
+    }
+  }
+  function assertPhysicalEditable() {
+    if (storage.getItem("accord-physical-sync-pending-v1") !== null) {
+      throw new Error("Apri Sincronizza per verificare l’ultimo invio dei supporti.");
+    }
+  }
+  function assertLibraryEditable() {
+    if (storage.getItem(PENDING_LIBRARY_KEY) !== null) {
+      throw new Error("Completa la verifica su GitHub e poi sincronizza prima di modificare la raccolta.");
+    }
   }
   function durationSnapshot() {
     return { saved: storage.getItem(DURATIONS_KEY), queue: storage.getItem(QUEUE_KEY),
@@ -99,6 +122,7 @@ export function createCollectionStore(storage) {
   }
   function commit(next) {
     assertCurrent();
+    if (next.albums !== state.albums || next.physical !== state.physical) assertLibraryEditable();
     const value = JSON.stringify(next);
     storage.setItem(COLLECTION_KEY, value);
     serialized = value;
@@ -141,6 +165,14 @@ export function createCollectionStore(storage) {
   }
   return {
     get state() { return state; }, links, assertCurrent, commit, durations, durationSnapshot, assertDurationSnapshot,
+    addPhysical(rows) {
+      assertPhysicalEditable();
+      commit({ ...state, physical: addPhysicalRecords(state.physical, rows) });
+    },
+    setPhysicalFormat(artist, title, format, checked) {
+      assertPhysicalEditable();
+      commit({ ...state, physical: setPhysicalRecordFormat(state.physical, artist, title, format, checked) });
+    },
     pendingChanges() {
       const changed = new Set(), base = new Map(state.base.map((album) => [album.id, album]));
       const current = new Map(state.albums.map((album) => [album.id, album]));
@@ -152,6 +184,12 @@ export function createCollectionStore(storage) {
       const localDurations = durations();
       for (const id of new Set([...durationBase.keys(), ...Object.keys(localDurations)])) {
         if ((durationBase.get(id) ?? null) !== (localDurations[id] ?? null)) changed.add(id);
+      }
+      const physicalBase = new Map(state.physicalBase.map((row) => [physicalKey(row.artist, row.title), row]));
+      for (const row of state.physical) {
+        const key = physicalKey(row.artist, row.title);
+        const previous = physicalBase.get(key);
+        if (row.cd !== (previous?.cd ?? false) || row.vinyl !== (previous?.vinyl ?? false)) changed.add(`physical:${key}`);
       }
       return changed.size;
     },
@@ -172,6 +210,7 @@ export function createCollectionStore(storage) {
     },
     saveMissingDuration(album, duration, provenance = null) {
       assertCurrent();
+      assertLibraryEditable();
       const current = state.albums.find((item) => item.id === album.id);
       if (!current || current.artist !== album.artist || current.name !== album.name || current.url !== album.url) {
         throw new Error("Album cambiato durante la lettura: durata non salvata.");

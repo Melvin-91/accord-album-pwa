@@ -1,3 +1,5 @@
+import { physicalKey } from "./physical-collection.mjs?v=2";
+
 export const RECENT_CATALOG_SEARCHES = "accord-catalog-searches-v1";
 const providers = ["spotify", "tidal", "qobuz"];
 const normalized = (text) => text.normalize("NFKC").toLocaleLowerCase().trim().replace(/\s+/g, " ");
@@ -102,6 +104,33 @@ export function filteredCollection(albums, { query = "", status = "", genre = ""
     && (!favoritesOnly || favorites.has(album.id)))
     .sort((a, b) => a.artist.localeCompare(b.artist, "it") || a.name.localeCompare(b.name, "it"));
 }
+
+export function collectionRows(albums, physicalRecords, filters = {}) {
+  const ownership = new Map(physicalRecords.map((record) => [physicalKey(record.artist, record.title), record]));
+  const linked = new Set();
+  const rows = albums.map((album) => {
+    const key = album.artist.trim() && album.name.trim() ? physicalKey(album.artist, album.name) : null;
+    linked.add(key);
+    return { id: album.id, artist: album.artist, name: album.name, genres: album.genres, status: album.status,
+      album, physical: ownership.get(key) };
+  });
+  for (const [key, record] of ownership) {
+    if (!linked.has(key) && (record.cd || record.vinyl)) {
+      rows.push({ id: `physical:${key}`, artist: record.artist, name: record.title, genres: [],
+        status: "", album: null, physical: record });
+    }
+  }
+  const format = filters.format;
+  const visible = filteredCollection(rows, filters).filter(({ physical }) => {
+    if (format === "cd") return Boolean(physical?.cd);
+    if (format === "vinyl") return Boolean(physical?.vinyl);
+    if (format === "both") return physical?.cd && physical?.vinyl;
+    if (format === "none") return !physical?.cd && !physical?.vinyl;
+    return true;
+  });
+  return { total: rows.length, visible };
+}
+
 export function collectionAnomalies(albums, durations = {}, provenance = {}) {
   if (!provenance || typeof provenance !== "object" || Array.isArray(provenance)) throw new Error("Provenienza non leggibile.");
   return albums.flatMap((album) => {
