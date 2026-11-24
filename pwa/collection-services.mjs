@@ -1,6 +1,6 @@
 import { createSpotifyJsonReader, createSpotifyTransport, spotifyAlbumSearchRecords, spotifyRedirectUriForPage } from "./core.mjs?v=54";
 import { createMusicServiceGate, createTidalAuth, createTidalTransport, tidalAlbumRecords, tidalAlbumArtwork,
-  tidalAlbumId, tidalResources } from "./tidal.mjs?v=17";
+  tidalAlbumId, tidalResources } from "./tidal.mjs?v=18";
 import { createQobuzClient, qobuzAlbumId, qobuzCredentials, qobuzCoverUrl } from "./qobuz.mjs?v=12";
 import { abortable } from "./service-requests.mjs?v=4";
 import { catalogTarget, readAlbumDuration } from "./music-completion.mjs?v=7";
@@ -242,6 +242,28 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
       storeSpotify(await spotifyToken({ grant_type: "authorization_code", code: callback.searchParams.get("code"),
         client_id: clientId, code_verifier: verifier, redirect_uri: redirect }), clientId, revision);
       return true;
+    },
+    async resolveTidalAlbum(value) {
+      const epoch = gate.epoch, revision = accountRevision(), clientId = tidalClientId();
+      const signal = AbortSignal.timeout(90_000);
+      const guard = () => {
+        signal.throwIfAborted();
+        gate.assert("tidal", epoch);
+        if (revision !== accountRevision() || clientId !== tidalClientId()
+            || storage.getItem("accord-music-service-v1") !== "tidal") {
+          throw new Error("Account o servizio TIDAL cambiato: verifica scartata.");
+        }
+      };
+      guard();
+      const token = await tidalAuth.access(clientId, { signal });
+      guard();
+      const profile = await tidal.request("users/me", token, { signal });
+      guard();
+      const result = await tidal.resolveAlbumLink(value, token, {
+        countryCode: profile.data?.attributes?.country, signal,
+      });
+      guard();
+      return result;
     },
     async search(query, { signal: externalSignal, reference, criteria, chooseArtists, withCompleteness = false } = {}) {
       query = query.trim();

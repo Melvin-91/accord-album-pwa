@@ -1,4 +1,4 @@
-const CACHE = "accord-album-pwa-v1.43.0";
+const CACHE = "accord-album-pwa-v1.43.1";
 const FILES = [
   "./",
   "./index.html",
@@ -9,7 +9,7 @@ const FILES = [
   "./unified-library.mjs?v=1",
   "./core.mjs?v=54",
   "./core.mjs?v=51",
-  "./collection-app.mjs?v=39",
+  "./collection-app.mjs?v=40",
   "./tidal-preview.mjs?v=1",
   "./collection-qol.mjs?v=4",
   "./collection-qol.mjs?v=6",
@@ -18,7 +18,7 @@ const FILES = [
   "./collection-sync.mjs?v=11",
   "./edition-links-sync.mjs?v=1",
   "./duration-sync.mjs?v=1",
-  "./collection-services.mjs?v=20",
+  "./collection-services.mjs?v=21",
   "./edition-comparison.mjs?v=4",
   "./music-suggestion-filters.mjs?v=4",
   "./music-suggestion-recipes.mjs?v=2",
@@ -26,11 +26,12 @@ const FILES = [
   "./music-continuity.mjs?v=13",
   "./ui.mjs?v=25",
   "./tidal.mjs?v=17",
+  "./tidal.mjs?v=18",
   "./qobuz.mjs?v=12",
   "./service-requests.mjs?v=4",
   "./music-app-links.mjs?v=5",
-  "./music-app-links.mjs?v=6",
-  "./album-association.mjs?v=14",
+  "./music-app-links.mjs?v=7",
+  "./album-association.mjs?v=15",
   "./music-library-choices.mjs?v=2",
   "./manifest.json",
   "../assets/malt_metal.ico",

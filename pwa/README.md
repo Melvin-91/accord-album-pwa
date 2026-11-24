@@ -2,6 +2,14 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.43.1 · Apertura TIDAL
+
+Con TIDAL selezionato e collegato, l'apertura verifica la disponibilita' nel
+paese dell'account e chiede conferma prima di usare un'edizione alternativa
+univoca. Non modifica album, voti o associazioni. Se la verifica fallisce,
+puoi scegliere esplicitamente di aprire il link originale senza verifica;
+senza TIDAL selezionato e collegato il link originale non viene verificato.
+
 ### PWA 1.43.0 · Associazioni condivise
 
 Sincronizza le associazioni di edizione con il desktop attraverso il catalogo

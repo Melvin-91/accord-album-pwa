@@ -1135,6 +1135,41 @@ const tidalSearchFixture = (respond) => {
     } });
   return { services, disk, session, calls, document };
 };
+test("TIDAL album opening checks account country and resolves a playable edition", async () => {
+  const document = (ids, playable) => ({
+    data: ids.map(id => ({ type: "albums", id, attributes: { title: "Synthetic Album" },
+      relationships: { artists: { data: [{ type: "artists", id: "1" }] },
+        usageRules: { data: { type: "usageRules", id: `rules-${id}` } } } })),
+    included: [{ type: "artists", id: "1", attributes: { name: "Synthetic Artist" } },
+      ...ids.map(id => ({ type: "usageRules", id: `rules-${id}`,
+        attributes: { countryCode: "IT", subscription: playable.includes(id) ? ["STREAM"] : [], free: [] } }))],
+  });
+  const f = tidalSearchFixture(({ url }) => {
+    if (url.pathname === "/v2/albums") return reply(document(["42"], []));
+    if (url.pathname.endsWith("/relationships/albums")) return reply(document(["42", "43"], ["43"]));
+    return null;
+  });
+  const result = await f.services.resolveTidalAlbum("https://tidal.com/browse/album/42");
+  assert.equal(result.original.id, "tidal:42");
+  assert.equal(result.album.id, "tidal:43");
+  assert.equal(result.country, "IT");
+  assert.deepEqual(f.calls.map(({ url }) => url.pathname),
+    ["/v2/users/me", "/v2/albums", "/v2/searchResults", "/v2/searchResults/opaque-result/relationships/albums"]);
+  assert.ok(f.calls.slice(1).every(({ url }) => url.searchParams.get("countryCode") === "IT"));
+});
+test("TIDAL album verification rejects an account change while a request is pending", async () => {
+  const disk = storage({ "accord-music-service-v1": "tidal", "accord-tidal-client-id-v1": "test-client",
+    "accord-tidal-token-v1": JSON.stringify({ clientId: "test-client", access_token: "test-token",
+      expires: Date.now() + 3600000 }) });
+  let release;
+  const services = createCollectionServices({ storage: disk, session: storage(), pageUrl: "https://example.test/",
+    fetch: async () => new Promise(resolve => { release = resolve; }) });
+  const pending = services.resolveTidalAlbum("42");
+  await new Promise(resolve => setImmediate(resolve));
+  services.disconnect("tidal");
+  release(reply({ data: { attributes: { country: "IT" } } }));
+  await assert.rejects(pending, /cambiato|scartat/i);
+});
 test("TIDAL collection search resolves the official search identifier and returns addable albums", async () => {
   const f = tidalSearchFixture();
   const records = await f.services.search("Search Album");
@@ -1443,14 +1478,14 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=39/);
+  assert.match(html, /collection-app\.mjs\?v=40/);
   assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=15">/);
   assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=3">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.0/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.1/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);

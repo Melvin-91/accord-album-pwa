@@ -1,8 +1,9 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=13";
 import { createCollectionSync } from "./collection-sync.mjs?v=11";
-import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=6";
-import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=14";
+import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, setTidalAlbumLinkResolver,
+  webMusicLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=7";
+import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=15";
 import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
@@ -100,11 +101,48 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=20")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=21")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
 }
+setTidalAlbumLinkResolver(localStorage, async (value) => {
+  const expected = store.state, links = localStorage.getItem(EDITION_LINKS_KEY);
+  const service = localStorage.getItem("accord-music-service-v1");
+  const revision = localStorage.getItem("accord-music-auth-revision-v1");
+  const client = await services(), settings = client.settings("tidal");
+  const configuredClient = settings.clientId;
+  const guard = () => {
+    store.assertCurrent();
+    if (store.state !== expected || localStorage.getItem(EDITION_LINKS_KEY) !== links
+        || localStorage.getItem("accord-music-service-v1") !== service
+        || localStorage.getItem("accord-music-auth-revision-v1") !== revision
+        || client.settings("tidal").clientId !== configuredClient) {
+      throw new Error("Raccolta, associazione o account cambiato: riapri il collegamento.");
+    }
+  };
+  guard();
+  if (client.provider !== "tidal" || !settings.connected) {
+    report("Apertura del link originale: disponibilita' non verificata. Seleziona e collega TIDAL per verificarla.");
+    return value;
+  }
+  let result;
+  try {
+    result = await client.resolveTidalAlbum(webMusicLink(value));
+  } catch (error) {
+    guard();
+    if (!confirm(`Verifica TIDAL non riuscita: ${error.message}\nAprire comunque il link originale senza verifica?`)) return null;
+    guard();
+    return value;
+  }
+  guard();
+  if (result.album.id !== result.original.id && !confirm(
+    `${result.original.artist} · ${result.original.name}\nL'edizione ${result.original.id.slice(6)} `
+    + `non e' riproducibile in ${result.country}.\nAprire l'edizione disponibile ${result.album.id.slice(6)}? `
+    + "Album, voti e associazioni restano invariati.")) return null;
+  guard();
+  return result.album.url;
+});
 function disable() {
   document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #openQuickReview, #returnToFilters, #quickReviewDialog button, #quickReviewDialog select, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
@@ -472,7 +510,18 @@ function albumCard(album, favorite, duration) {
     ...(playback ? { rel: "noopener noreferrer" } : { type: "button", class: "secondary" }),
     "aria-label": `${playback ? "Apri" : "Associa"} album ${album.name} su ${musicServiceName(target)}` });
   if (playback) configureMusicAppLink(open, playback.url, { storage: localStorage,
-    query: `${album.artist} ${album.name}`, report: (message) => report(message) });
+    query: `${album.artist} ${album.name}`, report,
+    beforeOpen() {
+      store.assertCurrent();
+      const current = store.state.albums.find((item) => item.id === album.id);
+      if (!current || current.artist !== album.artist || current.name !== album.name || musicService() !== target) {
+        throw new Error("Album o servizio cambiato: riapri la scheda.");
+      }
+      const selected = selectedMusicEdition(localStorage, current, target);
+      if (!selected || selected.id !== playback.id || selected.url !== playback.url) {
+        throw new Error("Associazione cambiata: riapri la scheda.");
+      }
+    } });
   else open.addEventListener("click", () => report(
     `Nessuna edizione collegata a ${musicServiceName(target)}. Usa “Controlla collegamenti” nelle impostazioni; Spotify non viene aperto come ripiego.`));
   const remove = node("button", "Rimuovi", { type: "button", "data-control": "remove", class: "secondary" });

@@ -7,7 +7,7 @@ import { LIBRARY_CHOICES_KEY, associationCaptions, readLibraryChoices, validateL
   libraryAssociationState, changeLibraryChoice, groupEditionRows, localDay } from "./music-library-choices.mjs";
 import { duplicateAlbumGroups } from "./ui.mjs";
 import { prepareAssociations, openPlaybackServiceDialog } from "./album-association.mjs";
-import { openAssociatedEditionDialog } from "./music-app-links.mjs";
+import { openAssociatedEditionDialog, setTidalAlbumLinkResolver } from "./music-app-links.mjs";
 import { sourceIdentity } from "./music-continuity.mjs";
 
 const album = { id: "local:1", artist: "Band", name: "Album", year: "2024" };
@@ -141,10 +141,13 @@ test("collection alternate opening uses only current links and leaves preference
 
     dialog = openAssociatedEditionDialog({ storage: saved, album: source, provider: "spotify", report() {} });
     const staleLink = dialog.children[2].children[0];
+    let resolutions = 0;
+    setTidalAlbumLinkResolver(saved, () => { resolutions += 1; });
     saved.setItem("accord-music-edition-links-v1", JSON.stringify({}));
     let prevented = false;
     staleLink.events.click({ preventDefault() { prevented = true; }, stopImmediatePropagation() {} });
     assert.equal(prevented, true);
+    assert.equal(resolutions, 0);
     assert.equal(dialog.open, true);
     assert.deepEqual(["accord-music-service-v1", "accord-music-link-target-v1"]
       .map(key => saved.getItem(key)), before.slice(1));
