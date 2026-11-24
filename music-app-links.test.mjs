@@ -96,7 +96,12 @@ test("repeated clicks cannot queue another TIDAL verification while the first is
     assert.equal(tabs, 1);
     release("https://tidal.com/browse/album/3180424");
     await pending;
-    assert.equal(link.href, "https://listen.tidal.com/album/3180424");
+    assert.equal(link.href, "https://listen.tidal.com/album/4004795");
+    const again = link.listeners.click(event);
+    assert.equal(requests, 2);
+    release("https://tidal.com/browse/album/3180424");
+    await again;
+    assert.equal(link.href, "https://listen.tidal.com/album/4004795");
   } finally {
     if (previous) Object.defineProperty(globalThis, "open", previous);
     else delete globalThis.open;

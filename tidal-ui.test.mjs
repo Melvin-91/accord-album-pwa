@@ -253,7 +253,7 @@ test("TIDAL result links verify the account market and confirm a playable editio
     f.session.removeItem("accord-tidal-token-v1");
     const calls = f.calls.length;
     await link.dispatch("click");
-    assert.equal(opened.at(-1), "tidal://album/3180424");
+    assert.equal(opened.at(-1), "tidal://album/4004795");
     assert.equal(f.calls.length, calls);
   }, document);
 });

@@ -205,11 +205,11 @@ export function createTidalTransport({
   return {
     ready: () => { guard(); requests.ready(); },
     request: requestJson,
-    async resolveAlbumLink(value, token, { countryCode } = {}) {
+    async resolveAlbumLink(value, token, { countryCode, signal } = {}) {
       if (!/^[A-Z]{2}$/.test(countryCode || "")) throw new Error("Paese dell'account TIDAL non verificato.");
       const identifier = tidalAlbumId(value);
       const params = new URLSearchParams({ "filter[id]": identifier, countryCode, include: "artists,usageRules" });
-      const page = await this.pages(`albums?${params}`, token);
+      const page = await this.pages(`albums?${params}`, token, { signal });
       if (!page.complete) throw new Error("Verifica TIDAL incompleta: nessun link aperto.");
       const resources = tidalResources(page.documents);
       const original = tidalAlbumRecords(page.documents).find(album => album.id === `tidal:${identifier}`);
@@ -219,9 +219,9 @@ export function createTidalTransport({
       if (streamable === null) throw new Error("TIDAL non comunica i diritti di streaming per questo paese. Nessun link aperto.");
       if (streamable) return { album: original, original, country: countryCode };
       const path = await this.searchPath(`${original.artist} ${original.name}`, "albums", token, {
-        countryCode, include: "albums.artists,albums.usageRules",
+        countryCode, include: "albums.artists,albums.usageRules", signal,
       });
-      const matches = await this.pages(path, token);
+      const matches = await this.pages(path, token, { signal });
       if (!matches.complete) throw new Error("Ricerca delle edizioni TIDAL incompleta: nessun link aperto.");
       const included = tidalResources(matches.documents);
       const normalize = value => value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();

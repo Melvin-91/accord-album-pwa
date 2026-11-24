@@ -1,5 +1,5 @@
 import { validEdition, sourceIdentity, editionLink } from "./music-continuity.mjs?v=13";
-import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=6";
+import { nativeMusicLink, configureMusicAppLink } from "./music-app-links.mjs?v=7";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { associationCaptions, libraryChoice, manuallyUnavailable, readLibraryChoices,
   writeLibraryChoice } from "./music-library-choices.mjs?v=2";

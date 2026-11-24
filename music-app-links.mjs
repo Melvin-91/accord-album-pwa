@@ -44,7 +44,7 @@ export function nativeMusicLink(value, { desktop = desktopAppLinks() } = {}) {
 }
 
 export function configureMusicAppLink(link, value, { query = "", report = () => {}, desktop,
-  storage = globalThis.localStorage } = {}) {
+  storage = globalThis.localStorage, beforeOpen = () => {} } = {}) {
   const originalText = link.textContent;
   let copying = false, opening = false;
   const update = () => {
@@ -84,6 +84,7 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
     if (opening) { event.preventDefault(); return; }
     let tab = null;
     try {
+      beforeOpen();
       if (!update()) { await copy(event); return; }
       const resolve = tidalAlbumResolvers.get(storage);
       if (!resolve || !/^tidal:\/\/album\/[1-9][0-9]*$/.test(nativeMusicLink(value, { desktop: true }))) return;
@@ -102,15 +103,13 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
       if (!verified) { tab?.close(); return; }
       if (musicLinkTarget(storage) !== target) throw new Error("Apertura App/Web cambiata: riprova.");
       const uri = target === "web" ? webMusicLink(verified) : nativeMusicLink(verified, { desktop });
-      value = verified;
-      update();
       if (target === "web") {
         if (tab.closed) throw new Error("Scheda TIDAL chiusa: nessun collegamento aperto.");
         tab.location.replace(uri);
       } else if (globalThis.navigator?.userActivation && !globalThis.navigator.userActivation.isActive) {
         const dialog = document.createElement("dialog");
         const caption = document.createElement("p");
-        caption.textContent = "Edizione TIDAL verificata.";
+        caption.textContent = "Collegamento TIDAL pronto.";
         const open = document.createElement("a");
         open.href = uri; open.textContent = "Apri nell'app TIDAL"; open.target = "_self";
         open.addEventListener("click", () => dialog.close());
@@ -118,7 +117,7 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
         cancel.type = "button"; cancel.textContent = "Annulla";
         cancel.addEventListener("click", () => dialog.close());
         dialog.append(caption, open, cancel);
-        dialog.setAttribute("aria-label", "Apri edizione TIDAL verificata");
+        dialog.setAttribute("aria-label", "Apri collegamento TIDAL");
         dialog.addEventListener("close", () => dialog.remove());
         document.body.append(dialog);
         dialog.showModal();
@@ -126,7 +125,7 @@ export function configureMusicAppLink(link, value, { query = "", report = () => 
     } catch (error) {
       event.preventDefault();
       tab?.close();
-      report(error.message);
+      report(error.message, true);
     } finally {
       opening = false;
       link.removeAttribute("aria-busy");
@@ -150,24 +149,20 @@ export function openAssociatedEditionDialog({ storage = globalThis.localStorage,
   const heading = document.createElement("h2"); heading.textContent = "Apri con…";
   const notice = document.createElement("p");
   notice.textContent = `${album.artist} · ${album.name}. Usiamo solo edizioni gia' associate; `
-    + "nessun catalogo viene cercato e preferenze o associazioni non cambiano.";
+    + "preferenze e associazioni non cambiano. TIDAL puo' verificare la disponibilita' dell'edizione.";
   dialog.append(heading, notice);
   for (const row of editions) {
     const link = document.createElement("a");
     link.textContent = `Apri in ${{ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" }[row.provider]}`;
     configureMusicAppLink(link, row.album.url, {
       query: `${album.artist} ${album.name}`, report, storage,
-    });
-    link.addEventListener("click", event => {
-      try {
+      beforeOpen() {
         const current = validEdition(row.provider, album.id) ? album : editionLink(storage, album, row.provider);
         if (!current || current.id !== row.album.id || current.url !== row.album.url) {
           throw new Error("Associazione cambiata: riapri la scelta del servizio.");
         }
         dialog.close();
-      } catch (error) {
-        event.preventDefault(); event.stopImmediatePropagation(); report(error.message, true);
-      }
+      },
     });
     const paragraph = document.createElement("p"); paragraph.append(link); dialog.append(paragraph);
   }
