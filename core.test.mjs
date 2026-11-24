@@ -6,7 +6,7 @@ import { runInNewContext } from "node:vm";
 import { tidalAlbumId } from "./tidal.mjs";
 import { fingerprint } from "./music-continuity.mjs";
 import { createUpdateLifecycle, localCollectionStatus, serviceFailure } from "./runtime-status.mjs";
-import { commandIconName } from "./command-icons.mjs?v=3";
+import { commandIconElement, commandIconName } from "./command-icons.mjs?v=4";
 import {
   buildSimilarityQueue,
   resolveArtistFromTracks,
@@ -1835,6 +1835,16 @@ test("command icons distinguish options by action while sharing icons for relate
     ["Correzioni suggerite", "wand"],
     ["Usa per suggerimenti", "choose"],
     ["Rimanda album", "calendar"],
+    ["Revisione rapida", "review"],
+    ["Gestisci album", "controls"],
+    ["Controlla collegamenti in tutta la raccolta", "linkCheck"],
+    ["Leggi album dal link", "read"],
+    ["Apri la copia in raccolta", "open"],
+    ["Da ascoltare", "clock"],
+    ["In ascolto", "headphones"],
+    ["Mi piace", "thumbsUp"],
+    ["Neutro", "neutral"],
+    ["Non mi piace", "thumbsDown"],
     ["Riproduci selezionati", "play"],
     ["Elenca le mie playlist", "playlist"],
     ["Salta", "skip"],
@@ -1843,9 +1853,31 @@ test("command icons distinguish options by action while sharing icons for relate
   for (const [label, expected] of cases) assert.equal(commandIconName(label), expected, label);
   assert.equal(new Set(cases.map(([, icon]) => icon)).size, cases.length,
     "Distinct actions should use distinct icons");
-  assert.equal(commandIconName("Controlla collegamenti in tutta la raccolta"), "link");
+  assert.equal(commandIconName("Controlla collegamenti in tutta la raccolta"), "linkCheck");
   assert.equal(commandIconName("Rimuovi collegamento"), "unlink");
   assert.equal(commandIconName("Rimuovi rinvio"), "calendar");
+  assert.equal(commandIconName("Apri album per verificare"), "open");
+  assert.equal(commandIconName("Aggiungi alla raccolta"), "plus");
+  assert.equal(commandIconName("Importa CSV"), "upload");
+  assert.equal(commandIconName("Esporta CSV"), "download");
+  assert.equal(commandIconName("Backup JSON"), "shield");
+  for (const label of ["Apri album per verificare", "Leggi album dal link", "Associa questa edizione",
+    "Associa corrispondenze", "Torna al catalogo", "Mantieni la copia e registra CD e Vinile"]) {
+    assert.notEqual(commandIconName(label), "more", `${label} should have a meaningful icon`);
+  }
+  assert.notEqual(commandIconName("Mi piace"), commandIconName("Non mi piace"));
+  assert.equal(commandIconName("Piaciuto"), "thumbsUp");
+  assert.equal(commandIconName("Non piaciuto"), "thumbsDown");
+
+  const document = { createElementNS: (namespace, tagName) => ({
+    namespace, tagName, attributes: {}, dataset: {}, children: [],
+    setAttribute(name, value) { this.attributes[name] = value; },
+    append(child) { this.children.push(child); },
+  }) };
+  const icon = commandIconElement("thumbsUp", document);
+  assert.equal(icon.tagName, "svg");
+  assert.equal(icon.attributes["aria-hidden"], "true");
+  assert.match(icon.children[0].attributes.d, /M7 10/);
 });
 
 test("installable shell links resolve locally and are present in the offline cache", () => {
@@ -1931,14 +1963,14 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=36", "collection.css?v=12", "physical-collection.css?v=3"]) {
+  for (const file of ["collection-app.mjs?v=37", "collection.css?v=13", "physical-collection.css?v=3"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }
   for (const file of ["core.mjs?v=54", "collection-store.mjs?v=12", "collection-sync.mjs?v=10",
     "music-app-links.mjs?v=6", "album-association.mjs?v=14", "music-library-choices.mjs?v=2",
     "collection-services.mjs?v=20", "music-suggestion-filters.mjs?v=4",
-    "command-icons.mjs?v=3", "ui.mjs?v=25", "tidal-preview.mjs?v=1", "collection-qol.mjs?v=6",
+    "command-icons.mjs?v=4", "ui.mjs?v=25", "tidal-preview.mjs?v=1", "collection-qol.mjs?v=6",
     "physical-collection-ui.mjs?v=3"]) {
     assert.ok(active.includes(file));
     assert.ok(sw.includes(file));

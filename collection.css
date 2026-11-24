@@ -98,6 +98,7 @@ a { color: var(--accent); text-underline-offset: 3px; }
 .album-card > p:not(.muted) { grid-area: artist; font-size: .875rem; color: var(--muted); }
 .album-metadata { grid-area: metadata; display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
 .album-state-line { grid-area: state; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; color: var(--muted); font-size: .75rem; padding-block: 4px; }
+.album-state-line .command-icon, .album-controls > label > .command-icon { width: .95em; height: .95em; margin-right: .4em; vertical-align: -.12em; }
 .album-duration { color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .album-card p { margin: 0; overflow-wrap: anywhere; }
 .artwork { grid-area: cover; position: relative; width: 100%; aspect-ratio: 1; background: var(--raised); border-radius: 12px; display: grid; place-items: center; overflow: hidden; box-shadow: 0 14px 28px #0003; }

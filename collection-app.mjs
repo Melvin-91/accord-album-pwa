@@ -6,7 +6,7 @@ import { associationUpdates, openAssociationDialog } from "./album-association.m
 import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
-import { installCommandIcons } from "./command-icons.mjs?v=3";
+import { commandIconElement, commandIconName, installCommandIcons } from "./command-icons.mjs?v=4";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=3";
@@ -20,6 +20,11 @@ installSelectWheelGuard(document);
 const $ = (id) => document.getElementById(id);
 const states = { queued: "Da ascoltare", listening: "In ascolto",
   liked: "Mi piace", neutral: "Neutro", disliked: "Non mi piace" };
+const stateIcon = (status) => commandIconElement(commandIconName(states[status]), document);
+const refreshStateIcon = (label, status) => {
+  const icon = label.querySelector(":scope > .command-icon");
+  if (icon) icon.replaceWith(stateIcon(status));
+};
 const providerName = (album) => album.id.startsWith("tidal:") ? "TIDAL" : album.id.startsWith("qobuz:") ? "Qobuz" : "Spotify";
 const musicServiceName = (provider) => ({ spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" })[provider] || "non noto";
 const musicService = () => ["spotify", "tidal", "qobuz"].includes(localStorage.getItem("accord-music-service-v1"))
@@ -437,16 +442,19 @@ function albumCard(album, favorite, duration) {
   }));
   card.append(artwork, node("h2", album.name), node("p", album.artist), metadata);
   const stateLine = node("div", "", { class: "album-state-line" });
-  stateLine.append(node("span", states[album.status]), node("span",
+  const currentState = node("span", states[album.status], { class: "album-listening-state" });
+  currentState.prepend(stateIcon(album.status));
+  stateLine.append(currentState, node("span",
     album.rating === null ? "Senza voto" : `Voto ${String(album.rating).replace(".", ",")}`));
   card.append(stateLine);
   const options = node("details", "", { class: "album-options", name: "collection-album" });
-  options.append(node("summary", "Gestisci album", { "data-control": "options", "data-command-icon": "settings" }));
+  options.append(node("summary", "Gestisci album", { "data-control": "options", "data-command-icon": "controls" }));
   options.addEventListener("toggle", () => {
     if (options.open && options.isConnected) closeAlbumOptions(options);
   });
   const controls = node("div", "", { class: "album-controls" });
   const statusLabel = node("label", "Ascolto"), status = node("select", "", { "data-control": "status" });
+  statusLabel.prepend(stateIcon(album.status));
   Object.entries(states).forEach(([value, label]) => status.append(node("option", label, { value })));
   status.value = album.status; statusLabel.append(status);
   status.addEventListener("change", () => mutate(() => store.update(album.id, { status: status.value })));
@@ -676,8 +684,10 @@ function showQuickReview() {
   const name = node("h3", current.name), artist = node("p", `${current.artist} · ${current.year || "-"}`);
   const controls = node("div", "", { class: "album-controls" }), statusLabel = node("label", "Ascolto");
   const status = node("select", "", { "aria-label": "Stato della revisione", id: "quickReviewStatusValue" });
+  statusLabel.prepend(stateIcon(current.status));
   Object.entries(states).forEach(([value, text]) => status.append(node("option", text, { value })));
   status.value = current.status; statusLabel.append(status);
+  status.addEventListener("change", () => refreshStateIcon(statusLabel, status.value));
   const ratingLabel = node("label", "Voto"), rating = node("select", "", { "aria-label": "Voto della revisione", id: "quickReviewRating" });
   rating.append(node("option", "Senza voto", { value: "" }));
   for (let value = .5; value <= 5; value += .5) rating.append(node("option", String(value).replace(".", ","), { value }));

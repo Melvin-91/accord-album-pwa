@@ -6,6 +6,7 @@ const paths = {
   sync: "M20 9A8 8 0 0 0 6 5L3 8m0-5v5h5m-4 7a8 8 0 0 0 14 4l3-3m0 5v-5h-5",
   retry: "M20 11a8 8 0 0 0-14-5L4 8m0-4v4h4m-4 5a8 8 0 0 0 14 5",
   settings: "M9 3 8 6 5 7l-2 4 2 2-1 4 4 3 3-1 3 2 4-2v-4l3-2-1-5-3-1-2-3Zm6 9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
+  controls: "M4 6h16M4 12h16M4 18h16M8 4v4m8 2v4m-5 2v4",
   close: "m6 6 12 12M6 18 18 6",
   stop: "M6 6h12v12H6z",
   skip: "M5 5v14l9-7ZM19 5v14",
@@ -37,28 +38,44 @@ const paths = {
   info: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 11v6m0-10v1",
   edit: "m4 15 12-12 5 5L9 20l-6 1Zm10-10 5 5M4 15l5 5",
   more: "M5 12h.01M12 12h.01M19 12h.01",
+  review: "M8 3h8l1 2h3v16H4V5h3Zm0 7h8m-8 4h8m-8 4h5",
+  read: "M5 3h10l4 4v14H5zM15 3v5h5m-11 4h6m-6 4h6",
+  linkCheck: "m9 8 3-3a5 5 0 0 1 7 7l-2 2m-2 2-3 3a5 5 0 0 1-7-7l2-2m4 1 2 2 4-4",
+  neutral: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM9 10h.01M15 10h.01M9 15h6",
+  thumbsUp: "M7 10v12H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3Zm0 0 5-9 2 1-1 6h6a2 2 0 0 1 2 2l-2 10a2 2 0 0 1-2 2H7",
+  thumbsDown: "M7 14V2H4a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3Zm0 0 5 9 2-1-1-6h6a2 2 0 0 0 2-2l-2-10a2 2 0 0 0-2-2H7",
 };
 
 export function commandIconName(label) {
   const key = String(label).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   for (const [pattern, name] of [
+    [/non mi piace|non piace|non piaciut|disliked|dislik/, "thumbsDown"],
+    [/\bmi piace\b|\bpiaciut|\bliked?\b/, "thumbsUp"],
+    [/\bneutro\b|\bneutral\b/, "neutral"],
+    [/da ascoltare|\bqueued\b/, "clock"],
+    [/in ascolto|\blistening\b/, "headphones"],
     [/interrompi|ferma|stop/, "stop"],
     [/durat|tempo disponibile/, "clock"],
     [/unisci|unione/, "merge"],
     [/duplicat|confront|copie|copia distinta/, "compare"],
     [/aggiorna pwa/, "download"],
     [/album non presente nei servizi/, "record"],
+    [/controlla collegamenti|verifica collegamenti/, "linkCheck"],
     [/sincronizz|aggiorna|ricarica/, "sync"],
     [/scollega|disconnett|rimuovi collegament/, "unlink"],
+    [/gestisci album|gestione album|opzioni album/, "controls"],
     [/collega|collegament|servizio|associa/, "link"],
     [/preferit/, "heart"],
     [/\bcd\b|vinile|supporto fisico/, "record"],
+    [/revisione rapida|revisione/, "review"],
+    [/leggi album|leggi dal link/, "read"],
     [/rimanda|rinvio/, "calendar"],
     [/elimina|rimuovi|scarta|svuota/, "trash"],
     [/annulla|chiudi/, "close"],
     [/cerca|ricerca|trova/, "search"],
     [/voto/, "star"],
     [/salva|sostituisci|mantieni/, "save"],
+    [/apri|browser/, "open"],
     [/conferma|applica|verifica/, "check"],
     [/riprov|ritenta/, "retry"],
     [/aggiungi|nuovo|nuova|crea/, "plus"],
@@ -70,14 +87,13 @@ export function commandIconName(label) {
     [/backup|ripristin|strumenti avanzati/, "shield"],
     [/scarica|esporta/, "download"],
     [/importa|carica/, "upload"],
-    [/indietro|precedent/, "left"],
+    [/indietro|precedent|torna|ritorna/, "left"],
     [/salta/, "skip"],
     [/avanti|successiv|mostra altri/, "right"],
     [/copia/, "copy"],
     [/scegli|seleziona\b|selezionare\b/, "choose"],
     [/playlist|elenca le mie/, "playlist"],
     [/riproduci|anteprima/, "play"],
-    [/apri|browser/, "open"],
     [/player/, "headphones"],
     [/ascolt/, "headphones"],
     [/modifica/, "edit"],
@@ -85,6 +101,19 @@ export function commandIconName(label) {
     [/album|raccolta/, "album"],
   ]) if (pattern.test(key)) return name;
   return "more";
+}
+
+export function commandIconElement(name, document) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "command-icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.dataset.name = name;
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", paths[name] || paths.more);
+  svg.append(path);
+  return svg;
 }
 
 export function decorateCommandIcons(root) {
@@ -97,16 +126,7 @@ export function decorateCommandIcons(root) {
     const old = control.querySelector(":scope > .command-icon");
     if (old?.dataset.name === name) continue;
     old?.remove();
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("class", "command-icon");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("focusable", "false");
-    svg.dataset.name = name;
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", paths[name] || paths.more);
-    svg.append(path);
-    control.prepend(svg);
+    control.prepend(commandIconElement(name, document));
   }
 }
 
