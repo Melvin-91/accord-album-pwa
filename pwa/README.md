@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.42.1 · Icone piu' riconoscibili
+
+Le icone delle azioni ora distinguono meglio controlli album, revisione,
+lettura e verifica dei collegamenti. Gli stati mostrano simboli dedicati:
+pollice su per **Mi piace**, pollice giu' per **Non mi piace**, orologio per
+**Da ascoltare**, cuffie per **In ascolto** e segno neutro per **Neutro**.
+
 ### PWA 1.42.0 · CD e vinili mentre aggiungi un album
 
 Nei risultati del catalogo puoi segnare CD e/o Vinile mentre aggiungi un
