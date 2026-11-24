@@ -2,6 +2,7 @@ import { validateAlbum, validateDocument, findCollectionAlbum, collectionAlbumId
 import { catalogTarget } from "./music-completion.mjs?v=7";
 import { addPhysicalRecords, createPhysicalStore, PHYSICAL_KEY, physicalKey,
   setPhysicalRecordFormat, validatePhysicalRecords } from "./physical-collection.mjs?v=2";
+import { EDITION_LINKS_KEY, localEditionLinks, validateEditionLinks } from "./edition-links-sync.mjs?v=1";
 
 export const COLLECTION_KEY = "accord-album-pwa-v1";
 const DURATIONS_KEY = "accord-listening-album-durations-v1";
@@ -80,7 +81,16 @@ export function createCollectionStore(storage) {
   if (!state.preferences || typeof state.preferences !== "object" || Array.isArray(state.preferences)) {
     throw new Error("Preferenze locali non leggibili. Nessun dato sovrascritto.");
   }
-  const links = () => JSON.parse(storage.getItem("accord-music-edition-links-v1") || "{}");
+  const links = () => JSON.parse(storage.getItem(EDITION_LINKS_KEY) || "{}");
+  function linksSnapshot() {
+    const saved = storage.getItem(EDITION_LINKS_KEY);
+    return { saved, values: validateEditionLinks(saved === null ? {} : JSON.parse(saved), true) };
+  }
+  function assertLinksSnapshot(snapshot) {
+    if (storage.getItem(EDITION_LINKS_KEY) !== snapshot.saved) {
+      throw new Error("Le associazioni sono cambiate durante la sincronizzazione. Riprova.");
+    }
+  }
   function durations() {
     const saved = JSON.parse(storage.getItem(DURATIONS_KEY) || "{}");
     const queue = JSON.parse(storage.getItem(QUEUE_KEY) || "{}");
@@ -128,10 +138,10 @@ export function createCollectionStore(storage) {
     serialized = value;
     state = next;
   }
-  function writeDurationState(saved, provenance, finish = () => {}) {
+  function writeLocalState(items, finish = () => {}) {
     const written = [];
     try {
-      for (const [key, value] of [[DURATIONS_KEY, saved], [PROVENANCE_KEY, provenance]]) {
+      for (const [key, value] of items) {
         const previous = storage.getItem(key);
         storage.setItem(key, JSON.stringify(value));
         written.push([key, previous]);
@@ -142,11 +152,14 @@ export function createCollectionStore(storage) {
         try {
           if (previous === null) storage.removeItem(key); else storage.setItem(key, previous);
         } catch (rollback) {
-          throw new Error(`Salvataggio locale incompleto: ${error.message}. Ripristino durate non riuscito: ${rollback.message}.`);
+          throw new Error(`Salvataggio locale incompleto: ${error.message}. Ripristino non riuscito: ${rollback.message}.`);
         }
       }
       throw error;
     }
+  }
+  function writeDurationState(saved, provenance, finish = () => {}) {
+    writeLocalState([[DURATIONS_KEY, saved], [PROVENANCE_KEY, provenance]], finish);
   }
   function provenanceRecords() {
     const value = JSON.parse(storage.getItem(PROVENANCE_KEY) || "{}");
@@ -164,7 +177,7 @@ export function createCollectionStore(storage) {
     return { ...next, albums: next.albums.filter((album) => !ids.has(album.id)), pendingRemovals: [...pending.values()] };
   }
   return {
-    get state() { return state; }, links, assertCurrent, commit, durations, durationSnapshot, assertDurationSnapshot,
+    get state() { return state; }, links, linksSnapshot, assertLinksSnapshot, assertCurrent, commit, durations, durationSnapshot, assertDurationSnapshot,
     addPhysical(rows) {
       assertPhysicalEditable();
       commit({ ...state, physical: addPhysicalRecords(state.physical, rows) });
@@ -185,6 +198,15 @@ export function createCollectionStore(storage) {
       for (const id of new Set([...durationBase.keys(), ...Object.keys(localDurations)])) {
         if ((durationBase.get(id) ?? null) !== (localDurations[id] ?? null)) changed.add(id);
       }
+      const currentLinks = links();
+      const linkBase = localEditionLinks(state.editionLinksBase?.links ?? {});
+      for (const id of new Set([...Object.keys(currentLinks), ...Object.keys(linkBase)])) {
+        const current = Object.hasOwn(currentLinks, id) ? currentLinks[id] : {};
+        const previous = Object.hasOwn(linkBase, id) ? linkBase[id] : {};
+        for (const provider of new Set([...Object.keys(current || {}), ...Object.keys(previous)])) {
+          if (JSON.stringify(current?.[provider] ?? null) !== JSON.stringify(previous[provider] ?? null)) changed.add(id);
+        }
+      }
       const physicalBase = new Map(state.physicalBase.map((row) => [physicalKey(row.artist, row.title), row]));
       for (const row of state.physical) {
         const key = physicalKey(row.artist, row.title);
@@ -193,9 +215,10 @@ export function createCollectionStore(storage) {
       }
       return changed.size;
     },
-    commitSync(next, snapshot, entries) {
+    commitSync(next, snapshot, entries, linkSnapshot = null, syncedLinks = null) {
       assertCurrent();
       assertDurationSnapshot(snapshot);
+      if (linkSnapshot) assertLinksSnapshot(linkSnapshot);
       const saved = JSON.parse(snapshot.saved || "{}");
       const provenance = provenanceRecords();
       for (const row of entries) {
@@ -203,8 +226,12 @@ export function createCollectionStore(storage) {
         saved[row.id] = row.duration_ms;
       }
       const value = JSON.stringify(next);
-      if (entries.length) writeDurationState(saved, provenance, () => storage.setItem(COLLECTION_KEY, value));
-      else storage.setItem(COLLECTION_KEY, value);
+      const updates = [];
+      if (entries.length) updates.push([DURATIONS_KEY, saved], [PROVENANCE_KEY, provenance]);
+      if (linkSnapshot && JSON.stringify(syncedLinks) !== JSON.stringify(JSON.parse(linkSnapshot.saved || "{}"))) {
+        updates.push([EDITION_LINKS_KEY, syncedLinks]);
+      }
+      writeLocalState(updates, () => storage.setItem(COLLECTION_KEY, value));
       serialized = value;
       state = next;
     },

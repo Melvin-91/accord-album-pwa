@@ -2,6 +2,13 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.43.0 · Associazioni condivise
+
+Sincronizza le associazioni di edizione con il desktop attraverso il catalogo
+privato, con scelta esplicita per conflitti e cancellazioni divergenti.
+Il filtro rapido «In ascolto» non è più presente nella PWA; lo stato resta
+selezionabile nei filtri della raccolta.
+
 ### PWA 1.42.2 · Filtro rapido «In ascolto»
 
 La raccolta include un filtro rapido per mostrare gli album in ascolto.

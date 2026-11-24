@@ -4,6 +4,8 @@ import { validateDurationDocument, validateDurationEntries, durationDocument, me
 import { readPhysicalDocument, mergePhysicalRecords } from "./physical-collection.mjs?v=2";
 import { createUnifiedLibrary, readUnifiedLibrary, readMusicDocument, LIBRARY_FILE,
   LEGACY_LIBRARY_FILES } from "./unified-library.mjs?v=1";
+import { validateEditionLinks, readEditionLinksDocument, editionLinksDocument,
+  localEditionLinks, mergeEditionLinks } from "./edition-links-sync.mjs?v=1";
 
 const API = "https://api.github.com";
 const UNCERTAIN_WRITE_KEY = "accord-album-sync-uncertain-v1";
@@ -27,6 +29,18 @@ function base64(bytes) {
 const equalAlbums = (left, right) => JSON.stringify([...left].sort((a, b) => a.id.localeCompare(b.id)))
   === JSON.stringify([...right].sort((a, b) => a.id.localeCompare(b.id)));
 const equalPhysical = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+function editionLinkChanges(before, after) {
+  const changes = [];
+  for (const id of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const old = Object.hasOwn(before, id) ? before[id] : {};
+    const current = Object.hasOwn(after, id) ? after[id] : {};
+    for (const provider of new Set([...Object.keys(old), ...Object.keys(current)])) {
+      const previous = old[provider] ?? null, next = current[provider] ?? null;
+      if (JSON.stringify(previous) !== JSON.stringify(next)) changes.push({ id, provider, previous, next });
+    }
+  }
+  return changes;
+}
 const hasOtherOwner = (saved, owner) => Boolean(saved) && (typeof saved !== "string" || saved.toLowerCase() !== owner);
 const hash = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -306,12 +320,14 @@ export function createCollectionSync({ storage, store, covers, unified = false, 
     async sync({ chooseConflicts, confirm, onProgress = () => {} }) {
       if (uncertainWrite()) throw new Error("Usa Verifica su GitHub prima di sincronizzare.");
       const durationSnapshot = store.durationSnapshot(), before = store.state;
+      const linkSnapshot = unified ? store.linksSnapshot() : null;
       const physicalPendingText = unified ? storage.getItem(LEGACY_PHYSICAL_WRITE_KEY) : null;
       const previousLibraryWrite = unified ? storage.getItem(LIBRARY_WRITE_KEY) : null;
       const pendingLibrary = readPendingLibraryWrite(previousLibraryWrite);
       let expectedLibraryWrite = previousLibraryWrite;
       const connection = client(() => {
         store.assertDurationSnapshot(durationSnapshot);
+        if (linkSnapshot) store.assertLinksSnapshot(linkSnapshot);
         if (store.state !== before) throw new Error("Raccolta cambiata durante la sincronizzazione. Riapri Sincronizza.");
         if (unified && (storage.getItem(LEGACY_PHYSICAL_WRITE_KEY) !== physicalPendingText
             || storage.getItem(LIBRARY_WRITE_KEY) !== expectedLibraryWrite)) {
@@ -319,12 +335,34 @@ export function createCollectionSync({ storage, store, covers, unified = false, 
         }
       }, onProgress);
       const owner = connection.settings.owner;
-      if (unified && [before.libraryOwner, before.syncOwner, before.physicalOwner, before.durationBase?.owner, pendingLibrary?.owner]
+      if (unified && [before.libraryOwner, before.syncOwner, before.physicalOwner, before.durationBase?.owner,
+        before.editionLinksBase?.owner, pendingLibrary?.owner]
         .some((previous) => hasOtherOwner(previous, owner))) {
         throw new Error("Il catalogo locale è associato a un altro proprietario GitHub. Ripristina il collegamento precedente.");
       }
       const remote = await connection.read(true, pendingLibrary?.confirmed === true);
       connection.assertCurrent();
+      const savedLinksBase = before.editionLinksBase;
+      if (unified && savedLinksBase !== undefined && (!savedLinksBase || typeof savedLinksBase !== "object"
+          || Array.isArray(savedLinksBase) || typeof savedLinksBase.owner !== "string" || !savedLinksBase.owner
+          || !Object.hasOwn(savedLinksBase, "links"))) {
+        throw new Error("Base delle associazioni non valida. Nessun dato modificato.");
+      }
+      const linkBase = unified && savedLinksBase ? validateEditionLinks(savedLinksBase.links) : {};
+      const remoteHasLinks = unified && Object.hasOwn(remote.extensions, "edition_links");
+      const remoteLinks = remoteHasLinks ? readEditionLinksDocument(remote.extensions.edition_links) : linkBase;
+      let linksMerge = unified ? mergeEditionLinks(linkBase, linkSnapshot.values, remoteLinks) : null;
+      if (linksMerge?.conflicts.length) {
+        const choices = await chooseConflicts(linksMerge.conflicts);
+        if (!choices) return false;
+        linksMerge = mergeEditionLinks(linkBase, linkSnapshot.values, remoteLinks, choices);
+        if (linksMerge.conflicts.length) throw new Error("Completa tutte le scelte prima di sincronizzare.");
+      }
+      const linksOutgoing = unified && (JSON.stringify(linksMerge.links) !== JSON.stringify(remoteLinks)
+        || !remoteHasLinks && Object.keys(linksMerge.links).length > 0);
+      const linksIncoming = unified && JSON.stringify(linksMerge.links) !== JSON.stringify(linkSnapshot.values);
+      const linkChangesOutgoing = unified ? editionLinkChanges(remoteLinks, linksMerge.links) : [];
+      const linkChangesIncoming = unified ? editionLinkChanges(linkSnapshot.values, linksMerge.links) : [];
       if (pendingLibrary && pendingLibrary.branch !== remote.branch) {
         throw new Error("Il branch predefinito è cambiato dopo l’ultimo invio. Ripristinalo prima di sincronizzare.");
       }
@@ -424,16 +462,18 @@ export function createCollectionSync({ storage, store, covers, unified = false, 
       const coversOutgoing = Boolean((selected.size || remote.archive.length) && (archive.length !== remote.archive.length
         || archive.some((byte, index) => byte !== remote.archive[index])));
       const musicOutgoing = outgoing || deletionsChanged || !remote.deletionSync || !remote.deletionHistory;
-      const libraryOutgoing = unified && (migrating || musicOutgoing || durationOutgoing.length || physicalOutgoing);
+      const libraryOutgoing = unified && (migrating || musicOutgoing || durationOutgoing.length || physicalOutgoing || linksOutgoing);
       if ((musicOutgoing || incoming || durationOutgoing.length || durationIncoming.length || coversOutgoing
-          || migrating || physicalOutgoing || physicalIncoming)
+          || migrating || physicalOutgoing || physicalIncoming || linksOutgoing || linksIncoming)
           && !await confirm({ local: before.albums, remote: remote.albums, albums: merged.albums,
             durationOutgoing, durationIncoming, coversOutgoing,
-            ...(unified ? { physicalOutgoing, physicalIncoming, migrating } : {}) })) return false;
+            ...(unified ? { physicalOutgoing, physicalIncoming, migrating, linksOutgoing, linksIncoming,
+              linkChangesOutgoing, linkChangesIncoming } : {}) })) return false;
       connection.assertCurrent();
       const libraryBytes = libraryOutgoing ? new TextEncoder().encode(JSON.stringify(createUnifiedLibrary({
         albums: merged.albums, deletedAlbums, physical, durations: durationMerge.entries,
-        migration: remote.migration, extensions: remote.extensions,
+        migration: remote.migration, extensions: linksOutgoing
+          ? { ...remote.extensions, edition_links: editionLinksDocument(linksMerge.links) } : remote.extensions,
       })) + "\n") : null;
       if (libraryBytes?.length > 100 * 1024 * 1024) throw new Error("library.json supera il limite GitHub di 100 MiB.");
       if (unified) await connection.verifyLegacy(remote.branch, remote.migration);
@@ -484,8 +524,9 @@ export function createCollectionSync({ storage, store, covers, unified = false, 
           durationBase: { owner, albums: durationMerge.entries },
           syncOwner: owner, lastSync: new Date().toISOString(),
           ...(unified ? { physical, physicalBase: physical, physicalOwner: owner, libraryOwner: owner,
-            physicalSha: remote.migration.physical_sha } : {}) }, durationSnapshot,
-        durationMerge.entries.filter((row) => retained.has(row.id)));
+            physicalSha: remote.migration.physical_sha, editionLinksBase: { owner, links: linksMerge.links } } : {}) }, durationSnapshot,
+        durationMerge.entries.filter((row) => retained.has(row.id)), linkSnapshot,
+        unified ? localEditionLinks(linksMerge.links) : null);
         if (physicalPendingText !== null) storage.removeItem(LEGACY_PHYSICAL_WRITE_KEY);
         if (expectedLibraryWrite !== null) storage.removeItem(LIBRARY_WRITE_KEY);
       } catch (error) {

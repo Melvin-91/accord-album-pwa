@@ -1,6 +1,6 @@
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=12";
-import { createCollectionSync } from "./collection-sync.mjs?v=10";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=13";
+import { createCollectionSync } from "./collection-sync.mjs?v=11";
 import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=6";
 import { associationUpdates, openAssociationDialog } from "./album-association.mjs?v=14";
 import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
@@ -44,14 +44,6 @@ const comparedEditions = new Set();
 let revealedAlbum = null, revealOrigin = null, quickReview = null;
 const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value, genre: $("genreFilter").value,
   format: $("formatFilter").value, favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
-function updateQuickListeningFilter() {
-  $("quickListeningFilter").setAttribute("aria-pressed", String($("statusFilter").value === "listening"));
-}
-function toggleQuickListeningFilter() {
-  const status = $("statusFilter");
-  status.value = status.value === "listening" ? "" : "listening";
-  status.dispatchEvent(new Event("change", { bubbles: true }));
-}
 function revealCollectionAlbum(id) {
   if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
   if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
@@ -777,6 +769,7 @@ async function performSync() {
     favorite: "Preferito", pinned: "In evidenza", year: "Anno", url: "Collegamento",
     cover_sha256: "Copertina", duration_ms: "Durata" };
   const valueText = (value, fieldName, record) => {
+    if (fieldName.startsWith("edition_link:")) return value ? `${value.name} (${value.id}; ${value.source.join(" / ")})` : "Rimossa";
     if (value === null || value === undefined || value === "") return record ? "Vuoto" : "Non presente";
     if (fieldName === "album" && typeof value === "object") return `${value.artist} - ${value.name}`;
     if (fieldName === "cover_sha256") return "Aggiornata";
@@ -796,7 +789,8 @@ async function performSync() {
         const album = conflict.local || conflict.remote || conflict.base;
         content.push(node("h3", `${album.artist} - ${album.name}`));
         conflict.fields.forEach((field) => {
-          const label = node("label", labels[field.field] || field.field);
+          const label = node("label", field.field.startsWith("edition_link:")
+            ? `Associazione ${field.field.slice("edition_link:".length)}` : labels[field.field] || field.field);
           const value = node("select");
           value.append(node("option", "Scegli...", { value: "" }),
             node("option", `Mantieni questo dispositivo: ${valueText(field.local, field.field, conflict.local)}`, { value: "local" }),
@@ -807,8 +801,8 @@ async function performSync() {
       const answer = await choice("Scegli cosa mantenere", content, [["cancel", "Annulla"], ["continue", "Continua"]],
         () => controls.every(({ value }) => value.value));
       if (answer !== "continue") return null;
-      const choices = {};
-      controls.forEach(({ id, field, value }) => { choices[id] ||= {}; choices[id][field] = value.value; });
+      const choices = Object.create(null);
+      controls.forEach(({ id, field, value }) => { choices[id] ||= Object.create(null); choices[id][field] = value.value; });
       conflicts.forEach((conflict) => reviewedConflicts.push({
         ...conflict,
         fields: conflict.fields.map((field) => ({
@@ -818,7 +812,9 @@ async function performSync() {
       return choices;
     },
     async confirm({ local, remote, albums, durationOutgoing = [], durationIncoming = [], coversOutgoing,
-      physicalOutgoing, physicalIncoming, migrating }) {
+      physicalOutgoing, physicalIncoming, migrating, linksOutgoing, linkChangesOutgoing = [], linkChangesIncoming = [] }) {
+      const linkChangeText = ({ id, provider, previous, next }) =>
+        `Associazione ${id} / ${provider}: ${valueText(previous, "edition_link:", null)} → ${valueText(next, "edition_link:", null)}`;
       const changesTo = (previous) => {
         const old = new Map(previous.map((album) => [album.id, album]));
         const next = new Map(albums.map((album) => [album.id, album]));
@@ -849,9 +845,12 @@ async function performSync() {
         node("h3", "Da inviare"), node("pre", [...changesTo(remote),
           ...(coversOutgoing ? ["Aggiorna l'archivio delle copertine."] : []),
           ...(physicalOutgoing ? ["Aggiorna i supporti CD e Vinile."] : []),
+          ...(linksOutgoing && !linkChangesOutgoing.length ? ["Ripristina l'archivio delle associazioni."] : []),
+          ...linkChangesOutgoing.map(linkChangeText),
           ...durationOutgoing.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
         node("h3", "Da ricevere"), node("pre", [...changesTo(local),
           ...(physicalIncoming ? ["Aggiorna i supporti CD e Vinile su questo dispositivo."] : []),
+          ...linkChangesIncoming.map(linkChangeText),
           ...durationIncoming.map((row) => `Durata: ${row.artist} - ${row.name} (${durationText(row.duration_ms)})`)].join("\n") || "Nessuna modifica."),
         node("h3", "Conflitti"), node("pre", conflictLines.join("\n") || "Nessun conflitto.")];
       return await choice("Conferma sincronizzazione", content, [["cancel", "Annulla"], ["sync", "Sincronizza"]]) === "sync";
@@ -951,12 +950,9 @@ $("collectionHome").addEventListener("click", () => {
 $("search").addEventListener("input", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 });
-$("quickListeningFilter").addEventListener("click", toggleQuickListeningFilter);
 ["statusFilter", "genreFilter", "formatFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
-  updateQuickListeningFilter();
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
-updateQuickListeningFilter();
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
 $("openQuickReview").addEventListener("click", () => {
   if (busy || !store) return;
