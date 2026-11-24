@@ -556,20 +556,20 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   assert.match(css, /min-width: 0/);
-  assert.match(html, /v1\.42\.1/); assert.match(sw, /v1\.42\.1/);
+  assert.match(html, /v1\.42\.2/); assert.match(sw, /v1\.42\.2/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
   assert.match(html, /frame-src https:\/\/embed\.tidal\.com;/);
-  assert.match(sw, /collection-app\.mjs\?v=37/); assert.match(sw, /collection\.css\?v=13/);
+  assert.match(sw, /collection-app\.mjs\?v=38/); assert.match(sw, /collection\.css\?v=14/);
   assert.match(sw, /tidal\.mjs\?v=17/); assert.doesNotMatch(sw, /tidal-ui\.mjs/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v1\.42\.1/); assert.match(mirrorWorker, /v1\.42\.1/);
+    assert.match(mirrorHtml, /v1\.42\.2/); assert.match(mirrorWorker, /v1\.42\.2/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}malt_metal.ico"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.doesNotMatch(mirrorHtml, /streaming-qobuz/);
-    for (const file of ["collection-app.mjs?v=37", "collection.css?v=13", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=17", "tidal-preview.mjs?v=1",
+    for (const file of ["collection-app.mjs?v=38", "collection.css?v=14", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=17", "tidal-preview.mjs?v=1",
       "physical-collection.css?v=3", "physical-collection.mjs?v=2", "unified-library.mjs?v=1", "physical-collection-ui.mjs?v=3",
       "qobuz.mjs?v=12", "music-app-links.mjs?v=6", "album-association.mjs?v=14", "music-library-choices.mjs?v=2", "service-requests.mjs?v=4",
       "collection-store.mjs?v=12", "collection-sync.mjs?v=10", "duration-sync.mjs?v=1", "collection-services.mjs?v=20", "music-suggestion-filters.mjs?v=4",

@@ -2,6 +2,10 @@
 
 ## Stato corrente e gerarchia
 
+### PWA 1.42.2 · Filtro rapido «In ascolto»
+
+La raccolta include un filtro rapido per mostrare gli album in ascolto.
+
 ### PWA 1.42.1 · Icone piu' riconoscibili
 
 Le icone delle azioni ora distinguono meglio controlli album, revisione,
