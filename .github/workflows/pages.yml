@@ -54,9 +54,46 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site
+        id: upload
         uses: actions/upload-pages-artifact@v3
         with:
           path: .
+      - name: Validate uploaded artifact ID
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        run: |
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::Pages upload did not return a valid artifact ID."
+            exit 1
+          fi
+      # Use the same Actions artifact service as deploy-pages, without re-uploading.
+      - name: Check Pages artifact availability
+        id: artifact_first
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/pages-artifact-check
+      - name: Wait before checking again
+        if: steps.artifact_first.outcome == 'failure'
+        run: sleep 10
+      - name: Retry Pages artifact availability
+        id: artifact_second
+        if: steps.artifact_first.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/pages-artifact-check
+      - name: Wait before final check
+        if: steps.artifact_second.outcome == 'failure'
+        run: sleep 20
+      - name: Final Pages artifact availability check
+        if: steps.artifact_second.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.upload.outputs.artifact_id }}
+          path: ${{ runner.temp }}/pages-artifact-check
       - name: Deploy to Pages
         id: deployment
         uses: actions/deploy-pages@v4
