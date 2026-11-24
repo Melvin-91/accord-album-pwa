@@ -44,6 +44,14 @@ const comparedEditions = new Set();
 let revealedAlbum = null, revealOrigin = null, quickReview = null;
 const collectionFilters = () => ({ query: $("search").value, status: $("statusFilter").value, genre: $("genreFilter").value,
   format: $("formatFilter").value, favoritesOnly: $("favoritesFilter").checked, favoriteIds: store.state.preferences.favoriteIds || [] });
+function updateQuickListeningFilter() {
+  $("quickListeningFilter").setAttribute("aria-pressed", String($("statusFilter").value === "listening"));
+}
+function toggleQuickListeningFilter() {
+  const status = $("statusFilter");
+  status.value = status.value === "listening" ? "" : "listening";
+  status.dispatchEvent(new Event("change", { bubbles: true }));
+}
 function revealCollectionAlbum(id) {
   if (!store.state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
   if (!revealedAlbum) revealOrigin = { scroll: scrollY, limit: visibleLimit };
@@ -943,9 +951,12 @@ $("collectionHome").addEventListener("click", () => {
 $("search").addEventListener("input", () => {
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 });
+$("quickListeningFilter").addEventListener("click", toggleQuickListeningFilter);
 ["statusFilter", "genreFilter", "formatFilter", "favoritesFilter"].forEach((id) => $(id).addEventListener("change", () => {
+  updateQuickListeningFilter();
   revealedAlbum = null; revealOrigin = null; visibleLimit = 40; closeAlbumOptions(); render();
 }));
+updateQuickListeningFilter();
 $("moreAlbums").addEventListener("click", () => { visibleLimit += 40; render(); });
 $("openQuickReview").addEventListener("click", () => {
   if (busy || !store) return;

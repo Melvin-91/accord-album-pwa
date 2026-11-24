@@ -82,6 +82,8 @@ a { color: var(--accent); text-underline-offset: 3px; }
 #feedback.error { color: #ffb1b1; }
 #filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; }
 #filters .search { flex: 1; min-width: min(200px, 100%); }
+#filters .quick-filters { display: flex; flex-wrap: wrap; gap: 8px; }
+#filters .quick-filters button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); background: var(--soft); }
 #filters .filter-disclosure { position: relative; flex: none; margin-left: auto; }
 #filters .filter-disclosure > summary { cursor: pointer; list-style: none; border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; font-size: .875rem; min-height: 44px; background: var(--surface); }
 #filters .filter-disclosure > summary::-webkit-details-marker { display: none; }
