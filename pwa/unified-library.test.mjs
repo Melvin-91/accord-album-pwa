@@ -7,6 +7,8 @@ import { createSyncDocument, validateAlbum } from "./core.mjs";
 import { durationDocument } from "./duration-sync.mjs";
 import { PHYSICAL_KEY, physicalDocument } from "./physical-collection.mjs";
 import { createUnifiedLibrary, readUnifiedLibrary } from "./unified-library.mjs";
+import { EDITION_LINKS_KEY, editionLinksDocument, localEditionLinks, mergeEditionLinks,
+  readEditionLinksDocument, validateEditionLinks } from "./edition-links-sync.mjs";
 
 const album = (id, name, changes = {}) => validateAlbum({ id, name, artist: "Björk", year: "1993",
   url: `https://open.spotify.com/album/${id}`, status: "liked", rating: 4.5, genres: ["Art Pop"],
@@ -84,6 +86,154 @@ function synchronize(storage, remote) {
   const store = createCollectionStore(storage);
   return { store, sync: createCollectionSync({ storage, store, covers, fetch: remote.request, unified: true }) };
 }
+
+test("le associazioni dei peer conservano identità storiche e chiavi non standard", () => {
+  for (const id of ["mb:synthetic", "ann:synthetic", "__proto__", "constructor"]) {
+    const link = { id: "tidal:1", name: "Edizione", source: [id, "", ""] };
+    const original = Object.fromEntries([[id, { tidal: link }]]);
+    assert.deepEqual(readEditionLinksDocument(editionLinksDocument(original)), original);
+    assert.deepEqual(validateEditionLinks(localEditionLinks(original), true), original);
+    const changed = Object.fromEntries([[id, { tidal: { ...link, id: "tidal:2" } }]]);
+    const conflict = mergeEditionLinks(original, changed, {});
+    assert.equal(conflict.conflicts[0].fields[0].field, "edition_link:tidal");
+    const choices = Object.fromEntries([[id, { "edition_link:tidal": "local" }]]);
+    assert.deepEqual(mergeEditionLinks(original, changed, {}, choices).links, changed);
+  }
+});
+
+test("sincronizza associazioni bidirezionali senza riattivare sorgenti obsolete", async () => {
+  const stale = { id: "tidal:123", name: "Edizione", source: [debut.id, debut.artist, "Titolo precedente"] };
+  const other = { id: "qobuz:abc", name: "Altra", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: stale } }), extra: { a: 1 } } });
+  const remote = github({ "library.json": document });
+  const storage = disk({ music: { albums: [debut], base: [debut] } });
+  storage.setItem(EDITION_LINKS_KEY, JSON.stringify(localEditionLinks({ [debut.id]: { qobuz: other } })));
+  const { store, sync } = synchronize(storage, remote);
+  await sync.sync({ ...agree, confirm: async (preview) => {
+    assert.equal(preview.linkChangesIncoming.length, 1);
+    assert.equal(preview.linkChangesOutgoing.length, 1);
+    return true;
+  } });
+  const merged = { [debut.id]: { qobuz: other, tidal: stale } };
+  assert.deepEqual(remote.document().extensions.edition_links.links, merged);
+  assert.deepEqual(remote.document().extensions.extra, { a: 1 });
+  assert.deepEqual(JSON.parse(storage.getItem(EDITION_LINKS_KEY)), localEditionLinks(merged));
+  assert.deepEqual(store.state.editionLinksBase, { owner: "melvin", links: merged });
+  await sync.sync({ ...agree, confirm: () => assert.fail("Nessuna modifica dopo la sincronizzazione") });
+  assert.deepEqual(remote.writes, ["library.json"]);
+});
+
+test("conflitto cancellazione modifica richiede scelta e propaga la cancellazione", async () => {
+  const link = { id: "tidal:123", name: "Uno", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: link } }) } });
+  const remote = github({ "library.json": document }), storage = disk();
+  const { sync } = synchronize(storage, remote);
+  await sync.sync(agree);
+  storage.setItem(EDITION_LINKS_KEY, "{}");
+  document.extensions.edition_links.links[debut.id].tidal.name = "Diverso";
+  remote.set("library.json", document);
+  const before = remote.writes.length;
+  assert.equal(await sync.sync({ chooseConflicts: async (conflicts) => {
+    assert.equal(conflicts[0].fields[0].field, "edition_link:tidal");
+    assert.equal(conflicts[0].fields[0].local, null);
+    return null;
+  }, confirm: () => assert.fail() }), false);
+  assert.equal(remote.writes.length, before);
+  await sync.sync({ chooseConflicts: async () => ({ [debut.id]: { "edition_link:tidal": "local" } }), confirm: async () => true });
+  assert.deepEqual(remote.document().extensions.edition_links.links, {});
+  assert.deepEqual(JSON.parse(storage.getItem(EDITION_LINKS_KEY)), {});
+});
+
+test("estensione mancante non equivale a cancellazione; estensione invalida blocca", async () => {
+  const link = { id: "qobuz:abc", name: "Album", source: [debut.id, debut.artist, debut.name] };
+  const links = { [debut.id]: { qobuz: link } };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument(links) } });
+  const remote = github({ "library.json": document }), storage = disk();
+  const { store, sync } = synchronize(storage, remote);
+  await sync.sync(agree);
+  delete document.extensions.edition_links;
+  remote.set("library.json", document);
+  await sync.sync(agree);
+  assert.deepEqual(remote.document().extensions.edition_links.links, links);
+  const state = store.state, saved = storage.getItem(EDITION_LINKS_KEY), writes = remote.writes.length;
+  document.extensions.edition_links = { format: "accord-edition-links", version: 99, links: {} };
+  remote.set("library.json", document);
+  await assert.rejects(sync.sync(agree), /Formato associazioni/);
+  assert.equal(store.state, state);
+  assert.equal(storage.getItem(EDITION_LINKS_KEY), saved);
+  assert.equal(remote.writes.length, writes);
+});
+
+test("l'ultima cancellazione locale viene pubblicata anche se l'estensione è assente", async () => {
+  const link = { id: "tidal:123", name: "Album", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: link } }) } });
+  const remote = github({ "library.json": document }), storage = disk();
+  const { sync } = synchronize(storage, remote);
+  await sync.sync(agree);
+  storage.setItem(EDITION_LINKS_KEY, "{}");
+  delete document.extensions.edition_links;
+  remote.set("library.json", document);
+  await sync.sync(agree);
+  assert.deepEqual(remote.document().extensions.edition_links, editionLinksDocument({}));
+});
+
+test("associazioni orfane restano disponibili anche quando l'album è stato rimosso", async () => {
+  const link = { id: "tidal:123", name: "Album", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [], physical: [], deletedAlbums: [debut], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: link } }) } });
+  const remote = github({ "library.json": document }), storage = disk();
+  const { store, sync } = synchronize(storage, remote);
+  await sync.sync(agree);
+  assert.deepEqual(store.state.albums, []);
+  assert.deepEqual(JSON.parse(storage.getItem(EDITION_LINKS_KEY)),
+    localEditionLinks({ [debut.id]: { tidal: link } }));
+  assert.deepEqual(remote.document().extensions.edition_links.links[debut.id].tidal, link);
+});
+
+test("valori discordanti alla prima sincronizzazione e sorgenti locali invalide non si perdono", async () => {
+  const link = { id: "tidal:123", name: "Remoto", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: link } }) } });
+  const remote = github({ "library.json": document }), storage = disk({ music: { albums: [debut], base: [debut] } });
+  const local = { [debut.id]: { tidal: { ...link, name: "Locale" } } };
+  storage.setItem(EDITION_LINKS_KEY, JSON.stringify(localEditionLinks(local)));
+  const { store, sync } = synchronize(storage, remote);
+  assert.equal(await sync.sync({ chooseConflicts: async (conflicts) => {
+    assert.equal(conflicts[0].fields[0].field, "edition_link:tidal");
+    return null;
+  }, confirm: () => assert.fail() }), false);
+  assert.equal(store.pendingChanges(), 1);
+  local[debut.id].tidal.source = "non-decodificabile";
+  storage.setItem(EDITION_LINKS_KEY, JSON.stringify(local));
+  assert.equal(store.pendingChanges(), 1);
+  await assert.rejects(sync.sync(agree), /Identita dell'associazione locale/);
+  assert.deepEqual(remote.writes, []);
+  assert.equal(JSON.parse(storage.getItem(EDITION_LINKS_KEY))[debut.id].tidal.source, "non-decodificabile");
+});
+
+test("modifica concorrente e salvataggio locale fallito non sovrascrivono associazioni", async () => {
+  const link = { id: "tidal:123", name: "Uno", source: [debut.id, debut.artist, debut.name] };
+  const document = createUnifiedLibrary({ albums: [debut], physical: [], deletedAlbums: [], durations: [],
+    migration: noLegacy, extensions: { edition_links: editionLinksDocument({ [debut.id]: { tidal: link } }) } });
+  const remote = github({ "library.json": document }), storage = disk();
+  const { store, sync } = synchronize(storage, remote);
+  await assert.rejects(sync.sync({ ...agree, confirm: async () => {
+    storage.setItem(EDITION_LINKS_KEY, "{}"); return true;
+  } }), /associazioni sono cambiate/);
+  assert.deepEqual(remote.writes, []);
+  const previous = storage.getItem(EDITION_LINKS_KEY), set = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (key === COLLECTION_KEY) throw new Error("Quota exceeded");
+    set(key, value);
+  };
+  await assert.rejects(sync.sync(agree), /Quota exceeded/);
+  assert.equal(storage.getItem(EDITION_LINKS_KEY), previous);
+  assert.equal(store.state.editionLinksBase, undefined);
+});
 
 test("migra le raccolte nella stessa scrittura conservando metadati, rimozioni e supporti", async () => {
   const remote = github({ "albums.json": legacyMusic([debut], [post]),

@@ -1440,44 +1440,17 @@ test("the collection exposes exactly the canonical listening states", () => {
     assert.equal(store.state.albums[0].status, status);
   }
 });
-test("the quick listening filter toggles and tracks the listening status selector", () => {
-  const app = readFileSync(new URL("collection-app.mjs", import.meta.url), "utf8");
-  const start = app.indexOf("function updateQuickListeningFilter()");
-  const end = app.indexOf("\nfunction revealCollectionAlbum", start);
-  assert.ok(start >= 0 && end > start);
-  const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; } };
-  const status = { value: "queued", dispatchEvent(event) { this.event = event; filters.updateQuickListeningFilter(); } };
-  const elements = { quickListeningFilter: button, statusFilter: status };
-  let filters;
-  filters = runInNewContext(`${app.slice(start, end)}\n({ updateQuickListeningFilter, toggleQuickListeningFilter })`, {
-    $: (selector) => elements[selector],
-    Event: class { constructor(type, options) { this.type = type; this.bubbles = options.bubbles; } },
-  });
-  filters.updateQuickListeningFilter();
-  assert.equal(button.attributes["aria-pressed"], "false");
-  filters.toggleQuickListeningFilter();
-  assert.equal(status.value, "listening");
-  assert.equal(status.event.type, "change");
-  assert.equal(status.event.bubbles, true);
-  assert.equal(button.attributes["aria-pressed"], "true");
-  filters.toggleQuickListeningFilter();
-  assert.equal(status.value, "");
-  assert.equal(button.attributes["aria-pressed"], "false");
-  status.value = "liked";
-  filters.updateQuickListeningFilter();
-  assert.equal(button.attributes["aria-pressed"], "false");
-});
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=38/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=14">/);
+  assert.match(html, /collection-app\.mjs\?v=39/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=15">/);
   assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=3">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*class="orbit-monogram" aria-hidden="true">a\./);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.42\.2/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.0/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
@@ -1485,10 +1458,11 @@ test("the active shell contains only collection workflows and precaches its comp
     assert.ok(html.includes(`id="${id}"`));
   }
   assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
-  assert.match(html, /<div class="quick-filters" role="group" aria-label="Filtri rapidi">[\s\S]*<button id="quickListeningFilter" type="button" class="secondary" aria-pressed="false" data-command-icon="headphones">In ascolto<\/button>[\s\S]*<\/div>/);
+  assert.doesNotMatch(html, /id="quickListeningFilter"/);
+  assert.match(html, /id="statusFilter"[\s\S]*<option value="listening">In ascolto<\/option>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);
   for (const [, id] of app.matchAll(/\$\("([^"]+)"\)/g)) assert.ok(html.includes(`id="${id}"`), `Missing active control ${id}`);
-  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "album-association.mjs", "music-library-choices.mjs", "service-requests.mjs",
+  const modules = ["collection-app.mjs", "collection-store.mjs", "collection-sync.mjs", "edition-links-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "core.mjs", "tidal.mjs", "qobuz.mjs", "music-app-links.mjs", "album-association.mjs", "music-library-choices.mjs", "service-requests.mjs",
     "collection-qol.mjs", "unified-library.mjs", "physical-collection-ui.mjs", "physical-collection.mjs"];
   for (const file of modules) for (const [, dependency] of read(file).matchAll(/(?:from\s+|import\()["']\.\/([^"']+)["']/g)) {
     assert.ok(sw.includes(`"./${dependency}"`), `Offline dependency missing: ${dependency}`);
