@@ -1,5 +1,9 @@
 # Accord · Raccolta album PWA
 
+### PWA 6.1.0 — Accord Suite Design System
+
+` suite.css ` contiene la base grafica comune condivisa con Scout: palette, temi, tipografia, spaziature, schede, controlli, menu, finestre, dock, stati interattivi e accessibilità. Il foglio è caricato dopo i layout specifici ed è disponibile offline. Nessun cambiamento ai dati o ai token.
+
 ### PWA 1.44.3 — ripresa della navigazione
 
 Ripristino della vista, filtri, paginazione e posizione nella sessione; scelta del voto minimo nel suggerimento d'ascolto. Data di aggiunta locale per le nuove aggiunte: non ricostruisce la data storica degli album già presenti o sincronizzati altrove.
