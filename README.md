@@ -1,5 +1,9 @@
 # Accord · Raccolta album PWA
 
+### PWA 1.44.1 — collegamenti con Scout e selezione multipla
+
+Gli acquisti proposti da Scout si aggiungono ai supporti locali solo dopo conferma; sincronizzazione esplicita invariata. Importazione del backup personale Scout per marcatori e statistiche non live; nessuna credenziale condivisa. Aggiunta multipla di generi e supporti, senza rimuovere i supporti esistenti.
+
 ### PWA 1.44.0 — ergonomia della raccolta
 
 Viste griglia/lista/mosaico, ordinamenti e viste locali salvabili, filtri rimovibili, statistiche, suggerimento locale in base alla durata e ai filtri, selezione multipla per stato con conferma, temi locali e collegamenti Scout per CD/vinile. L'ordine di inserimento usa l'ordine nel catalogo locale, non una data di aggiunta non disponibile. Nessun token trasmesso a Scout.

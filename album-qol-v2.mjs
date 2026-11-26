@@ -11,3 +11,12 @@ export function collectionStats(rows,durations={}){
 }
 export function listeningCandidates(rows,durations,minutes){return rows.filter(r=>r.album&&(!minutes||Number.isFinite(durations[r.id])&&durations[r.id]>0&&durations[r.id]<=minutes*60000))}
 export function scoutLink(artist,title,format){const url=new URL("https://music-wishlist-monitor.henryfelber.workers.dev/wishlist");url.hash=new URLSearchParams({add:"1",artist,album:title,format}).toString();return url.href}
+
+export function importIntent(hash){const p=new URLSearchParams(String(hash||"").replace(/^#/,""));if(p.get("purchase")!=="1")return null;const artist=p.get("artist")?.trim(),title=p.get("album")?.trim(),format=p.get("format");return artist&&title&&artist.length<=200&&title.length<=200&&["CD","Vinyl"].includes(format)&&!/[\x00-\x1f]/.test(artist+title)?{artist,title,cd:format==="CD",vinyl:format==="Vinyl"}:null}
+export function scoutIdentity(artist,title){return [artist,title].map(v=>String(v||"").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu," ").trim()).join("|")}
+export function scoutSnapshot(data){
+ if(data?.format!=="music-wishlist-personal-backup"||data.version!==1||!Array.isArray(data.wishlist)||!Array.isArray(data.purchases)||data.wishlist.length>1000||data.purchases.length>10000)throw Error("Backup Scout non valido.");
+ const rows=data.wishlist.map(r=>{if(typeof r.artist!=="string"||typeof r.album!=="string"||!r.artist.trim()||!r.album.trim()||!["CD","Vinyl"].includes(r.format))throw Error("Supporto non valido");return {artist:r.artist.slice(0,200),album:r.album.slice(0,200),format:r.format,priority:r.priority==="paused"?"paused":"active"}});
+ const purchases=data.purchases.filter(r=>Number.isFinite(r.purchase_total)&&r.purchase_total>0);
+ return {rows,purchases:data.purchases.length,known:purchases.length,spend:purchases.reduce((sum,r)=>sum+Math.round(r.purchase_total*100),0)/100,imported_at:new Date().toISOString()};
+}

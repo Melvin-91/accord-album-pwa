@@ -1,6 +1,6 @@
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=14";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=15";
 import { createCollectionSync } from "./collection-sync.mjs?v=11";
 import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, setTidalAlbumLinkResolver,
   webMusicLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=7";
@@ -16,7 +16,7 @@ import { PHYSICAL_KEY } from "./physical-collection.mjs?v=2";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   collectionRows, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=6";
 
-import {sortRows,collectionStats,listeningCandidates,scoutLink} from "./album-qol-v2.mjs?v=1";
+import {sortRows,collectionStats,listeningCandidates,scoutLink,importIntent,scoutIdentity,scoutSnapshot} from "./album-qol-v2.mjs?v=2";
 installCommandIcons(document);
 installSelectWheelGuard(document);
 
@@ -27,6 +27,7 @@ const qolRead=(key,fallback)=>{try{return JSON.parse(localStorage.getItem("accor
 const qolWrite=(key,value)=>{try{localStorage.setItem("accord-qol:"+key,JSON.stringify(value))}catch{}};
 let qolReverse=!!qolRead("reverse",false),qolMulti=false;
 const qolSelection=new Set();
+let scoutImported=qolRead("scout-import",null);
 const stateIcon = (status) => commandIconElement(commandIconName(states[status]), document);
 const refreshStateIcon = (label, status) => {
   const icon = label.querySelector(":scope > .command-icon");
@@ -611,6 +612,7 @@ function render() {
     const { element } = cards.get(id);
     physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
       physical || { cd: false, vinyl: false });
+    element.querySelector(".qol-watch")?.remove();const tracked=(scoutImported?.rows||[]).filter(x=>x.priority!=="paused"&&scoutIdentity(x.artist,x.album)===scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title));if(tracked.length){const badge=node("p","Scout · "+[...new Set(tracked.map(x=>x.format==="Vinyl"?"Vinile":"CD"))].join(" + "),{class:"qol-watch muted",title:"Ultimo backup Scout importato, non aggiornamento live"});(element.querySelector(".album-metadata")||element).append(badge)}
     let select=element.querySelector(".qol-select");
     if(qolMulti&&album){if(!select){select=node("label","Seleziona",{class:"qol-select"});const check=node("input","",{type:"checkbox","aria-label":"Seleziona "+album.name});select.prepend(check);check.addEventListener("change",()=>{if(check.checked)qolSelection.add(id);else qolSelection.delete(id);$("qolSelected").textContent=qolSelection.size+" selezionati"});element.prepend(select)}select.querySelector("input").checked=qolSelection.has(id)}else select?.remove();
     return element;
@@ -1023,7 +1025,10 @@ $("qolTheme").value=qolRead("theme","copper");document.documentElement.dataset.t
 $("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;render()});
 $("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
 $("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});
-$("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collectionRows(store.state.albums,store.state.physical),s=collectionStats(visible,store.durations());const body=[node("p",s.total+" album · "+s.cd+" CD · "+s.vinyl+" vinili · "+s.queued+" da ascoltare"),node("p","Durata nota: "+durationText(s.totalDuration)+" su "+s.knownDuration+" album")];for(const [title,values] of [["Generi",s.genres],["Artisti",s.artists],["Decenni",s.decades],["Voti",s.ratings]]){body.push(node("h3",title));for(const [name,count] of values)body.push(node("p",name+" · "+count))}await choice("Statistiche raccolta",body,[["close","Chiudi"]])}));
+$("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collectionRows(store.state.albums,store.state.physical),s=collectionStats(visible,store.durations());const body=[node("p",s.total+" album · "+s.cd+" CD · "+s.vinyl+" vinili · "+s.queued+" da ascoltare"),node("p","Durata nota: "+durationText(s.totalDuration)+" su "+s.knownDuration+" album")];for(const [title,values] of [["Generi",s.genres],["Artisti",s.artists],["Decenni",s.decades],["Voti",s.ratings]]){body.push(node("h3",title));for(const [name,count] of values)body.push(node("p",name+" · "+count))}if(scoutImported)body.push(node("h3","Scout · ultimo backup importato"),node("p",scoutImported.rows.length+" supporti in wishlist · "+scoutImported.purchases+" acquisti · "+scoutImported.spend.toLocaleString("it-IT",{style:"currency",currency:"EUR"})+" spesi ("+scoutImported.known+" prezzi noti)"));await choice("Statistiche raccolta",body,[["close","Chiudi"]])}));
+function scoutStatus(){ $("qolScoutStatus").textContent=scoutImported?"Backup importato il "+new Date(scoutImported.imported_at).toLocaleString("it-IT")+". Dati non in tempo reale.":"Nessun backup Scout importato."}scoutStatus();$("qolScoutFile").addEventListener("change",async()=>{try{const f=$("qolScoutFile").files[0];if(!f||f.size>5000000)throw Error("File non valido.");scoutImported=scoutSnapshot(JSON.parse(await f.text()));qolWrite("scout-import",scoutImported);scoutStatus();render()}catch(e){report(e.message,true)}finally{$("qolScoutFile").value=""}});$("qolScoutClear").addEventListener("click",()=>{scoutImported=null;qolWrite("scout-import",null);scoutStatus();render()});
+$("qolGenreApply").addEventListener("click",()=>{const g=$("qolGenre").value.trim();if(!g||!qolSelection.size||busy)return;if(confirm("Aggiungere il genere a "+qolSelection.size+" album?")){if(mutate(()=>store.addGenreMany([...qolSelection],g)))$("qolClear").click()}});
+for(const [id,format] of [["qolCD","cd"],["qolVinyl","vinyl"]])$(id).addEventListener("click",()=>{if(!qolSelection.size||busy)return;if(confirm("Segnare "+qolSelection.size+" supporti come posseduti?")){if(mutate(()=>store.addPhysicalMany([...qolSelection],format)))$("qolClear").click()}});
 $("qolPick").addEventListener("click",()=>run(async()=>{const raw=prompt("Minuti disponibili (vuoto: nessun limite)","60");if(raw===null)return;const minutes=raw.trim()?Number(raw):0;if(!Number.isFinite(minutes)||minutes<0)return;const {visible}=collectionRows(store.state.albums,store.state.physical,collectionFilters()),candidates=listeningCandidates(visible,store.durations(),minutes);if(!candidates.length){report("Nessun album compatibile con i filtri e la durata.");return}const picked=candidates[Math.floor(Math.random()*candidates.length)];if(await choice("Cosa ascolto oggi?",[node("p",picked.artist+" — "+picked.name)], [["cancel","Chiudi"],["show","Mostra album"]])==="show")revealCollectionAlbum(picked.id)}));
 $("collectionHome").addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "auto" });
@@ -1299,6 +1304,9 @@ window.addEventListener("storage", (event) => {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }
 });
+function receiveScout(){if(busy||!store)return;const intent=importIntent(location.hash);if(!intent)return;window.history.replaceState(null,"",location.pathname+location.search);if(confirm("Aggiungere alla collezione "+intent.artist+" — "+intent.title+" ("+(intent.cd?"CD":"Vinile")+")?"))mutate(()=>store.addPhysical([intent]))}
+window.addEventListener("hashchange",receiveScout);
+if(!new URL(location.href).searchParams.has("code"))receiveScout();
 const callback = new URL(location.href);
 if (callback.searchParams.has("code") || callback.searchParams.has("error")) {
   run(async () => {

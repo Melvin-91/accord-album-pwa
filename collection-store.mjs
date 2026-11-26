@@ -316,6 +316,17 @@ export function createCollectionStore(storage) {
       if([...selected].some(id=>!state.albums.some(a=>a.id===id)))throw new Error("Raccolta cambiata.");
       commit({...state,albums:state.albums.map(a=>selected.has(a.id)?validateAlbum({...a,...changes}):a)});
     },
+    addGenreMany(ids, genre) {
+      const selected=new Set(ids);
+      if(!selected.size||typeof genre!=="string"||!genre.trim()||genre.length>80||[...selected].some(id=>!state.albums.some(a=>a.id===id)))throw Error("Selezione o genere non validi.");
+      commit({...state,albums:state.albums.map(a=>selected.has(a.id)?validateAlbum({...a,genres:[...new Set([...a.genres,genre.trim()])]}):a)});
+    },
+    addPhysicalMany(ids, format) {
+      const selected=new Set(ids);
+      if(!selected.size||!["cd","vinyl"].includes(format)||[...selected].some(id=>!state.albums.some(a=>a.id===id)))throw Error("Selezione o formato non validi.");
+      assertPhysicalEditable();
+      commit({...state,physical:addPhysicalRecords(state.physical,state.albums.filter(a=>selected.has(a.id)).map(a=>({artist:a.artist,title:a.name,cd:format==="cd",vinyl:format==="vinyl"})))});
+    },
     favorite(id) {
       if (!state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
       const favorites = new Set(state.preferences.favoriteIds || []);

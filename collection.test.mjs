@@ -1478,14 +1478,14 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=42/);
-  assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=15">/);
+  assert.match(html, /collection-app\.mjs\?v=44/);
+  assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=17">/);
   assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=3">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*<img src="[^"]*accord-180\.png\?brand=album-1433" width="48" height="48" alt="" aria-hidden="true">/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.6/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.44\.1/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
@@ -1539,7 +1539,7 @@ test("TIDAL redirect control is visible and changed modules use fresh precache U
   assert.match(html, /id="copyRedirectUri"/);
   assert.ok(app.includes('$("redirectField").hidden = provider === "qobuz"'));
   assert.ok(app.includes('new URL("./", location.href).href'));
-  assert.ok(html.includes("collection-app.mjs?v=42"));
+  assert.ok(html.includes("collection-app.mjs?v=44"));
   assert.ok(app.includes("collection-services.mjs?v=22"));
-  for (const resource of ["collection-app.mjs?v=42","collection-services.mjs?v=22"]) assert.ok(sw.includes(resource));
+  for (const resource of ["collection-app.mjs?v=44","collection-services.mjs?v=22"]) assert.ok(sw.includes(resource));
 });
