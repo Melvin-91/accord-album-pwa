@@ -6,19 +6,19 @@
   <meta name="theme-color" content="#15191e">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; frame-src https://embed.tidal.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord Album v1.44.2 · La mia raccolta</title>
+  <title>Accord Album v1.44.3 · La mia raccolta</title>
   <meta name="application-name" content="Accord Album"><meta name="apple-mobile-web-app-title" content="Accord Album">
   <link rel="apple-touch-icon" sizes="180x180" href="./assets/accord-180.png?brand=album-1433">
   <link rel="icon" href="./assets/accord-192.png?brand=album-1433">
   <link rel="manifest" href="./manifest.json?brand=album-1433">
-  <link rel="stylesheet" href="./collection.css?v=18">
+  <link rel="stylesheet" href="./collection.css?v=19">
   <link rel="stylesheet" href="./physical-collection.css?v=3">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <img src="./assets/accord-180.png?brand=album-1433" width="48" height="48" alt="" aria-hidden="true">
-      <div><h1>Accord Album</h1><span class="app-version" id="version">App attiva v1.44.2</span></div>
+      <div><h1>Accord Album</h1><span class="app-version" id="version">App attiva v1.44.3</span></div>
     </div>
     <span id="headerSyncState" class="sync-state">Solo sul dispositivo</span>
   </header>
@@ -46,8 +46,8 @@
     </div>
     <div class="qol-toolbar">
       <label>Vista<select id="qolView"><option value="grid">Griglia</option><option value="list">Lista compatta</option><option value="mosaic">Mosaico</option></select></label>
-      <label>Ordina<select id="qolSort"><option value="artist">Artista</option><option value="title">Titolo</option><option value="year">Anno</option><option value="rating">Voto</option><option value="duration">Durata</option><option value="position">Ordine di inserimento nella raccolta</option></select></label>
-      <button id="qolReverse" type="button" class="secondary" aria-pressed="false">Inverti ordine</button>
+      <label>Ordina<select id="qolSort"><option value="artist">Artista</option><option value="title">Titolo</option><option value="year">Anno</option><option value="rating">Voto</option><option value="duration">Durata</option><option value="position">Ordine nella raccolta</option><option value="added">Data aggiunta locale (se nota)</option></select></label>
+      <button id="qolReverse" type="button" class="secondary" aria-pressed="false">Inverti ordine</button><a class="qol-scout" href="https://music-wishlist-monitor.henryfelber.workers.dev/">Scout ↗</a>
     </div>
     <div id="qolChips" class="qol-chips" aria-label="Filtri attivi"></div>
     <details class="filter-disclosure"><summary>Viste salvate e strumenti</summary>
@@ -173,6 +173,6 @@
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <dialog id="qolActionsDialog" aria-labelledby="qolActionsTitle"><div class="dialog-heading"><h2 id="qolActionsTitle">Gestisci album</h2><button type="button" id="qolActionsClose">Chiudi</button></div><div id="qolActionsBody"></div></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=45"></script>
+  <script type="module" src="./collection-app.mjs?v=46"></script>
 </body>
 </html>

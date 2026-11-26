@@ -7,3 +7,5 @@ test("explicit Scout purchase and private snapshot",()=>{assert.deepEqual(import
 
 import {personalCards,readScoutPersonal,validPersonalCover} from "./album-qol-v2.mjs";
 test("export personal artwork only and read Scout without writes",async()=>{const data=personalCards(rows,{});assert.equal(data.cards.length,2);assert(!("cover" in data.cards[0]));assert(!validPersonalCover("https://x"));let calls=0;const r=await readScoutPersonal("test",async(url,opts)=>{calls++;assert.equal(opts.headers.Authorization,"Bearer test");assert(url.includes("music-wishlist-monitor/contents/"));return Response.json(url.includes("wishlist.json")?[{artist:"A",album:"B",format:"CD"}]:[])});assert.equal(r.rows.length,1);assert.equal(calls,2)});
+
+test("new local addition dates are sortable; old unknown dates stay unknown; listening can filter rating",()=>{assert.equal(sortRows(rows,"added",true,{}, {},{"2":100})[0].id,"2");assert.equal(listeningCandidates(rows,{},0,4).length,1)});

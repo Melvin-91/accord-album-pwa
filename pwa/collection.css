@@ -202,3 +202,5 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
 #qolActionsBody .album-controls{display:grid;gap:10px}#qolActionsBody .dialog-actions{margin-top:16px}.qol-personal-art{z-index:2}.qol-physical-scout{grid-area:actions;display:grid}.qol-art-controls{padding:10px 0;display:grid;gap:6px}#albumList[data-view=mosaic] .album-card:has(.album-options[open]) .card-actions{display:flex}
 :root[data-theme=midnight]:not([data-contrast=high]){background:#111c2a;--navigation:#101927;--soft:#263e55;--focus:#9ac8f0;--on-accent:#152c42;--accent-hover:#c2e2ff}
 :root[data-theme=forest]:not([data-contrast=high]){background:#141e1b;--navigation:#101915;--soft:#304238;--focus:#b7d7a8;--on-accent:#213825;--accent-hover:#d4eac8}
+
+.qol-physical-scout a{display:block}.qol-physical-art{grid-area:options}.qol-physical-scout summary,.qol-physical-art summary{font-size:.8rem;color:var(--muted);min-height:40px;cursor:pointer}.qol-toolbar>a{margin-left:auto}

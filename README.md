@@ -1,5 +1,9 @@
 # Accord · Raccolta album PWA
 
+### PWA 1.44.3 — ripresa della navigazione
+
+Ripristino della vista, filtri, paginazione e posizione nella sessione; scelta del voto minimo nel suggerimento d'ascolto. Data di aggiunta locale per le nuove aggiunte: non ricostruisce la data storica degli album già presenti o sincronizzati altrove.
+
 ### PWA 1.44.2 — pannello album e schede personali
 
 Pannello modale dal basso, copertine caricate personalmente e export di schede essenziali. Il trasferimento non include immagini ottenute dai servizi musicali. Lettura Scout opzionale tramite lo stesso token GitHub, se il token autorizza il repository Scout; backup JSON come alternativa.
