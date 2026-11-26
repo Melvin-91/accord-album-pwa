@@ -1554,3 +1554,8 @@ non album interi. La funzione richiede il permesso Spotify
 La chiave API Last.fm, l'username e i filtri non vengono trasferiti a GitHub.
 Gli ascolti vengono esportati soltanto con l'azione esplicita **Esporta Last.fm**
 in Desktop; la PWA li legge e li conserva offline, ma non li scrive nel repository.
+
+## Versionamento della famiglia Accord
+
+Da 6.0.0 (riallineamento della numerazione, senza migrazione dei dati), entrambe le PWA usano MAJOR.MINOR.PATCH: MAJOR per modifiche incompatibili/strutturali, MINOR per funzionalità compatibili, PATCH per bug e ritocchi. Ogni app ha una sequenza indipendente; non incrementare l'altra senza un suo rilascio. Per ogni pubblicazione incrementare la versione appropriata e mantenere allineati titolo, badge, cache del service worker e test. Non cambiare identificativo PWA, scope, storage o URL OAuth per il solo versionamento. Verificare i test e l'effettivo deploy prima di dichiarare pubblicato il rilascio.
+
