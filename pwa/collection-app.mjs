@@ -1,5 +1,5 @@
 import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
-import {installSuiteSwitch} from "./suite-switch.mjs?v=1";
+import {installSuiteSwitch} from "./suite-switch.mjs?v=2";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=15";

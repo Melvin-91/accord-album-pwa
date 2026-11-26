@@ -1,17 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {installedAppURL} from "./suite-switch.mjs";
-test("iOS standalone app switch uses installed PWA URL without browser fallback",()=>{
-  const scout="https://music-wishlist-monitor.henryfelber.workers.dev/";
-  const album="https://melvin-91.github.io/accord-album-pwa/";
+import {requiresManualSwitch} from "./suite-switch.mjs";
+test("iOS standalone plain app switches stay in the installed session",()=>{
   const iphone={standalone:true,userAgent:"iPhone"};
-  for(const base of [scout,album]){
-    assert.equal(installedAppURL(base,base,iphone),base.replace("https:","webapp:"));
-    assert.equal(installedAppURL(base,base,{...iphone,standalone:false}),null);
-    assert.equal(installedAppURL(base,base,{standalone:true,userAgent:"Android"}),null);
-    assert.equal(installedAppURL(base,base,{standalone:true,platform:"MacIntel",maxTouchPoints:5}),base.replace("https:","webapp:"));
-    assert.equal(installedAppURL(base+"#add=1",base,iphone),null);
-    assert.equal(installedAppURL(base+"?token=not-real",base,iphone),null);
-    assert.equal(installedAppURL("https://example.org/",base,iphone),null);
+  for(const base of ["https://music-wishlist-monitor.henryfelber.workers.dev/","https://melvin-91.github.io/accord-album-pwa/"]){
+    assert.equal(requiresManualSwitch(base,base,iphone),true);
+    assert.equal(requiresManualSwitch(base,base,{...iphone,standalone:false}),false);
+    assert.equal(requiresManualSwitch(base,base,{standalone:true,userAgent:"Android"}),false);
+    assert.equal(requiresManualSwitch(base,base,{standalone:true,platform:"MacIntel",maxTouchPoints:5}),true);
+    assert.equal(requiresManualSwitch(base+"#add=1",base,iphone),false);
+    assert.equal(requiresManualSwitch(base+"?test=1",base,iphone),false);
+    assert.equal(requiresManualSwitch("https://example.org/",base,iphone),false);
   }
 });
