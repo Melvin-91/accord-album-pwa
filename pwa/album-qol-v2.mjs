@@ -20,3 +20,20 @@ export function scoutSnapshot(data){
  const purchases=data.purchases.filter(r=>Number.isFinite(r.purchase_total)&&r.purchase_total>0);
  return {rows,purchases:data.purchases.length,known:purchases.length,spend:purchases.reduce((sum,r)=>sum+Math.round(r.purchase_total*100),0)/100,imported_at:new Date().toISOString()};
 }
+
+export function validPersonalCover(value){return typeof value==="string"&&value.length<=50000&&/^data:image\/jpeg;base64,\/9j\/[A-Za-z0-9+/]+={0,2}$/.test(value)}
+export async function makePersonalCover(file){
+ if(!file||!["image/jpeg","image/png","image/webp"].includes(file.type)||file.size>10000000)throw Error("Scegli JPEG, PNG o WebP fino a 10 MB.");
+ const url=URL.createObjectURL(file),image=new Image();
+ try{await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error("Immagine non leggibile."));image.src=url});
+ const canvas=document.createElement("canvas"),side=160;canvas.width=canvas.height=side;const ctx=canvas.getContext("2d");ctx.fillStyle="#15191e";ctx.fillRect(0,0,side,side);const scale=Math.min(side/image.width,side/image.height);ctx.drawImage(image,(side-image.width*scale)/2,(side-image.height*scale)/2,image.width*scale,image.height*scale);const data=canvas.toDataURL("image/jpeg",.7);if(!validPersonalCover(data))throw Error("Immagine troppo grande.");return data}finally{URL.revokeObjectURL(url)}
+}
+export function personalCards(rows,covers={}){
+ return {format:"accord-personal-cards",version:1,exported_at:new Date().toISOString(),cards:rows.slice(0,1000).map(r=>({artist:r.artist,title:r.name,year:Number(r.album?.year)||null,genres:(r.genres||[]).filter(x=>typeof x==="string").slice(0,10),...(validPersonalCover(covers[scoutIdentity(r.artist,r.name)])?{cover:covers[scoutIdentity(r.artist,r.name)]}:{})}))};
+}
+export async function readScoutPersonal(token,fetcher=fetch){
+ if(!token)throw Error("Token GitHub non configurato; usa il backup Scout.");
+ const read=async name=>{const res=await fetcher("https://api.github.com/repos/Melvin-91/music-wishlist-monitor/contents/"+name+"?ref=main",{headers:{Authorization:"Bearer "+token,Accept:"application/vnd.github.raw+json"},cache:"no-store",redirect:"error"});if(!res.ok)throw Error("Il token attuale non consente la lettura di Scout. Usa il backup JSON.");const raw=await res.text();if(raw.length>5000000)throw Error("Archivio Scout troppo grande.");return JSON.parse(raw)};
+ const [wishlist,purchases]=await Promise.all([read("wishlist.json"),read("purchased.json")]);
+ return scoutSnapshot({format:"music-wishlist-personal-backup",version:1,wishlist,purchases});
+}

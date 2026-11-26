@@ -1,5 +1,9 @@
 # Accord · Raccolta album PWA
 
+### PWA 1.44.2 — pannello album e schede personali
+
+Pannello modale dal basso, copertine caricate personalmente e export di schede essenziali. Il trasferimento non include immagini ottenute dai servizi musicali. Lettura Scout opzionale tramite lo stesso token GitHub, se il token autorizza il repository Scout; backup JSON come alternativa.
+
 ### PWA 1.44.1 — collegamenti con Scout e selezione multipla
 
 Gli acquisti proposti da Scout si aggiungono ai supporti locali solo dopo conferma; sincronizzazione esplicita invariata. Importazione del backup personale Scout per marcatori e statistiche non live; nessuna credenziale condivisa. Aggiunta multipla di generi e supporti, senza rimuovere i supporti esistenti.

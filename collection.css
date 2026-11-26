@@ -197,3 +197,8 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
 :root[data-theme=forest]:not([data-contrast=high]){--bg:#141e1b;--surface:#1c2b25;--raised:#293b32;--line:#3a5145;--accent:#b7d7a8}
 
 .qol-watch{font-size:.75rem;color:var(--accent);margin:4px 0}#albumList[data-view=mosaic] .qol-watch{display:block}.qol-select{grid-area:auto}
+
+#qolActionsDialog{margin:auto auto 0;width:min(100%,580px);max-height:calc(100dvh - 24px);border-radius:20px 20px 0 0;padding-bottom:calc(20px + env(safe-area-inset-bottom));overflow:auto}
+#qolActionsBody .album-controls{display:grid;gap:10px}#qolActionsBody .dialog-actions{margin-top:16px}.qol-personal-art{z-index:2}.qol-physical-scout{grid-area:actions;display:grid}.qol-art-controls{padding:10px 0;display:grid;gap:6px}#albumList[data-view=mosaic] .album-card:has(.album-options[open]) .card-actions{display:flex}
+:root[data-theme=midnight]:not([data-contrast=high]){background:#111c2a;--navigation:#101927;--soft:#263e55;--focus:#9ac8f0;--on-accent:#152c42;--accent-hover:#c2e2ff}
+:root[data-theme=forest]:not([data-contrast=high]){background:#141e1b;--navigation:#101915;--soft:#304238;--focus:#b7d7a8;--on-accent:#213825;--accent-hover:#d4eac8}

@@ -4,3 +4,6 @@ test("sort and collection stats",()=>{assert.equal(sortRows(rows,"rating",true)[
 
 import {importIntent,scoutSnapshot} from "./album-qol-v2.mjs";
 test("explicit Scout purchase and private snapshot",()=>{assert.deepEqual(importIntent("#purchase=1&artist=A&album=B&format=CD"),{artist:"A",title:"B",cd:true,vinyl:false});assert.equal(importIntent("#purchase=1&artist=A&album=B&format=X"),null);assert.equal(scoutSnapshot({format:"music-wishlist-personal-backup",version:1,wishlist:[{artist:"A",album:"B",format:"CD"}],purchases:[{purchase_total:12.30}]}).spend,12.30);assert.throws(()=>scoutSnapshot({wishlist:[]}))});
+
+import {personalCards,readScoutPersonal,validPersonalCover} from "./album-qol-v2.mjs";
+test("export personal artwork only and read Scout without writes",async()=>{const data=personalCards(rows,{});assert.equal(data.cards.length,2);assert(!("cover" in data.cards[0]));assert(!validPersonalCover("https://x"));let calls=0;const r=await readScoutPersonal("test",async(url,opts)=>{calls++;assert.equal(opts.headers.Authorization,"Bearer test");assert(url.includes("music-wishlist-monitor/contents/"));return Response.json(url.includes("wishlist.json")?[{artist:"A",album:"B",format:"CD"}]:[])});assert.equal(r.rows.length,1);assert.equal(calls,2)});
