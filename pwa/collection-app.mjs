@@ -1236,12 +1236,20 @@ if (callback.searchParams.has("code") || callback.searchParams.has("error")) {
   });
 }
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("./sw.js").then((registration) => {
+  navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" }).then((registration) => {
     function updateReady() { $("update").hidden = false; }
     if (registration.waiting) updateReady();
     registration.addEventListener("updatefound", () => registration.installing?.addEventListener("statechange", () => {
       if (registration.waiting && navigator.serviceWorker.controller) updateReady();
     }));
+    const checkUpdate = () => {
+      if (registration.waiting) updateReady();
+      return registration.update().catch(() => {});
+    };
+    void checkUpdate();
+    window.addEventListener("pageshow", checkUpdate);
+    window.addEventListener("focus", checkUpdate);
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") void checkUpdate(); });
     $("update").addEventListener("click", () => run(async () => {
       store.assertCurrent();
       const answer = await choice("Aggiorna PWA", [node("p", "I dati salvati restano. I campi non salvati verranno persi.")],
