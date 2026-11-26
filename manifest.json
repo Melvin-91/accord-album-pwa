@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Accord · La mia raccolta",
-  "short_name": "Accord",
+  "name": "Accord Album",
+  "short_name": "Accord Album",
   "description": "Raccolta album personale Accord",
   "start_url": "./",
   "scope": "./",
