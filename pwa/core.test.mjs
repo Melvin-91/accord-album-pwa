@@ -1813,7 +1813,8 @@ test("PWA release version matches the title, visible badge and offline cache", (
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const version = html.match(/<span[^>]*id="version">App attiva v(\d+\.\d+\.\d+)<\/span>/)?.[1];
   assert.ok(version, "The header must show a semantic release version");
-  assert.ok(html.includes(`<title>Accord v${version} · La mia raccolta</title>`));
+  assert.ok(html.includes(`<title>Accord Album v${version} · La mia raccolta</title>`));
+  assert.ok(html.includes("<h1>Accord Album</h1>"));
   assert.ok(sw.includes(`const CACHE = "accord-album-pwa-v${version}";`));
 });
 
