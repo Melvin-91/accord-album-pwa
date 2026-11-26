@@ -1484,8 +1484,8 @@ test("the active shell contains only collection workflows and precaches its comp
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
-  assert.match(html, /class="brand"[\s\S]*<img src="[^"]*accord-180\.png\?brand=album-1433" width="48" height="48" alt="" aria-hidden="true">/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.44\.3/);
+  assert.match(html, /class="brand"[\s\S]*<img src="[^"]*accord-180\.png\?brand=album-1444" width="48" height="48" alt="" aria-hidden="true">/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.44\.4/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
