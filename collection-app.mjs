@@ -102,7 +102,7 @@ function report(message, error = false) {
   }
 }
 async function services() {
-  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=21")
+  if (!servicesPromise) servicesPromise = import("./collection-services.mjs?v=22")
     .then(({ createCollectionServices }) => createCollectionServices({
       storage: localStorage, session: sessionStorage, pageUrl: location.href }));
   return servicesPromise;
@@ -922,7 +922,7 @@ async function serviceSettings() {
   $("disconnectService").textContent = `Scollega ${name}`;
   $("serviceStatus").textContent = settings.text;
   $("clientId").value = settings.clientId || "";
-  $("redirectUri").value = settings.redirectUri || "";
+  $("redirectUri").value = provider === "qobuz" ? "" : (settings.redirectUri || new URL("./", location.href).href);
   $("redirectField").hidden = provider === "qobuz"; $("clientField").hidden = provider === "qobuz";
 }
 let collectionAssociationOpen = false;
