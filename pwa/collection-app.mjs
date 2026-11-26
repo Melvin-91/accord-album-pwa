@@ -1,3 +1,4 @@
+import {installSuiteSwitch} from "./suite-switch.mjs?v=1";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=15";
@@ -1355,3 +1356,5 @@ if ("serviceWorker" in navigator) {
     }));
   }).catch((error) => report(`Modalita' offline non disponibile: ${error.message}`, true));
 }
+
+installSuiteSwitch("https://music-wishlist-monitor.henryfelber.workers.dev/", message => report(message));

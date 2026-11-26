@@ -1,4 +1,4 @@
-const CACHE = "accord-album-pwa-v6.1.0";
+const CACHE = "accord-album-pwa-v6.1.1";
 const FILES = [
   "./",
   "./index.html",
@@ -10,7 +10,8 @@ const FILES = [
   "./unified-library.mjs?v=1",
   "./core.mjs?v=54",
   "./core.mjs?v=51",
-  "./collection-app.mjs?v=46",
+  "./collection-app.mjs?v=47",
+  "./suite-switch.mjs?v=1",
   "./album-qol-v2.mjs?v=4",
   "./credential-backup.mjs?v=1",
   "./tidal-preview.mjs?v=1",

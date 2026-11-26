@@ -546,7 +546,7 @@ test("active root/copy modules and tests match; precache covers modules, version
     "tidal.test.mjs", "tidal-ui.test.mjs", "qobuz.test.mjs", "qobuz-ui.test.mjs", "qobuz-playback.test.mjs",
     "service-requests.mjs", "service-requests.test.mjs", "music-continuity.mjs", "music-continuity.test.mjs",
     "catalog-playlist.mjs", "playlist-ui.mjs", "catalog-playlist.test.mjs", "runtime-status.mjs", "runtime-status.test.mjs",
-    "credential-backup.mjs", "credential-backup.test.mjs", "collection-app.mjs", "collection-qol.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "collection.test.mjs", "collection.css",
+    "suite-switch.mjs", "suite-switch.test.mjs", "credential-backup.mjs", "credential-backup.test.mjs", "collection-app.mjs", "collection-qol.mjs", "collection-store.mjs", "collection-sync.mjs", "duration-sync.mjs", "collection-services.mjs", "collection.test.mjs", "collection.css",
     "tidal-preview.mjs", "tidal-preview.test.mjs", "physical-collection.css", "physical-collection.mjs",
     "physical-collection-sync.mjs", "physical-collection-ui.mjs", "physical-collection.test.mjs",
     "unified-library.mjs", "unified-library.test.mjs"]) {
@@ -556,20 +556,20 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   assert.match(css, /min-width: 0/);
-  assert.match(html, /v6\.1\.0/); assert.match(sw, /v6\.1\.0/);
+  assert.match(html, /v6\.1\.1/); assert.match(sw, /v6\.1\.1/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
   assert.match(html, /frame-src https:\/\/embed\.tidal\.com;/);
-  assert.match(sw, /collection-app\.mjs\?v=46/); assert.match(sw, /collection\.css\?v=19/);
+  assert.match(sw, /collection-app\.mjs\?v=47/); assert.match(sw, /collection\.css\?v=19/);
   assert.match(sw, /tidal\.mjs\?v=18/); assert.doesNotMatch(sw, /tidal-ui\.mjs/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v6\.1\.0/); assert.match(mirrorWorker, /v6\.1\.0/);
+    assert.match(mirrorHtml, /v6\.1\.1/); assert.match(mirrorWorker, /v6\.1\.1/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}accord-192.png?brand=album-1445"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.doesNotMatch(mirrorHtml, /streaming-qobuz/);
-    for (const file of ["collection-app.mjs?v=46", "collection.css?v=19", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=18", "tidal-preview.mjs?v=1",
+    for (const file of ["collection-app.mjs?v=47", "collection.css?v=19", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=18", "tidal-preview.mjs?v=1",
       "physical-collection.css?v=3", "physical-collection.mjs?v=2", "unified-library.mjs?v=1", "physical-collection-ui.mjs?v=3",
       "qobuz.mjs?v=12", "music-app-links.mjs?v=7", "album-association.mjs?v=15", "music-library-choices.mjs?v=2", "service-requests.mjs?v=4",
       "collection-store.mjs?v=15", "collection-sync.mjs?v=11", "duration-sync.mjs?v=1", "collection-services.mjs?v=22", "music-suggestion-filters.mjs?v=4",
