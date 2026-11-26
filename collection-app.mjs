@@ -1,6 +1,6 @@
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
-import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=13";
+import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=14";
 import { createCollectionSync } from "./collection-sync.mjs?v=11";
 import { configureMusicAppLink, openAssociatedEditionDialog, selectedMusicEdition, setTidalAlbumLinkResolver,
   webMusicLink, MUSIC_LINK_TARGET_KEY } from "./music-app-links.mjs?v=7";
@@ -16,12 +16,17 @@ import { PHYSICAL_KEY } from "./physical-collection.mjs?v=2";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   collectionRows, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=6";
 
+import {sortRows,collectionStats,listeningCandidates,scoutLink} from "./album-qol-v2.mjs?v=1";
 installCommandIcons(document);
 installSelectWheelGuard(document);
 
 const $ = (id) => document.getElementById(id);
 const states = { queued: "Da ascoltare", listening: "In ascolto",
   liked: "Mi piace", neutral: "Neutro", disliked: "Non mi piace" };
+const qolRead=(key,fallback)=>{try{return JSON.parse(localStorage.getItem("accord-qol:"+key))??fallback}catch{return fallback}};
+const qolWrite=(key,value)=>{try{localStorage.setItem("accord-qol:"+key,JSON.stringify(value))}catch{}};
+let qolReverse=!!qolRead("reverse",false),qolMulti=false;
+const qolSelection=new Set();
 const stateIcon = (status) => commandIconElement(commandIconName(states[status]), document);
 const refreshStateIcon = (label, status) => {
   const icon = label.querySelector(":scope > .command-icon");
@@ -529,6 +534,9 @@ function albumCard(album, favorite, duration) {
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
   const management = node("div", "", { class: "dialog-actions" });
   management.append(remove);
+  for(const [format,label] of [["CD","Cerca CD in Scout"],["Vinyl","Cerca vinile in Scout"]]){
+    const link=node("a",label,{href:scoutLink(album.artist,album.name,format),rel:"noopener noreferrer",class:"secondary qol-scout"});management.append(link);
+  }
   options.append(management);
   if (/^tidal:[1-9][0-9]*$/.test(album.id)) {
     const preview = node("button", "Anteprima TIDAL · 30 s", { type: "button", class: "secondary" });
@@ -545,7 +553,7 @@ function albumCard(album, favorite, duration) {
         ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz" : "spotify", report });
     } catch (error) { report(error.message, true); }
   });
-  footer.append(favoriteButton, open, openWith); card.append(footer, options);
+  management.append(openWith);footer.append(favoriteButton, open); card.append(footer, options);
   return card;
 }
 function closeAlbumOptions(except = null) {
@@ -573,6 +581,8 @@ function render() {
   document.documentElement.dataset.contrast = store.state.preferences.contrast === "high" ? "high" : "standard";
   document.documentElement.dataset.density = store.state.preferences.density === "compact" ? "compact" : "touch";
   const { total, visible: filtered } = collectionRows(store.state.albums, store.state.physical, collectionFilters());
+  const sorted=sortRows(filtered,$("qolSort").value,qolReverse,durations,Object.fromEntries(store.state.albums.map((x,i)=>[x.id,i])));filtered.splice(0,filtered.length,...sorted);
+  $("albumList").dataset.view=$("qolView").value;
   if (revealedAlbum) {
     const rowIndex = filtered.findIndex((row) => row.id === revealedAlbum);
     if (rowIndex >= 0) visibleLimit = Math.max(visibleLimit, rowIndex + 1);
@@ -601,6 +611,8 @@ function render() {
     const { element } = cards.get(id);
     physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
       physical || { cd: false, vinyl: false });
+    let select=element.querySelector(".qol-select");
+    if(qolMulti&&album){if(!select){select=node("label","Seleziona",{class:"qol-select"});const check=node("input","",{type:"checkbox","aria-label":"Seleziona "+album.name});select.prepend(check);check.addEventListener("change",()=>{if(check.checked)qolSelection.add(id);else qolSelection.delete(id);$("qolSelected").textContent=qolSelection.size+" selezionati"});element.prepend(select)}select.querySelector("input").checked=qolSelection.has(id)}else select?.remove();
     return element;
   });
   reconcileAlbumCards($("albumList"), wanted);
@@ -617,6 +629,9 @@ function render() {
     if (target) target.focus({ preventScroll: true });
     else if (control.startsWith("physical-")) $("search").focus({ preventScroll: true });
   }
+  const chips=$("qolChips");chips.replaceChildren();
+  for(const id of ["search","statusFilter","genreFilter","formatFilter","favoritesFilter"]){const control=$(id),active=id==="favoritesFilter"?control.checked:control.value;if(!active)continue;const label=id==="favoritesFilter"?"Preferiti":id==="search"?control.value:control.selectedOptions[0]?.textContent;const chip=node("button",label+" ×",{type:"button",class:"secondary"});chip.addEventListener("click",()=>{if(id==="favoritesFilter")control.checked=false;else control.value="";control.dispatchEvent(new Event(id==="search"?"input":"change"))});chips.append(chip)}
+  $("qolSelected").textContent=qolSelection.size+" selezionati";
   $("count").textContent = `${filtered.length} album${filtered.length !== total ? ` su ${total}` : ""}`;
   $("empty").hidden = filtered.length > 0;
   $("empty").textContent = total ? "Nessun album corrisponde ai filtri." : "La raccolta è vuota. Aggiungi un album oppure sincronizza con GitHub.";
@@ -993,6 +1008,23 @@ const dockObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--dock-height", `${Math.ceil($("collectionDock").getBoundingClientRect().height)}px`);
 });
 dockObserver.observe($("collectionDock"));
+const qolFields=["search","statusFilter","genreFilter","formatFilter","favoritesFilter","qolSort","qolView"];
+function qolApplyView(view){for(const id of qolFields){if(!(id in view))continue;const el=$(id);if(el.type==="checkbox")el.checked=!!view[id];else if(el.tagName!=="SELECT"||[...el.options].some(o=>o.value===view[id]))el.value=view[id]}qolReverse=!!view.reverse;$("qolReverse").setAttribute("aria-pressed",String(qolReverse));visibleLimit=40;revealedAlbum=null;revealOrigin=null;render()}
+function qolCurrent(){return Object.fromEntries([...qolFields.map(id=>[id,$(id).type==="checkbox"?$(id).checked:$(id).value]),["reverse",qolReverse]])}
+function qolSaved(){const data=qolRead("views",[]);return Array.isArray(data)?data.filter(x=>x&&typeof x.name==="string"&&x.view).slice(0,30):[]}
+function qolRefreshSaved(){ $("qolSaved").replaceChildren(node("option","Scegli una vista",{value:""}),...qolSaved().map((x,i)=>node("option",x.name,{value:String(i)})))}
+for(const id of ["qolSort","qolView"]){const el=$(id);const saved=qolRead(id,el.value);if([...el.options].some(o=>o.value===saved))el.value=saved;el.addEventListener("change",()=>{qolWrite(id,el.value);visibleLimit=40;render()})}
+$("qolReverse").setAttribute("aria-pressed",String(qolReverse));$("qolReverse").addEventListener("click",()=>{qolReverse=!qolReverse;qolWrite("reverse",qolReverse);$("qolReverse").setAttribute("aria-pressed",String(qolReverse));visibleLimit=40;render()});
+qolRefreshSaved();
+$("qolSave").addEventListener("click",()=>{const name=prompt("Nome della vista");if(!name?.trim())return;const views=qolSaved().filter(x=>x.name!==name.trim());views.push({name:name.trim().slice(0,80),view:qolCurrent()});qolWrite("views",views.slice(-30));qolRefreshSaved()});
+$("qolLoad").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""){const v=qolSaved()[Number(value)];if(v)qolApplyView(v.view)}});
+$("qolDelete").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""&&confirm("Eliminare questa vista salvata?")){qolWrite("views",qolSaved().filter((_,i)=>i!==Number(value)));qolRefreshSaved()}});
+$("qolTheme").value=qolRead("theme","copper");document.documentElement.dataset.theme=$("qolTheme").value;$("qolTheme").addEventListener("change",()=>{document.documentElement.dataset.theme=$("qolTheme").value;qolWrite("theme",$("qolTheme").value)});
+$("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;render()});
+$("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
+$("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});
+$("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collectionRows(store.state.albums,store.state.physical),s=collectionStats(visible,store.durations());const body=[node("p",s.total+" album · "+s.cd+" CD · "+s.vinyl+" vinili · "+s.queued+" da ascoltare"),node("p","Durata nota: "+durationText(s.totalDuration)+" su "+s.knownDuration+" album")];for(const [title,values] of [["Generi",s.genres],["Artisti",s.artists],["Decenni",s.decades],["Voti",s.ratings]]){body.push(node("h3",title));for(const [name,count] of values)body.push(node("p",name+" · "+count))}await choice("Statistiche raccolta",body,[["close","Chiudi"]])}));
+$("qolPick").addEventListener("click",()=>run(async()=>{const raw=prompt("Minuti disponibili (vuoto: nessun limite)","60");if(raw===null)return;const minutes=raw.trim()?Number(raw):0;if(!Number.isFinite(minutes)||minutes<0)return;const {visible}=collectionRows(store.state.albums,store.state.physical,collectionFilters()),candidates=listeningCandidates(visible,store.durations(),minutes);if(!candidates.length){report("Nessun album compatibile con i filtri e la durata.");return}const picked=candidates[Math.floor(Math.random()*candidates.length)];if(await choice("Cosa ascolto oggi?",[node("p",picked.artist+" — "+picked.name)], [["cancel","Chiudi"],["show","Mostra album"]])==="show")revealCollectionAlbum(picked.id)}));
 $("collectionHome").addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "auto" });
   $("collectionTitle").focus({ preventScroll: true });

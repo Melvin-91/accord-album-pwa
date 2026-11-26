@@ -310,6 +310,12 @@ export function createCollectionStore(storage) {
       const record = validateAlbum({ ...previous, ...changes });
       commit({ ...state, albums: state.albums.map((album) => album.id === id ? record : album) });
     },
+    updateMany(ids, changes) {
+      if(!Array.isArray(ids)||!ids.length||Object.keys(changes).some(k=>!["status","genres","primary_genre"].includes(k)))throw new Error("Modifica multipla non valida.");
+      const selected=new Set(ids);
+      if([...selected].some(id=>!state.albums.some(a=>a.id===id)))throw new Error("Raccolta cambiata.");
+      commit({...state,albums:state.albums.map(a=>selected.has(a.id)?validateAlbum({...a,...changes}):a)});
+    },
     favorite(id) {
       if (!state.albums.some((album) => album.id === id)) throw new Error("Album non piu' presente.");
       const favorites = new Set(state.preferences.favoriteIds || []);

@@ -1,0 +1,3 @@
+import test from "node:test";import assert from "node:assert/strict";import {sortRows,collectionStats,listeningCandidates,scoutLink} from "./album-qol-v2.mjs";
+const rows=[{id:"1",name:"B",artist:"A",genres:["Metal"],album:{rating:4,year:2020,status:"queued"},physical:{cd:true}},{id:"2",name:"A",artist:"B",genres:[],album:{rating:2,year:2000},physical:{vinyl:true}}];
+test("sort and collection stats",()=>{assert.equal(sortRows(rows,"rating",true)[0].id,"1");assert.equal(sortRows(rows,"title")[0].id,"2");assert.equal(collectionStats(rows).cd,1);assert.equal(collectionStats(rows).vinyl,1);assert.equal(listeningCandidates(rows,{"1":120000},3).length,1);assert(new URL(scoutLink("A","B","CD")).hash.includes("format=CD"))});

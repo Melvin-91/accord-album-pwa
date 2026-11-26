@@ -1,5 +1,9 @@
 # Accord · Raccolta album PWA
 
+### PWA 1.44.0 — ergonomia della raccolta
+
+Viste griglia/lista/mosaico, ordinamenti e viste locali salvabili, filtri rimovibili, statistiche, suggerimento locale in base alla durata e ai filtri, selezione multipla per stato con conferma, temi locali e collegamenti Scout per CD/vinile. L'ordine di inserimento usa l'ordine nel catalogo locale, non una data di aggiunta non disponibile. Nessun token trasmesso a Scout.
+
 ## Stato corrente e gerarchia
 
 ### PWA 1.43.1 · Apertura TIDAL
