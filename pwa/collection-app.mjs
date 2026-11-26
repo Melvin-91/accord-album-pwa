@@ -1,3 +1,4 @@
+import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
 import {installSuiteSwitch} from "./suite-switch.mjs?v=1";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
@@ -583,9 +584,7 @@ function render() {
   }
   const favorites = new Set(store.state.preferences.favoriteIds || []);
   const durations = store.durations();
-  document.documentElement.dataset.textScale = ["large", "larger"].includes(store.state.preferences.textScale) ? store.state.preferences.textScale : "normal";
-  document.documentElement.dataset.contrast = store.state.preferences.contrast === "high" ? "high" : "standard";
-  document.documentElement.dataset.density = store.state.preferences.density === "compact" ? "compact" : "touch";
+  applyAppearance(document.documentElement,readAppearance(localStorage,{...store.state.preferences,theme:qolRead("theme","copper")}));
   const { total, visible: filtered } = collectionRows(store.state.albums, store.state.physical, collectionFilters());
   const sorted=sortRows(filtered,$("qolSort").value,qolReverse,durations,Object.fromEntries(store.state.albums.map((x,i)=>[x.id,i])),localAdded);filtered.splice(0,filtered.length,...sorted);
   $("albumList").dataset.view=$("qolView").value;
@@ -1029,7 +1028,9 @@ qolRefreshSaved();
 $("qolSave").addEventListener("click",()=>{const name=prompt("Nome della vista");if(!name?.trim())return;const views=qolSaved().filter(x=>x.name!==name.trim());views.push({name:name.trim().slice(0,80),view:qolCurrent()});qolWrite("views",views.slice(-30));qolRefreshSaved()});
 $("qolLoad").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""){const v=qolSaved()[Number(value)];if(v)qolApplyView(v.view)}});
 $("qolDelete").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""&&confirm("Eliminare questa vista salvata?")){qolWrite("views",qolSaved().filter((_,i)=>i!==Number(value)));qolRefreshSaved()}});
-$("qolTheme").value=qolRead("theme","copper");document.documentElement.dataset.theme=$("qolTheme").value;$("qolTheme").addEventListener("change",()=>{document.documentElement.dataset.theme=$("qolTheme").value;qolWrite("theme",$("qolTheme").value)});
+const legacyAppearance={...store?.state.preferences,theme:qolRead("theme","copper")};
+const mountSuiteAppearance=()=>mountAppearance($("suiteAppearance"),{storage:localStorage,legacy:legacyAppearance,onChange:p=>{$("qolTheme").value=p.theme;qolWrite("theme",p.theme)}});
+$("qolTheme").value=mountSuiteAppearance().theme;$("qolTheme").addEventListener("change",()=>{const p=applyAppearance(document.documentElement,{...readAppearance(localStorage,legacyAppearance),theme:$("qolTheme").value});qolWrite("theme",p.theme);try{localStorage.setItem("accord-suite:appearance",JSON.stringify(p))}catch{}mountSuiteAppearance()});
 $("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;render()});
 $("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
 $("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});

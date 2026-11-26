@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.0 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.1 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -107,3 +107,43 @@
 }
 @media(prefers-reduced-motion:no-preference){[data-accord-suite] :is(button,input,select,a,.album-card){transition:background-color .15s,border-color .15s,color .15s}}
 @media(prefers-reduced-motion:reduce){[data-accord-suite] *,[data-accord-suite] *::before,[data-accord-suite] *::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
+
+/* Shared accessibility and reflow. Keep app-specific layout outside this file. */
+:root[data-accord-suite][data-contrast=high]{--on-accent:#21160e;--soft:#30231a;--danger:#ffb1b1;--success:#c0ffcd}
+[data-accord-suite] :is(button,input:not([type=checkbox]),select,textarea){line-height:1.4}
+:root[data-accord-suite][data-density=compact] :is(button,input:not([type=checkbox]),select,textarea){padding:6px 9px}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(a,button){padding:9px 6px;min-height:64px;overflow-wrap:anywhere}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock)>:is(a,button){flex:1 1 0;min-width:0}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(#update,#app-update-button){padding:9px 6px}
+[data-accord-suite] :is(.topbar,.brand,.album-top,.offer-line,.dialog-heading,.dialog-top) > *{min-width:0;overflow-wrap:anywhere}
+[data-accord-suite] :is(.dialog-heading,.dialog-top) h2{overflow-wrap:anywhere}
+[data-accord-suite] :is(.simple-card,.comparison-card,.catalog-result,.album-card,dialog) :is(input,select,textarea){min-width:0;max-width:100%}
+[data-accord-suite] :is(#suiteAppearance,.suite-appearance){display:grid;gap:12px}
+[data-accord-suite] :is(#suiteAppearance,.suite-appearance) h3{margin:0;font-size:1rem;font-weight:600}
+[data-accord-suite] :is(#suiteAppearance,.suite-appearance) p{margin:0}
+[data-accord-suite] :is(.full-link,.settings-row,.simple-disclosure>summary,.collection-tools>summary,.album-options>summary):hover{color:var(--accent-hover)}
+[data-accord-suite] :is(.simple-card,.card,.offer-preview) strong{overflow-wrap:anywhere}
+[data-accord-suite] :is(.album-price-line,.offer-line,.preview-head){flex-wrap:wrap}
+[data-accord-suite] :is(.album-price-line strong,.offer-total,.preview-price){white-space:normal;overflow-wrap:anywhere}
+[data-accord-suite] .settings-row>span{flex:1;min-width:0}
+[data-accord-suite] :is(.qol-toolbar,.simple-toolbar,.dialog-actions)>*{min-width:0}
+[data-accord-suite] :is(.more-menu,.more-menu>button){flex-shrink:0}
+[data-accord-suite] :is(#suiteActionsBody,#qolActionsBody){display:grid;gap:10px}
+[data-accord-suite] :is(#suiteActionsBody,#qolActionsBody) label{overflow-wrap:anywhere}
+[data-accord-suite] :is(#suiteActionsDialog,#qolActionsDialog){overscroll-behavior:contain}
+[data-accord-suite] .suite-table-scroll{max-width:100%;overflow:auto;overscroll-behavior-inline:contain}
+[data-accord-suite] #feedback:empty{display:none}
+[data-accord-suite] :is(button,a,summary,input,select,textarea):focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+@media(max-width:400px){
+ [data-accord-suite] :is(nav.orbit-dock,nav.dock){gap:2px;max-width:calc(100% - 16px);padding:4px}
+ [data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(a,button){width:clamp(48px,17vw,100px);padding:8px 3px}
+ [data-accord-suite] nav.dock #app-update-button{width:clamp(48px,17vw,100px);padding:8px 3px}
+ [data-accord-suite] .topbar{gap:10px}
+ [data-accord-suite] :is(.dialog-heading,.dialog-top){flex-wrap:wrap}
+ :root[data-accord-suite][data-text-scale=larger] #albumList:not([data-view=list]){grid-template-columns:1fr}
+ :root[data-accord-suite][data-text-scale=larger] .scout-metrics{grid-template-columns:1fr}
+}
+@media(forced-colors:active){
+ [data-accord-suite] :is(button,a,summary,input,select,textarea):focus-visible{outline:2px solid Highlight}
+ [data-accord-suite] :is(nav.orbit-dock,nav.dock) [aria-current=page]{border-color:Highlight}
+}
