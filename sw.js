@@ -1,4 +1,4 @@
-const CACHE = "accord-album-pwa-v1.44.4";
+const CACHE = "accord-album-pwa-v1.44.5";
 const FILES = [
   "./",
   "./index.html",
@@ -35,11 +35,11 @@ const FILES = [
   "./music-app-links.mjs?v=7",
   "./album-association.mjs?v=15",
   "./music-library-choices.mjs?v=2",
-  "./manifest.json?brand=album-1444",
+  "./manifest.json?brand=album-1445",
   "./assets/malt_metal.ico",
-  "./assets/accord-180.png?brand=album-1444",
-  "./assets/accord-192.png?brand=album-1444",
-  "./assets/accord-512.png?brand=album-1444",
+  "./assets/accord-180.png?brand=album-1445",
+  "./assets/accord-192.png?brand=album-1445",
+  "./assets/accord-512.png?brand=album-1445",
 ];
 
 self.addEventListener("install", (event) => {
