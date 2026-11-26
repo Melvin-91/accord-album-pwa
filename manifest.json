@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Accord Album",
   "short_name": "Accord Album",
-  "description": "Raccolta album personale Accord",
+  "description": "Raccolta album personale Accord Album",
   "start_url": "./",
   "scope": "./",
   "share_target": {
