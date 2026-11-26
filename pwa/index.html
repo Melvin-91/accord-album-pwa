@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#15191e">
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: https://*.scdn.co https://*.spotifycdn.com https://resources.tidal.com https://static.qobuz.com; connect-src 'self' https://api.github.com https://api.spotify.com https://accounts.spotify.com https://openapi.tidal.com https://auth.tidal.com https://www.qobuz.com; frame-src https://embed.tidal.com; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>Accord Album v1.43.3 · La mia raccolta</title>
+  <title>Accord Album v1.43.4 · La mia raccolta</title>
   <meta name="application-name" content="Accord Album"><meta name="apple-mobile-web-app-title" content="Accord Album">
   <link rel="apple-touch-icon" sizes="180x180" href="../assets/accord-180.png?brand=album-1433">
   <link rel="icon" href="../assets/accord-192.png?brand=album-1433">
@@ -18,7 +18,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="../assets/accord-180.png?brand=album-1433" width="48" height="48" alt="" aria-hidden="true">
-      <div><h1>Accord Album</h1><span class="app-version" id="version">App attiva v1.43.3</span></div>
+      <div><h1>Accord Album</h1><span class="app-version" id="version">App attiva v1.43.4</span></div>
     </div>
     <span id="headerSyncState" class="sync-state">Solo sul dispositivo</span>
   </header>
@@ -126,6 +126,18 @@
       <label>Apri con<select id="linkTarget"><option value="app">App musicale installata</option><option value="web">Player web nel browser</option></select></label>
       <p class="muted">Scegli l'app installata o il player nel browser.</p>
     </section>
+    <section>
+      <h3>Backup cifrato delle credenziali</h3>
+      <p>Salva una copia dei token e delle impostazioni di accesso su File/iCloud Drive. Non eliminare la PWA prima di aver verificato il backup. I token scaduti potrebbero richiedere un nuovo accesso.</p>
+      <label>Passphrase del backup (almeno 12 caratteri)<input id="credentialPassword" type="password" autocomplete="off" maxlength="1024"></label>
+      <label>Ripeti passphrase per creare il backup<input id="credentialConfirm" type="password" autocomplete="off" maxlength="1024"></label>
+      <button id="credentialExport" type="button" class="secondary">Crea backup cifrato</button>
+      <a id="credentialDownload" hidden download="accord-album-credenziali.json">Scarica backup cifrato</a>
+      <label>File di backup cifrato<input id="credentialFile" type="file" accept=".json,application/json"></label>
+      <button id="credentialRestore" type="button" class="secondary">Ripristina credenziali</button>
+      <p id="credentialStatus" role="status" aria-live="polite"></p>
+      <p class="muted">Cifratura locale AES-256-GCM. Nessun token o passphrase viene inviato a GitHub. Conserva il file fuori dalla PWA e la passphrase separatamente. Non condividere questi dati in chat.</p>
+    </section>
     <details class="collection-tools">
       <summary>Strumenti avanzati</summary>
       <button id="reviewMetadata" type="button" class="secondary">Rivedi anomalie dei metadati</button>
@@ -147,6 +159,6 @@
   <dialog id="quickReviewDialog" aria-label="Revisione rapida degli album"></dialog>
   <dialog id="choiceDialog" aria-label="Conferma operazione"></dialog>
   <noscript>Attiva JavaScript per usare la raccolta. I dati locali non vengono modificati senza JavaScript.</noscript>
-  <script type="module" src="./collection-app.mjs?v=40"></script>
+  <script type="module" src="./collection-app.mjs?v=41"></script>
 </body>
 </html>

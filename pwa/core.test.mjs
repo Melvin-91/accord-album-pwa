@@ -1895,7 +1895,7 @@ test("installable shell links resolve locally and are present in the offline cac
   assert.ok(manifestPath, "The document must link its install manifest");
   assert.ok(appPath, "The document must load its application module");
   assert.ok(workerFiles, "The service worker must declare its offline shell");
-  assert.match(app, /navigator\.serviceWorker\.register\(["']\.\/sw\.js["']\)/);
+  assert.match(app, /navigator\.serviceWorker\.register\(["']\.\/sw\.js["'], \{ updateViaCache: "none" \}\)/);
 
   const normalizePath = (path) => path.replace(/^\.\//, "");
   const cachedPaths = new Set([...workerFiles.matchAll(/"([^"]+)"/g)].map((match) => normalizePath(match[1])));
@@ -1964,7 +1964,7 @@ test("offline shell versions include every local module and responsive dialogs k
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   const active = readFileSync(new URL("./collection-app.mjs", import.meta.url), "utf8");
-  for (const file of ["collection-app.mjs?v=40", "collection.css?v=15", "physical-collection.css?v=3"]) {
+  for (const file of ["collection-app.mjs?v=41", "collection.css?v=15", "physical-collection.css?v=3"]) {
     assert.ok(html.includes(file));
     assert.ok(sw.includes(file));
   }

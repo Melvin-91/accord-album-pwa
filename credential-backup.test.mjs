@@ -1,0 +1,35 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {exportCredentials,decryptCredentials,restoreCredentials} from "./credential-backup.mjs";
+const mem=(entries={})=>{const m=new Map(Object.entries(entries));return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};};
+test("encrypted credentials roundtrip, random salt/IV, wrong password and tampering", async()=>{
+  const p="synthetic-long-passphrase";
+  const local=mem({"accord-album-owner":"example","accord-album-token":"synthetic-private-token","accord-album-pwa-v1":"collection-not-credentials","accord-spotify-client-id":"synthetic-client"});
+  const session=mem({"accord-spotify-refresh-token":"synthetic-refresh","accord-spotify-code-verifier":"ephemeral"});
+  const file=await exportCredentials(local,session,p);
+  assert.ok(!file.includes("synthetic-private-token"));
+  assert.notEqual(file,await exportCredentials(local,session,p));
+  await assert.rejects(decryptCredentials(file,"different-long-password"));
+  const altered=JSON.parse(file); altered.data=(altered.data[0]==="A"?"B":"A")+altered.data.slice(1);
+  await assert.rejects(decryptCredentials(JSON.stringify(altered),p));
+  const result=await decryptCredentials(file,p);
+  assert.equal(result["accord-spotify-refresh-token"],"synthetic-refresh");
+  assert.equal(result["accord-album-pwa-v1"],undefined);
+  assert.equal(result["accord-spotify-code-verifier"],undefined);
+  const target=mem({"accord-spotify-access-token":"old-other-account","accord-qobuz-session-v1":"untouched","accord-album-pwa-v1":"keep-collection"});
+  const tab=mem({"accord-spotify-oauth-state":"old"});
+  restoreCredentials(target,tab,result);
+  assert.equal(target.getItem("accord-album-token"),"synthetic-private-token");
+  assert.equal(target.getItem("accord-spotify-access-token"),null);
+  assert.equal(target.getItem("accord-qobuz-session-v1"),"untouched");
+  assert.equal(target.getItem("accord-album-pwa-v1"),"keep-collection");
+  assert.equal(tab.getItem("accord-spotify-oauth-state"),null);
+  assert.throws(()=>restoreCredentials(target,tab,{"accord-album-pwa-v1":"bad"}));
+});
+test("storage failure rolls back credential groups",()=>{
+  const target=mem({"accord-album-token":"original"}), session=mem();
+  const set=target.setItem; let fail=true;
+  target.setItem=(k,v)=>{if(k==="accord-album-token"&&fail){fail=false;throw Error("quota");}set(k,v);};
+  assert.throws(()=>restoreCredentials(target,session,{"accord-album-owner":"example","accord-album-token":"new"}),/annullato/);
+  assert.equal(target.getItem("accord-album-token"),"original"); assert.equal(target.getItem("accord-album-owner"),null);
+});

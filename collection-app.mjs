@@ -1,3 +1,4 @@
+import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=13";
 import { createCollectionSync } from "./collection-sync.mjs?v=11";
@@ -1189,6 +1190,39 @@ $("openSettings").addEventListener("click", () => run(async () => {
   $("linkTarget").value = localStorage.getItem(MUSIC_LINK_TARGET_KEY) === "web" ? "web" : "app";
   await serviceSettings(); $("settingsDialog").showModal();
 }));
+let credentialBackupUrl;
+function clearCredentialPassword() {
+  $("credentialPassword").value = ""; $("credentialConfirm").value = "";
+}
+$("credentialExport")?.addEventListener("click", () => run(async () => {
+  const password=$("credentialPassword").value;
+  try {
+    if(password!==$("credentialConfirm").value) throw Error("Le passphrase non coincidono.");
+    const encrypted=await exportCredentials(localStorage,sessionStorage,password);
+    if(credentialBackupUrl) URL.revokeObjectURL(credentialBackupUrl);
+    credentialBackupUrl=URL.createObjectURL(new Blob([encrypted],{type:"application/json"}));
+    const link=$("credentialDownload"); link.href=credentialBackupUrl; link.hidden=false;
+    $("credentialStatus").textContent="Backup pronto. Tocca Scarica backup cifrato e salvalo nell'app File. Conserva la passphrase separatamente.";
+  } catch(error) { $("credentialStatus").textContent=error.message; }
+  finally { clearCredentialPassword(); }
+}));
+$("credentialRestore")?.addEventListener("click", () => run(async () => {
+  const password=$("credentialPassword").value, file=$("credentialFile").files[0];
+  try {
+    if(!file || file.size>524288) throw Error("Seleziona un file di backup valido.");
+    const values=await decryptCredentials(await file.text(),password);
+    if(!window.confirm("Ripristinare le credenziali dal backup? Gli accessi dei servizi inclusi saranno sostituiti. La raccolta non viene modificata.")) return;
+    const count=restoreCredentials(localStorage,sessionStorage,values);
+    $("credentialStatus").textContent="Ripristinate "+count+" voci. Riavvia l'app e verifica gli accessi.";
+    location.reload();
+  } catch(error) { $("credentialStatus").textContent=error.message; }
+  finally { clearCredentialPassword(); $("credentialFile").value=""; }
+}));
+$("settingsDialog")?.addEventListener("close", () => {
+  clearCredentialPassword();
+  if(credentialBackupUrl) { URL.revokeObjectURL(credentialBackupUrl); credentialBackupUrl=undefined; }
+  $("credentialDownload").removeAttribute("href"); $("credentialDownload").hidden=true;
+});
 $("settingsService").addEventListener("change", () => run(serviceSettings));
 $("checkAlbumLinks").addEventListener("click", () => run(checkCollectionAssociations));
 $("githubForm").addEventListener("submit", (event) => {
