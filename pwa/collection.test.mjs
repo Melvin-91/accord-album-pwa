@@ -1485,7 +1485,7 @@ test("the active shell contains only collection workflows and precaches its comp
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*<img src="[^"]*accord-180\.png\?brand=album-1433" width="48" height="48" alt="" aria-hidden="true">/);
-  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.4/);
+  assert.match(html, /class="app-version" id="version">App attiva v1\.43\.5/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
@@ -1515,4 +1515,19 @@ test("lazy cover images stay observable until their image has loaded", () => {
   assert.match(app, /image\.classList\.add\("loaded"\)/);
   assert.match(styles, /\.artwork img \{[^}]*visibility:\s*hidden/);
   assert.match(styles, /\.artwork img\.loaded \{[^}]*visibility:\s*visible/);
+});
+
+test("TIDAL settings and authorization use the same canonical directory redirect", async () => {
+  for (const base of ["https://melvin-91.github.io/accord-album-pwa/", "https://melvin-91.github.io/accord-album-pwa/pwa/"]) {
+    for (const suffix of ["", "index.html?old=true#fragment"]) {
+      const tab = storage(), disk = storage();
+      const services = createCollectionServices({ storage: disk, session: tab, pageUrl: base+suffix,
+        fetch: async () => { throw Error("Unexpected network request"); } });
+      assert.equal(services.settings("tidal").redirectUri, base);
+      const url = new URL(await services.connect("tidal", {clientId:"synthetic-client"}));
+      assert.equal(url.searchParams.get("redirect_uri"),base);
+      assert.equal(JSON.parse(tab.getItem("accord-tidal-pkce-v1")).redirect,base);
+      assert.equal(url.searchParams.get("code_challenge_method"),"S256");
+    }
+  }
 });

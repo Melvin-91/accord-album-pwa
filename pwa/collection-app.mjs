@@ -923,7 +923,7 @@ async function serviceSettings() {
   $("serviceStatus").textContent = settings.text;
   $("clientId").value = settings.clientId || "";
   $("redirectUri").value = settings.redirectUri || "";
-  $("redirectField").hidden = provider !== "spotify"; $("clientField").hidden = provider === "qobuz";
+  $("redirectField").hidden = provider === "qobuz"; $("clientField").hidden = provider === "qobuz";
 }
 let collectionAssociationOpen = false;
 async function checkCollectionAssociations() {
@@ -1224,6 +1224,11 @@ $("settingsDialog")?.addEventListener("close", () => {
   $("credentialDownload").removeAttribute("href"); $("credentialDownload").hidden=true;
 });
 $("settingsService").addEventListener("change", () => run(serviceSettings));
+$("copyRedirectUri").addEventListener("click", async () => {
+  const field = $("redirectUri");
+  try { await navigator.clipboard.writeText(field.value); $("redirectStatus").textContent = "Redirect URI copiato."; }
+  catch { field.focus(); field.select(); $("redirectStatus").textContent = "Copia manualmente l’indirizzo selezionato."; }
+});
 $("checkAlbumLinks").addEventListener("click", () => run(checkCollectionAssociations));
 $("githubForm").addEventListener("submit", (event) => {
   event.preventDefault();

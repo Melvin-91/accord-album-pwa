@@ -157,7 +157,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
     settings(provider) {
       if (provider === "tidal") {
         const clientId = tidalClientId(), status = tidalAuth.status(clientId);
-        return { clientId, connected: status.connected, text: status.connected ? "TIDAL collegato."
+        return { clientId, redirectUri: spotifyRedirectUriForPage(pageUrl), connected: status.connected, text: status.connected ? "TIDAL collegato."
           : !clientId ? "Inserisci il Client ID, poi premi Collega TIDAL."
             : !status.matches && tidalAuth.clientId() ? "Client ID diverso: ricollega TIDAL."
               : status.expired ? "Accesso scaduto: ricollega TIDAL."
@@ -197,7 +197,7 @@ export function createCollectionServices({ storage, session: tabSession, pageUrl
         if (provider === "tidal") tidalAuth.disconnect(); else clearSpotify();
       }
       storage.setItem(key, clientId);
-      if (provider === "tidal") return tidalAuth.authorize(clientId, pageUrl);
+      if (provider === "tidal") return tidalAuth.authorize(clientId, spotifyRedirectUriForPage(pageUrl));
       const { redirectUri } = spotifySettings(), verifier = random(64), state = random(32);
       session.setItem("accord-spotify-code-verifier", verifier);
       session.setItem("accord-spotify-oauth-state", state);
