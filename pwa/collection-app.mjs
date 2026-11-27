@@ -1492,7 +1492,7 @@ async function refreshInbox() {
   try {
     let rows = await pendingTransfers();
     if(!busy && navigator.onLine && !document.querySelector("dialog[open]")){
-      const automatic=rows.filter(row=>row.automatic===true).map(row=>({row,matches:store.state.albums.filter(album=>scoutIdentity(album.artist,album.name)===scoutIdentity(row.artist,row.album))})).filter(x=>x.matches.length===1);
+      const automatic=rows.filter(row=>row.automatic===true&&!row.cancelled).map(row=>({row,matches:store.state.albums.filter(album=>scoutIdentity(album.artist,album.name)===scoutIdentity(row.artist,row.album))})).filter(x=>x.matches.length===1);
       if(automatic.length){
         try{
           for(const {row,matches:[album]} of automatic){
@@ -1514,6 +1514,18 @@ async function refreshInbox() {
     inbox.replaceChildren(node("summary","Da importare da Scout ("+rows.length+")"));
     if (!rows.length) inbox.append(node("p","Nessun acquisto in attesa."));
     for(const row of rows){
+      if(row.cancelled===true){
+        const key=row.format==="CD"?"cd":"vinyl";
+        const matches=store.state.physical.filter(p=>physicalKey(p.artist,p.title)===physicalKey(row.artist,row.album)&&p[key]);
+        if(!matches.length){await acknowledgeTransfers([row]);continue;}
+        const button=node("button","Annullamento Scout: "+row.artist+" — "+row.album+" · "+(key==="cd"?"CD":"Vinile"),{type:"button"});
+        button.onclick=async()=>{
+          if(busy||inboxBusy)return;
+          const remove=confirm("Scout ha annullato questo acquisto. Rimuovere il possesso del solo "+(key==="cd"?"CD":"vinile")+"? Annulla mantiene il possesso e chiude la richiesta.");
+          inboxBusy=true;
+          try{if(remove){const current=store.state.physical.find(p=>physicalKey(p.artist,p.title)===physicalKey(row.artist,row.album));if(current?.[key])store.setPhysicalFormat(current.artist,current.title,key,false);suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1");if(!await safePhysicalSync()){report("Annullamento in attesa di sincronizzazione.",true);return;}}await acknowledgeTransfers([row]);report(remove?"Possesso aggiornato.":"Possesso mantenuto.");}catch(e){report(e.message,true)}finally{inboxBusy=false;void refreshInbox()}
+        };inbox.append(button);continue;
+      }
       const button=node("button",row.artist+" — "+row.album+" · "+(row.format==="CD"?"CD":"Vinile")+" · Scegli scheda",{type:"button"});
       button.onclick=async()=>{
         if(inboxBusy||busy)return;
