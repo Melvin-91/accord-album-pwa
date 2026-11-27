@@ -1492,7 +1492,7 @@ test("the active shell contains only collection workflows and precaches its comp
   for (const id of ["catalogArtist", "catalogTitle", "catalogReference", "formatFilter", "openPhysicalTools"]) {
     assert.ok(html.includes(`id="${id}"`));
   }
-  assert.match(html, /<details class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
+  assert.match(html, /<details id="collectionTools" class="filter-disclosure">[\s\S]*id="statusFilter"[\s\S]*id="favoritesFilter"[\s\S]*<\/details>/);
   assert.doesNotMatch(html, /id="quickListeningFilter"/);
   assert.match(html, /id="statusFilter"[\s\S]*<option value="listening">In ascolto<\/option>/);
   assert.match(read("collection.css"), /--accent: #dfaa80/);

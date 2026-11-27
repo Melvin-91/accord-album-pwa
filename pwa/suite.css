@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.4 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.3 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -177,29 +177,3 @@
 [data-accord-suite] .simple-toolbar .command-icon{margin:0}
 [data-accord-suite] .simple-toolbar .secondary{font-weight:600}
 @media(max-width:400px){[data-accord-suite] .suite-header-actions{max-width:39%}[data-accord-suite] a.suite-companion{padding-inline:8px}[data-accord-suite] .topbar .brand{gap:8px}}
-
-/* Compact content-first home, same typography and spacing as Album. */
-[data-accord-suite][data-scout-home=true] .suite-heading{justify-content:space-between;align-items:baseline;text-align:left;gap:12px;padding:4px 0 12px}
-[data-accord-suite][data-scout-home=true] .suite-heading>div{display:flex;width:100%;align-items:baseline;justify-content:space-between;gap:12px;min-width:0}
-[data-accord-suite][data-scout-home=true] .suite-heading .eyebrow{display:none}
-[data-accord-suite][data-scout-home=true] .suite-heading h1{font-size:clamp(1.4rem,4vw,1.75rem);font-weight:500;letter-spacing:-.035em;margin:0;text-align:left}
-[data-accord-suite][data-scout-home=true] .suite-heading #intro{margin:0;text-align:right;font-size:.75rem}
-[data-accord-suite] .scout-home-search{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start;gap:8px;margin-bottom:8px}
-[data-accord-suite] .scout-home-search .simple-search{width:100%;min-width:0;margin:0;min-height:44px;font-size:.875rem}
-[data-accord-suite] #scoutHomeFilters{margin:0;padding:0;min-width:0;background:transparent;border:0}
-[data-accord-suite] #scoutHomeFilters>summary{justify-content:center;gap:6px;min-height:44px;padding:8px 10px;font-size:.8125rem;background:var(--raised);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius-control)}
-[data-accord-suite] #scoutHomeFilters>summary::after{content:none}
-[data-accord-suite] #scoutHomeFilters>summary .command-icon{margin:0}
-[data-accord-suite] .scout-home-search:has(#scoutHomeFilters[open]){grid-template-columns:minmax(0,1fr)}
-[data-accord-suite] #scoutHomeFilters[open]>summary{justify-content:flex-start}
-[data-accord-suite] .scout-filter-panel{display:grid;gap:8px;padding:12px;margin-top:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-card);min-width:0}
-[data-accord-suite] .scout-filter-panel p{margin:0}
-[data-accord-suite] .scout-filter-panel #scoutTransferInbox{margin:0}
-[data-accord-suite] .scout-home-actions{margin:0 0 12px;gap:8px}
-[data-accord-suite] .scout-home-actions>*{flex:1 1 112px;min-width:0;font-size:.8125rem;padding:8px 10px}
-[data-accord-suite] .scout-transfer-notice{width:100%;margin:0 0 8px;text-align:left;color:var(--accent);font-size:.8125rem}
-[data-accord-suite] .scout-transfer-notice[hidden]{display:none!important}
-[data-accord-suite][data-scout-home=true] .simple-list{gap:10px}
-[data-accord-suite][data-scout-home=true] .simple-list>.simple-card{padding:12px}
-[data-accord-suite][data-scout-home=true] .simple-list .album-price-line{padding-top:8px;margin-top:8px}
-[data-accord-suite][data-scout-home=true] .simple-list .full-link{margin-top:2px}
