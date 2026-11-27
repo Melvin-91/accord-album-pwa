@@ -11,7 +11,7 @@ import { associationUpdates, openAssociationDialog } from "./album-association.m
 import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
-import { commandIconElement, commandIconName, installCommandIcons } from "./command-icons.mjs?v=5";
+import { commandIconElement, commandIconName, installCommandIcons } from "./command-icons.mjs?v=6";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=3";
@@ -615,6 +615,18 @@ function render() {
     const { element } = cards.get(id);
     physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
       physical || { cd: false, vinyl: false });
+    // A card may be rendered while its controls are temporarily hosted in the dialog.
+    const badgeGroups=[...element.querySelectorAll(".physical-badges")];
+    const canonicalBadges=badgeGroups.shift();
+    for(const duplicate of badgeGroups)duplicate.remove();
+    if(canonicalBadges){
+      for(const badge of canonicalBadges.querySelectorAll(".physical-badge")){
+        const owned=Boolean(physical?.[badge.dataset.format]);
+        badge.hidden=!owned;badge.style.display=owned?"":"none";
+      }
+      canonicalBadges.hidden=!physical?.cd&&!physical?.vinyl;
+      canonicalBadges.style.display=canonicalBadges.hidden?"none":"";
+    }
     if (!album && !element.querySelector(".associate-support")) {
       const match = node("button", "Associa a una scheda album", {type:"button", class:"secondary associate-support"});
       match.onclick = () => run(async () => {
@@ -1474,6 +1486,24 @@ async function refreshInbox() {
   inboxBusy = true;
   try {
     let rows = await pendingTransfers();
+    if(!busy && navigator.onLine){
+      const automatic=rows.filter(row=>row.automatic===true).map(row=>({row,matches:store.state.albums.filter(album=>scoutIdentity(album.artist,album.name)===scoutIdentity(row.artist,row.album))})).filter(x=>x.matches.length===1);
+      if(automatic.length){
+        try{
+          for(const {row,matches:[album]} of automatic){
+            const key=row.format==="CD"?"cd":"vinyl";
+            const existing=store.state.physical.find(p=>physicalKey(p.artist,p.title)===physicalKey(album.artist,album.name));
+            if(!existing?.[key])store.setPhysicalFormat(album.artist,album.name,key,true);
+          }
+          suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1");
+          if(await safePhysicalSync()){
+            const confirmed=automatic.filter(({row,matches:[album]})=>store.state.physical.some(p=>physicalKey(p.artist,p.title)===physicalKey(album.artist,album.name)&&p[row.format==="CD"?"cd":"vinyl"])).map(x=>x.row);
+            await acknowledgeTransfers(confirmed);
+            const ids=new Set(confirmed.map(x=>x.id));rows=rows.filter(x=>!ids.has(x.id));
+          }
+        }catch(e){report("Acquisto Scout in attesa di sincronizzazione: "+e.message,true)}
+      }
+    }
     pendingNotice.hidden = rows.length === 0;
     pendingNotice.textContent = rows.length + (rows.length === 1 ? " acquisto da sincronizzare da Scout" : " acquisti da sincronizzare da Scout");
     inbox.replaceChildren(node("summary","Da importare da Scout ("+rows.length+")"));

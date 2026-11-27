@@ -1,4 +1,5 @@
 const paths = {
+  image: "M3 3h18v18H3zM3 16l5-5 4 4 3-3 6 6M15 8h.01",
   sort: "M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4",
   grid: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
   list: "M4 5h3m3 0h10M4 12h3m3 0h10M4 19h3m3 0h10",
@@ -53,6 +54,10 @@ const paths = {
 export function commandIconName(label) {
   const key = String(label).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   for (const [pattern, name] of [
+    [/^nessuno$/, "close"],
+    [/^desiderato$/, "heart"],
+    [/^posseduto$/, "check"],
+    [/^copertina personale$/, "image"],
     [/^griglia$/, "grid"],
     [/^lista(?: compatta)?$/, "list"],
     [/^mosaico$/, "mosaic"],
