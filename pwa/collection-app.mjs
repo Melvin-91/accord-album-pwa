@@ -298,7 +298,7 @@ async function run(action) {
   busy = true; disable();
   try { await action(); }
   catch (error) { report(error.message, true); }
-  finally { busy = false; render(); disable(); }
+  finally { busy = false; render(); disable(); for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.(); }
 }
 function mutate(action) {
   if (busy || !store) return;
@@ -1356,7 +1356,7 @@ function supportPanel(artist,title){
    row.append(node("label",name));
    for(const [value,label] of [["none","Nessuno"],["wanted","Desiderato"],["owned","Posseduto"]]){
     const button=node("button",label,{type:"button",class:"secondary","aria-pressed":String(current===value)});
-    button.disabled=busy||(!scoutLive&&value!=="owned"&&value!=="wanted"&&!owned);
+    button.disabled=busy||(!scoutLive&&value!=="owned"&&value!=="wanted"&&!owned&&!wanted);
     button.onclick=async()=>{
      if(busy)return;
      if(value===current&&!(owned&&wanted&&value==="owned"))return;
