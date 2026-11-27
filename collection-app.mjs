@@ -1355,7 +1355,12 @@ window.addEventListener("storage", (event) => {
 });
 function supportPanel(artist,title){
  const panel=node("section","",{class:"suite-supports"});panel.dataset.suiteSupport="1";
+ let lastDraw="";
  function draw(){
+  let intents=[];try{intents=localWishIntents()}catch{}
+  const signature=JSON.stringify([busy,store.state.physical,scoutLive,intents]);
+  if(signature===lastDraw)return;
+  lastDraw=signature;
   panel.replaceChildren(node("p","SUPPORTI FISICI",{class:"suite-section-label"}));
   const same=x=>scoutIdentity(x.artist,x.album||x.title)===scoutIdentity(artist,title);
   const physical=store.state.physical.find(x=>same(x))||{};
@@ -1370,7 +1375,7 @@ function supportPanel(artist,title){
     const button=node("button",label,{type:"button",class:"secondary","aria-pressed":String(current===value)});
     button.disabled=busy||(!scoutLive&&value!=="owned"&&value!=="wanted"&&!owned&&!wanted);
     button.onclick=async()=>{
-     if(busy)return;
+     if(busy){report("Sincronizzazione in corso. Riprova tra poco.",true);return;}
      if(value===current&&!(owned&&wanted&&value==="owned"))return;
      if(owned&&value!=="owned"&&!confirm("Rimuovere "+name+" dai supporti posseduti?"))return;
      try{
@@ -1379,7 +1384,7 @@ function supportPanel(artist,title){
       else {if(wanted)queueWishIntent(artist,title,format,false);if(owned){store.setPhysicalFormat(artist,title,key,false);suitePhysicalDirty=true}}
       if(suitePhysicalDirty)localStorage.setItem("accord-suite:physical-pending","1");
       draw();void refreshSuite();
-     }catch(e){report(e.message,true);draw()}
+     }catch(e){lastDraw="";report(e.message,true);draw()}
     };choices.append(button)
    }
    row.append(choices,node("p",pending?"Sincronizzazione Scout in attesa":owned?(wanted?"Posseduto · anche monitorato":"Presente nella raccolta fisica"):wanted?"Monitorato da Scout":scoutLive?"Non monitorato":"Stato Scout non verificato",{class:"muted"}));panel.append(row)
@@ -1393,7 +1398,7 @@ async function safePhysicalSync(){
  return !!completed;
 }
 async function refreshSuite(){
- if(suiteSyncBusy||busy){suiteRefreshQueued=true;return;}
+ if(suiteSyncBusy||busy||document.querySelector("dialog[open]")){suiteRefreshQueued=true;return;}
  if(!store||!navigator.onLine)return;
  suiteRefreshQueued=false;
  suiteSyncBusy=true;
@@ -1404,10 +1409,10 @@ async function refreshSuite(){
  }catch(e){/* Local intents are retained until a confirmed mailbox write. */}
  try{
   if(suitePhysicalDirty||localStorage.getItem("accord-suite:physical-pending")==="1"){
-   if(await safePhysicalSync()){suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending")}
+   if(!document.querySelector("dialog[open]")&&await safePhysicalSync()){suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending")}
   }
  }catch{}
- finally{suiteSyncBusy=false;for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.();if(suiteRefreshQueued&&!busy&&!document.hidden)setTimeout(()=>void refreshSuite(),500)}
+ finally{suiteSyncBusy=false;for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.();if(suiteRefreshQueued&&!busy&&!document.hidden&&!document.querySelector("dialog[open]"))setTimeout(()=>void refreshSuite(),500)}
 }
 async function chooseSupportAlbum(support, previous = null) {
   const {artist, title} = support;
@@ -1482,11 +1487,11 @@ const pendingNotice = $("pendingTransfersNotice");
 pendingNotice.addEventListener("click",()=>{if(!$("collectionTools").open)$("collectionTools").showModal();inbox.open=true;inbox.querySelector("summary")?.focus();});
 let inboxBusy = false;
 async function refreshInbox() {
-  if (inboxBusy) return;
+  if (inboxBusy || busy || document.querySelector("dialog[open]")) return;
   inboxBusy = true;
   try {
     let rows = await pendingTransfers();
-    if(!busy && navigator.onLine){
+    if(!busy && navigator.onLine && !document.querySelector("dialog[open]")){
       const automatic=rows.filter(row=>row.automatic===true).map(row=>({row,matches:store.state.albums.filter(album=>scoutIdentity(album.artist,album.name)===scoutIdentity(row.artist,row.album))})).filter(x=>x.matches.length===1);
       if(automatic.length){
         try{
@@ -1535,6 +1540,7 @@ async function refreshInbox() {
 void refreshInbox();void refreshSuite();
 const resumeSuite=()=>{if(!document.hidden&&navigator.onLine){void refreshInbox();void refreshSuite()}};
 document.addEventListener("visibilitychange",resumeSuite);window.addEventListener("pageshow",resumeSuite);window.addEventListener("focus",resumeSuite);window.addEventListener("online",resumeSuite);
+document.addEventListener("close",()=>{setTimeout(resumeSuite,0)},true);
 setInterval(resumeSuite,20000);
 function receiveScout(){if(busy||!store)return;const intent=importIntent(location.hash);if(!intent)return;window.history.replaceState(null,"",location.pathname+location.search);void run(async()=>{if(await chooseSupportAlbum(intent))await performSync()})}
 window.addEventListener("hashchange",receiveScout);
