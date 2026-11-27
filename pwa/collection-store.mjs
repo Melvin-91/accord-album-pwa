@@ -182,6 +182,24 @@ export function createCollectionStore(storage) {
       assertPhysicalEditable();
       commit({ ...state, physical: addPhysicalRecords(state.physical, rows) });
     },
+    associateSupport(albumId, support, previous = null) {
+      assertCurrent();
+      assertPhysicalEditable();
+      const album = state.albums.find(row => row.id === albumId);
+      if (!album) throw new Error("Scheda cambiata. Ripeti la scelta.");
+      let records = state.physical;
+      let formats = support;
+      if (previous) {
+        const key = physicalKey(previous.artist, previous.title);
+        const original = records.find(row => physicalKey(row.artist, row.title) === key);
+        if (!original || original.cd !== previous.cd || original.vinyl !== previous.vinyl)
+          throw new Error("Supporti cambiati. Riapri la scheda.");
+        records = records.filter(row => row !== original);
+        formats = original;
+      }
+      commit({ ...state, physical: addPhysicalRecords(records, [{ artist: album.artist, title: album.name,
+        cd: formats.cd, vinyl: formats.vinyl }]) });
+    },
     setPhysicalFormat(artist, title, format, checked) {
       assertPhysicalEditable();
       commit({ ...state, physical: setPhysicalRecordFormat(state.physical, artist, title, format, checked) });

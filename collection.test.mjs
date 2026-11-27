@@ -1539,7 +1539,18 @@ test("TIDAL redirect control is visible and changed modules use fresh precache U
   assert.match(html, /id="copyRedirectUri"/);
   assert.ok(app.includes('$("redirectField").hidden = provider === "qobuz"'));
   assert.ok(app.includes('new URL("./", location.href).href'));
-  assert.ok(html.includes("collection-app.mjs?v=56"));
+  assert.ok(html.includes("collection-app.mjs?v=57"));
   assert.ok(app.includes("collection-services.mjs?v=22"));
-  for (const resource of ["collection-app.mjs?v=56","collection-services.mjs?v=22"]) assert.ok(sw.includes(resource));
+  for (const resource of ["collection-app.mjs?v=57","collection-services.mjs?v=22"]) assert.ok(sw.includes(resource));
+});
+test("confirming Dragonlord folds both physical formats into its existing streaming card", () => {
+  const saved = album("tidal:42", {artist:"Domine", name:"Dragonlord (Tales of the Noble Steel)"});
+  const store = createCollectionStore(local([saved]));
+  const short = {artist:"Domine",title:"Dragonlord",cd:true,vinyl:false};
+  store.addPhysical([short,{...short,title:saved.name,cd:false,vinyl:true}]);
+  store.associateSupport(saved.id,short,short);
+  store.associateSupport(saved.id,short);
+  assert.deepEqual(store.state.albums,[saved]);
+  assert.deepEqual(store.state.physical,[{...short,title:saved.name,vinyl:true}]);
+  assert.throws(()=>store.associateSupport(saved.id,short,short),/cambiati/);
 });

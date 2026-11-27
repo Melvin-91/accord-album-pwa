@@ -569,10 +569,10 @@ test("active root/copy modules and tests match; precache covers modules, version
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}accord-192.png?brand=album-1445"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.doesNotMatch(mirrorHtml, /streaming-qobuz/);
-    for (const file of ["collection-app.mjs?v=56", "collection.css?v=22", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=18", "tidal-preview.mjs?v=1",
+    for (const file of ["collection-app.mjs?v=57", "collection.css?v=22", "collection-qol.mjs?v=4", "collection-qol.mjs?v=6", "command-icons.mjs?v=4", "core.mjs?v=54", "tidal.mjs?v=18", "tidal-preview.mjs?v=1",
       "physical-collection.css?v=3", "physical-collection.mjs?v=2", "unified-library.mjs?v=1", "physical-collection-ui.mjs?v=3",
       "qobuz.mjs?v=12", "music-app-links.mjs?v=7", "album-association.mjs?v=15", "music-library-choices.mjs?v=2", "service-requests.mjs?v=4",
-      "collection-store.mjs?v=15", "collection-sync.mjs?v=11", "duration-sync.mjs?v=1", "collection-services.mjs?v=22", "music-suggestion-filters.mjs?v=4",
+      "collection-store.mjs?v=16", "collection-sync.mjs?v=11", "duration-sync.mjs?v=1", "collection-services.mjs?v=22", "music-suggestion-filters.mjs?v=4",
       "music-completion.mjs?v=7", "edition-comparison.mjs?v=4", "music-continuity.mjs?v=13", "ui.mjs?v=25"]) {
       assert.ok(mirrorWorker.includes(file), `${file} is cached by the PWA mirror at ${mirror}`);
     }
