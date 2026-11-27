@@ -11,7 +11,7 @@ import { associationUpdates, openAssociationDialog } from "./album-association.m
 import { LIBRARY_CHOICES_KEY, readLibraryChoices, changeLibraryChoice, manuallyUnavailable } from "./music-library-choices.mjs?v=2";
 import { openTidalPreview } from "./tidal-preview.mjs?v=1";
 import { albumSearchMatch, shortReleaseKind } from "./music-suggestion-filters.mjs?v=4";
-import { commandIconElement, commandIconName, installCommandIcons } from "./command-icons.mjs?v=4";
+import { commandIconElement, commandIconName, installCommandIcons } from "./command-icons.mjs?v=5";
 import { installSelectWheelGuard } from "./ui.mjs?v=25";
 import { showEditionComparison } from "./edition-comparison.mjs?v=4";
 import { initializePhysicalCollection } from "./physical-collection-ui.mjs?v=3";

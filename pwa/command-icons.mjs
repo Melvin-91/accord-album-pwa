@@ -1,4 +1,8 @@
 const paths = {
+  sort: "M8 4v16m-4-4 4 4 4-4M16 20V4m-4 4 4-4 4 4",
+  grid: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z",
+  list: "M4 5h3m3 0h10M4 12h3m3 0h10M4 19h3m3 0h10",
+  mosaic: "M3 3h10v10H3zM16 3h5v10h-5zM3 16h5v5H3zM11 16h10v5H11z",
   album: "M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
   record: "M4 3h12v18H4zM16 7h4v10h-4m-1-5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm-3 0h.01",
   plus: "M12 5v14M5 12h14",
@@ -49,6 +53,10 @@ const paths = {
 export function commandIconName(label) {
   const key = String(label).normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
   for (const [pattern, name] of [
+    [/^griglia$/, "grid"],
+    [/^lista(?: compatta)?$/, "list"],
+    [/^mosaico$/, "mosaic"],
+    [/inverti ordine|ordinamento/, "sort"],
     [/non mi piace|non piace|non piaciut|disliked|dislik/, "thumbsDown"],
     [/\bmi piace\b|\bpiaciut|\bliked?\b/, "thumbsUp"],
     [/\bneutro\b|\bneutral\b/, "neutral"],
