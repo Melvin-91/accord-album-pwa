@@ -1030,7 +1030,7 @@ $("qolDelete").addEventListener("click",()=>{const value=$("qolSaved").value;if(
 const legacyAppearance={...store?.state.preferences,theme:qolRead("theme","copper")};
 const mountSuiteAppearance=()=>mountAppearance($("suiteAppearance"),{storage:localStorage,legacy:legacyAppearance,onChange:p=>qolWrite("theme",p.theme)});
 mountSuiteAppearance();
-$("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;render()});
+$("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;if(qolMulti)$("collectionTools").open=false;render()});
 $("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
 $("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});
 $("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collectionRows(store.state.albums,store.state.physical),s=collectionStats(visible,store.durations());const body=[node("p",s.total+" album · "+s.cd+" CD · "+s.vinyl+" vinili · "+s.queued+" da ascoltare"),node("p","Durata nota: "+(s.knownDuration?durationText(s.totalDuration):"non disponibile")+" su "+s.knownDuration+" album")];for(const [title,values] of [["Generi",s.genres],["Artisti",s.artists],["Decenni",s.decades],["Voti",s.ratings]]){body.push(node("h3",title));for(const [name,count] of values)body.push(node("p",name+" · "+count))}if(scoutImported)body.push(node("h3","Scout · ultimo backup importato"),node("p",scoutImported.rows.length+" supporti in wishlist · "+scoutImported.purchases+" acquisti · "+scoutImported.spend.toLocaleString("it-IT",{style:"currency",currency:"EUR"})+" spesi ("+scoutImported.known+" prezzi noti)"));await choice("Statistiche raccolta",body,[["close","Chiudi"]])}));
@@ -1071,7 +1071,7 @@ $("quickReviewDialog").addEventListener("cancel", (event) => {
 $("quickReviewDialog").addEventListener("close", () => {
   const scroll = quickReview?.scroll || 0;
   quickReview = null;
-  requestAnimationFrame(() => { $("openQuickReview").focus({ preventScroll: true }); window.scrollTo({ top: scroll }); });
+  requestAnimationFrame(() => { ($("collectionTools").open ? $("openQuickReview") : $("collectionTools").querySelector("summary")).focus({ preventScroll: true }); window.scrollTo({ top: scroll }); });
 });
 $("reviewMetadata").addEventListener("click", () => run(reviewMetadata));
 $("returnToFilters").addEventListener("click", () => {
@@ -1333,12 +1333,16 @@ function transferButtons(artist, title) {
   });
 }
 const inbox = $("transferInbox");
+const pendingNotice = $("pendingTransfersNotice");
+pendingNotice.addEventListener("click",()=>{$("collectionTools").open=true;inbox.open=true;inbox.querySelector("summary")?.focus();});
 let inboxBusy = false;
 async function refreshInbox() {
   if (inboxBusy) return;
   inboxBusy = true;
   try {
     const rows = await pendingTransfers();
+    pendingNotice.hidden = rows.length === 0;
+    pendingNotice.textContent = rows.length + (rows.length === 1 ? " acquisto da importare da Scout" : " acquisti da importare da Scout");
     inbox.replaceChildren(node("summary","Da importare da Scout ("+rows.length+")"));
     if (!rows.length) inbox.append(node("p","Nessun acquisto in attesa."));
     const choices = rows.map(row => {
