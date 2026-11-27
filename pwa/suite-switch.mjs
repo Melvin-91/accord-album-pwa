@@ -11,14 +11,14 @@ export function installSuiteSwitch(target, notify) {
   };
   if (!requiresManualSwitch(target,target,platform)) return;
   const name = new URL(target).hostname === "melvin-91.github.io" ? "Accord Album" : "Accord Scout";
-  const message = "Per aprire " + name + " con gli accessi già configurati, usa il selettore app di iPhone oppure la sua icona sulla Home. iOS non permette il passaggio diretto tra queste app web.";
+  const shortcutName = "Apri " + name;
+  const shortcutURL = "shortcuts://run-shortcut?name=" + encodeURIComponent(shortcutName);
   document.addEventListener("click", event => {
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const anchor = event.target?.closest?.("a[href]");
     if (!anchor || !requiresManualSwitch(anchor.href,target,platform)) return;
     event.preventDefault();
-    // No external navigation, no token transfer, and no unsupported URL scheme.
-    notify(message);
-    window.alert(message);
+    notify("Se " + name + " non si apre, verifica il comando rapido «" + shortcutName + "» oppure usa l’icona sulla Home.");
+    window.location.assign(shortcutURL);
   });
 }
