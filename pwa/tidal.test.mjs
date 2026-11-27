@@ -556,16 +556,16 @@ test("active root/copy modules and tests match; precache covers modules, version
   const sw = readFileSync(new URL("./sw.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("./collection.css", import.meta.url), "utf8");
   assert.match(css, /min-width: 0/);
-  assert.match(html, /v6\.4\.4/); assert.match(sw, /v6\.4\.4/);
+  assert.match(html, /v6\.4\.5/); assert.match(sw, /v6\.4\.5/);
   assert.match(html, /connect-src[^;]*https:\/\/openapi\.tidal\.com https:\/\/auth\.tidal\.com/);
   assert.match(html, /frame-src https:\/\/embed\.tidal\.com;/);
-  assert.match(sw, /collection-app\.mjs\?v=56/); assert.match(sw, /collection\.css\?v=22/);
+  assert.match(sw, /collection-app\.mjs\?v=57/); assert.match(sw, /collection\.css\?v=22/);
   assert.match(sw, /tidal\.mjs\?v=18/); assert.doesNotMatch(sw, /tidal-ui\.mjs/);
   for (const mirror of mirrors) {
     const mirrorHtml = readFileSync(new URL("index.html", mirror), "utf8");
     const mirrorWorker = readFileSync(new URL("sw.js", mirror), "utf8");
     const assetPrefix = new URL(mirror).pathname.endsWith("/pwa/") ? "../assets/" : "./assets/";
-    assert.match(mirrorHtml, /v6\.4\.4/); assert.match(mirrorWorker, /v6\.4\.4/);
+    assert.match(mirrorHtml, /v6\.4\.5/); assert.match(mirrorWorker, /v6\.4\.5/);
     assert.ok(mirrorHtml.includes(`href="${assetPrefix}accord-192.png?brand=album-1445"`));
     assert.ok(mirrorWorker.includes(`"${assetPrefix}malt_metal.ico"`));
     assert.doesNotMatch(mirrorHtml, /streaming-qobuz/);

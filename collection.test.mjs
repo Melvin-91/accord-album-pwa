@@ -1478,14 +1478,14 @@ test("the collection exposes exactly the canonical listening states", () => {
 test("the active shell contains only collection workflows and precaches its complete module graph", () => {
   const read = (file) => readFileSync(new URL(file, import.meta.url), "utf8");
   const html = read("index.html"), app = read("collection-app.mjs"), sw = read("sw.js");
-  assert.match(html, /collection-app\.mjs\?v=56/);
+  assert.match(html, /collection-app\.mjs\?v=57/);
   assert.match(html, /<link rel="stylesheet" href="\.\/collection\.css\?v=22">/);
   assert.match(html, /<link rel="stylesheet" href="\.\/physical-collection\.css\?v=3">/);
   assert.doesNotMatch(html, /suggestionsPanel|playlistBuilderPanel|backupDialog|auditDialog|physicalOpen|app\.mjs\?v=124/);
   assert.match(html, /id="duplicates"/); assert.match(html, /Content-Security-Policy/);
   assert.doesNotMatch(html.match(/<header[\s\S]*?<\/header>/)[0], /id="duplicates"/);
   assert.match(html, /class="brand"[\s\S]*<img src="[^"]*accord-180\.png\?brand=album-1445" width="48" height="48" alt="" aria-hidden="true">/);
-  assert.match(html, /class="app-version" id="version">App attiva v6\.4\.4/);
+  assert.match(html, /class="app-version" id="version">App attiva v6\.4\.5/);
   assert.match(html, /id="openPhysicalTools"[^>]*>Aggiungi album non presente nei servizi/);
   assert.match(read("physical-collection-ui.mjs"), /id = 'physicalToolsPanel'/);
   assert.doesNotMatch(read("physical-collection-ui.mjs"), /createElement\('dialog'\)/);
