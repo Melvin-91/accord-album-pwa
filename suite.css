@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.4 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.5 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -203,3 +203,33 @@
 [data-accord-suite][data-scout-home=true] .simple-list>.simple-card{padding:12px}
 [data-accord-suite][data-scout-home=true] .simple-list .album-price-line{padding-top:8px;margin-top:8px}
 [data-accord-suite][data-scout-home=true] .simple-list .full-link{margin-top:2px}
+
+/* Shared compact controls and native bottom sheets. */
+[data-accord-suite] :is(#filters,.scout-home-search).suite-browse-controls{display:grid;grid-template-columns:minmax(0,1fr) 44px 44px;gap:8px;align-items:center;margin-bottom:12px}
+[data-accord-suite] .suite-browse-controls :is(input,.simple-search){min-width:0;width:100%;margin:0;min-height:44px;font-size:.875rem}
+[data-accord-suite] .suite-browse-controls .suite-icon-control{position:relative;display:grid;place-items:center;width:44px;min-width:44px;height:44px;padding:0;margin:0;border:1px solid var(--line);border-radius:var(--radius-control);background:var(--raised);color:var(--ink)}
+[data-accord-suite] .suite-icon-control .command-icon{width:20px;height:20px;margin:0}
+[data-accord-suite] .suite-filter-count{position:absolute;right:2px;top:2px;background:var(--accent);color:var(--on-accent);border-radius:99px;min-width:16px;padding:1px 3px;font-size:10px;line-height:14px;font-weight:700}
+[data-accord-suite] .suite-filter-count[hidden]{display:none!important}
+[data-accord-suite] dialog.suite-sheet{position:fixed;inset:auto 0 0;margin:0 auto;width:min(580px,100%);max-width:100%;max-height:85vh;max-height:85dvh;border-radius:22px 22px 0 0;padding:0;overflow:auto;overscroll-behavior:contain;box-shadow:0 -12px 44px #0005}
+[data-accord-suite] .suite-sheet .dialog-heading{position:sticky;top:0;z-index:1;background:var(--surface);padding:16px 16px 12px;margin:0;border-bottom:1px solid var(--line);align-items:center;flex-wrap:nowrap}
+[data-accord-suite] .suite-sheet .dialog-heading button{min-width:44px;min-height:44px;padding:8px;display:grid;place-items:center}
+[data-accord-suite] .suite-sheet .dialog-heading .command-icon{margin:0}
+[data-accord-suite] .suite-sheet-body{display:grid;gap:12px;padding:16px 16px calc(16px + env(safe-area-inset-bottom));min-width:0}
+[data-accord-suite] .suite-sheet-body label{display:block;font-size:.8125rem;color:var(--muted);margin:0;min-width:0}
+[data-accord-suite] .suite-sheet-body :is(select,input:not([type=checkbox])){width:100%;margin:4px 0 0;min-height:44px}
+[data-accord-suite] .suite-sheet-body label.check{display:flex;align-items:center;gap:10px;min-height:44px;color:var(--ink)}
+[data-accord-suite] .suite-sheet-body .suite-section-label{font-size:.6875rem;letter-spacing:.1em;color:var(--muted);font-weight:600;margin:0}
+[data-accord-suite] .suite-sheet-body .suite-tool-list{display:grid;gap:0;border:1px solid var(--line);border-radius:var(--radius-card);overflow:hidden}
+[data-accord-suite] .suite-tool-list>:is(button,a,details){width:100%;min-width:0;margin:0;border:0;border-radius:0;background:transparent;text-align:left;min-height:44px;border-bottom:1px solid var(--line);padding:10px 12px}
+[data-accord-suite] .suite-tool-list>:last-child{border-bottom:0}
+[data-accord-suite] .suite-tool-list>button{display:flex;align-items:center;gap:8px;color:var(--ink);font-weight:400}
+[data-accord-suite] .suite-tool-list>details>summary{padding:0;min-height:34px;justify-content:flex-start}
+[data-accord-suite] .suite-sheet-footer{position:sticky;bottom:0;background:var(--surface);display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 16px calc(12px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+[data-accord-suite] .suite-sheet-footer button{min-height:44px;margin:0;white-space:normal}
+[data-accord-suite] .suite-active-filters{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+[data-accord-suite] .suite-active-filters:empty{display:none}
+[data-accord-suite] .suite-active-filters button{min-height:32px;padding:5px 10px;font-size:.75rem}
+[data-accord-suite] .suite-view-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+[data-accord-suite] .suite-view-picker button{min-width:0;padding:8px 4px;font-size:.75rem}
+[data-accord-suite] .suite-view-picker button[aria-pressed=true]{background:var(--soft);color:var(--accent);border-color:var(--accent)}

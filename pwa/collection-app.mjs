@@ -156,7 +156,7 @@ setTidalAlbumLinkResolver(localStorage, async (value) => {
   return result.album.url;
 });
 function disable() {
-  document.querySelectorAll("header button, #collectionDock button, #filters input, #filters select, #albumList button, #albumList select, #moreAlbums, #openQuickReview, #returnToFilters, #quickReviewDialog button, #quickReviewDialog select, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
+  document.querySelectorAll("header button, #collectionDock button, #filters input, #filters button, #collectionFilters select, #collectionFilters input, #collectionTools button, #collectionTools select, #albumList button, #albumList select, #moreAlbums, #openQuickReview, #returnToFilters, #quickReviewDialog button, #quickReviewDialog select, #addDialog button:not([data-close]), #addDialog input, #addDialog select, #settingsDialog button:not(#cancelDurations), #settingsDialog input, #settingsDialog select")
     .forEach((element) => { element.disabled = busy || !store; });
   physicalCollection?.setBusy(busy);
   $("collection").setAttribute("aria-busy", String(busy));
@@ -639,6 +639,10 @@ function render() {
   }
   const chips=$("qolChips");chips.replaceChildren();
   for(const id of ["search","statusFilter","genreFilter","formatFilter","favoritesFilter"]){const control=$(id),active=id==="favoritesFilter"?control.checked:control.value;if(!active)continue;const label=id==="favoritesFilter"?"Preferiti":id==="search"?control.value:control.selectedOptions[0]?.textContent;const chip=node("button",label+" ×",{type:"button",class:"secondary"});chip.addEventListener("click",()=>{if(id==="favoritesFilter")control.checked=false;else control.value="";control.dispatchEvent(new Event(id==="search"?"input":"change"))});chips.append(chip)}
+  const activeFilters=["statusFilter","genreFilter","formatFilter","favoritesFilter"].filter(id=>id==="favoritesFilter"?$(id).checked:!!$(id).value).length;
+  $("collectionFilterCount").hidden=!activeFilters;$("collectionFilterCount").textContent=String(activeFilters);$("openCollectionFilters").setAttribute("aria-label","Filtri"+(activeFilters?" ("+activeFilters+" attivi)":""));
+  if(activeFilters){const reset=node("button","Azzera",{type:"button",class:"secondary"});reset.onclick=()=>clearCollectionFilters();chips.append(reset)}
+  for(const btn of document.querySelectorAll("[data-collection-view]"))btn.setAttribute("aria-pressed",String(btn.dataset.collectionView===$("qolView").value));
   $("qolSelected").textContent=qolSelection.size+" selezionati";
   $("count").textContent = `${filtered.length} album${filtered.length !== total ? ` su ${total}` : ""}`;
   $("empty").hidden = filtered.length > 0;
@@ -1016,6 +1020,13 @@ const dockObserver = new ResizeObserver(() => {
   document.documentElement.style.setProperty("--dock-height", `${Math.ceil($("collectionDock").getBoundingClientRect().height)}px`);
 });
 dockObserver.observe($("collectionDock"));
+function clearCollectionFilters(){for(const id of ["statusFilter","genreFilter","formatFilter"])$(id).value="";$("favoritesFilter").checked=false;revealedAlbum=null;revealOrigin=null;visibleLimit=40;closeAlbumOptions();render()}
+$("openCollectionFilters").addEventListener("click",()=>$("collectionFilters").showModal());
+$("openCollectionTools").addEventListener("click",()=>$("collectionTools").showModal());
+$("resetCollectionFilters").addEventListener("click",clearCollectionFilters);
+for(const btn of document.querySelectorAll("[data-collection-view]"))btn.addEventListener("click",()=>{$("qolView").value=btn.dataset.collectionView;$("qolView").dispatchEvent(new Event("change"));});
+for(const id of ["qolStats","qolPick","qolMulti","openQuickReview"])$(id).addEventListener("click",()=>{if($("collectionTools").open)$("collectionTools").close()},true);
+
 const qolFields=["search","statusFilter","genreFilter","formatFilter","favoritesFilter","qolSort","qolView"];
 function qolApplyView(view){for(const id of qolFields){if(!(id in view))continue;const el=$(id);if(el.type==="checkbox")el.checked=!!view[id];else if(el.tagName!=="SELECT"||[...el.options].some(o=>o.value===view[id]))el.value=view[id]}qolReverse=!!view.reverse;$("qolReverse").setAttribute("aria-pressed",String(qolReverse));visibleLimit=40;revealedAlbum=null;revealOrigin=null;render()}
 function qolCurrent(){return Object.fromEntries([...qolFields.map(id=>[id,$(id).type==="checkbox"?$(id).checked:$(id).value]),["reverse",qolReverse]])}
@@ -1030,7 +1041,7 @@ $("qolDelete").addEventListener("click",()=>{const value=$("qolSaved").value;if(
 const legacyAppearance={...store?.state.preferences,theme:qolRead("theme","copper")};
 const mountSuiteAppearance=()=>mountAppearance($("suiteAppearance"),{storage:localStorage,legacy:legacyAppearance,onChange:p=>qolWrite("theme",p.theme)});
 mountSuiteAppearance();
-$("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;if(qolMulti)$("collectionTools").open=false;render()});
+$("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;if(qolMulti&&$("collectionTools").open)$("collectionTools").close();render()});
 $("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
 $("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});
 $("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collectionRows(store.state.albums,store.state.physical),s=collectionStats(visible,store.durations());const body=[node("p",s.total+" album · "+s.cd+" CD · "+s.vinyl+" vinili · "+s.queued+" da ascoltare"),node("p","Durata nota: "+(s.knownDuration?durationText(s.totalDuration):"non disponibile")+" su "+s.knownDuration+" album")];for(const [title,values] of [["Generi",s.genres],["Artisti",s.artists],["Decenni",s.decades],["Voti",s.ratings]]){body.push(node("h3",title));for(const [name,count] of values)body.push(node("p",name+" · "+count))}if(scoutImported)body.push(node("h3","Scout · ultimo backup importato"),node("p",scoutImported.rows.length+" supporti in wishlist · "+scoutImported.purchases+" acquisti · "+scoutImported.spend.toLocaleString("it-IT",{style:"currency",currency:"EUR"})+" spesi ("+scoutImported.known+" prezzi noti)"));await choice("Statistiche raccolta",body,[["close","Chiudi"]])}));
@@ -1071,7 +1082,7 @@ $("quickReviewDialog").addEventListener("cancel", (event) => {
 $("quickReviewDialog").addEventListener("close", () => {
   const scroll = quickReview?.scroll || 0;
   quickReview = null;
-  requestAnimationFrame(() => { ($("collectionTools").open ? $("openQuickReview") : $("collectionTools").querySelector("summary")).focus({ preventScroll: true }); window.scrollTo({ top: scroll }); });
+  requestAnimationFrame(() => { $("openCollectionTools").focus({ preventScroll: true }); window.scrollTo({ top: scroll }); });
 });
 $("reviewMetadata").addEventListener("click", () => run(reviewMetadata));
 $("returnToFilters").addEventListener("click", () => {
@@ -1334,7 +1345,7 @@ function transferButtons(artist, title) {
 }
 const inbox = $("transferInbox");
 const pendingNotice = $("pendingTransfersNotice");
-pendingNotice.addEventListener("click",()=>{$("collectionTools").open=true;inbox.open=true;inbox.querySelector("summary")?.focus();});
+pendingNotice.addEventListener("click",()=>{if(!$("collectionTools").open)$("collectionTools").showModal();inbox.open=true;inbox.querySelector("summary")?.focus();});
 let inboxBusy = false;
 async function refreshInbox() {
   if (inboxBusy) return;
