@@ -1,4 +1,5 @@
 import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
+import {pendingTransfers, sendTransfer, acknowledgeTransfers} from "./transfer-queue.mjs?v=1";
 import {installSuiteSwitch} from "./suite-switch.mjs?v=2";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
@@ -18,7 +19,7 @@ import { PHYSICAL_KEY } from "./physical-collection.mjs?v=2";
 import { RECENT_CATALOG_SEARCHES, recentCatalogSearches, rememberCatalogSearch, clearCatalogSearches, catalogSearchCorrections,
   collectionRows, collectionGenres, collectionAnomalies, catalogSearchFields, catalogSearchInput } from "./collection-qol.mjs?v=6";
 
-import {sortRows,collectionStats,listeningCandidates,scoutLink,importIntent,scoutIdentity,scoutSnapshot,validPersonalCover,makePersonalCover,personalCards,readScoutPersonal} from "./album-qol-v2.mjs?v=4";
+import {sortRows,collectionStats,listeningCandidates,importIntent,scoutIdentity,scoutSnapshot,validPersonalCover,makePersonalCover,personalCards,readScoutPersonal} from "./album-qol-v2.mjs?v=4";
 installCommandIcons(document);
 installSelectWheelGuard(document);
 
@@ -540,9 +541,7 @@ function albumCard(album, favorite, duration) {
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
   const management = node("div", "", { class: "dialog-actions" });
   management.append(remove);
-  for(const [format,label] of [["CD","Cerca CD in Scout"],["Vinyl","Cerca vinile in Scout"]]){
-    const link=node("a",label,{href:scoutLink(album.artist,album.name,format),rel:"noopener noreferrer",class:"secondary qol-scout"});management.append(link);
-  }
+  management.append(...transferButtons(album.artist,album.name));
   options.append(management);
   if (/^tidal:[1-9][0-9]*$/.test(album.id)) {
     const preview = node("button", "Anteprima TIDAL · 30 s", { type: "button", class: "secondary" });
@@ -616,7 +615,7 @@ function render() {
     const { element } = cards.get(id);
     physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
       physical || { cd: false, vinyl: false });
-    if(!album&&!element.querySelector(".qol-physical-scout")){const links=node("details","",{class:"qol-physical-scout"});links.append(node("summary","Cerca in Scout"));for(const [format,label] of [["CD","Cerca CD in Scout"],["Vinyl","Cerca vinile in Scout"]])links.append(node("a",label,{href:scoutLink(physical.artist,physical.title,format),class:"qol-scout",rel:"noopener noreferrer"}));element.append(links)}
+    if(!album&&!element.querySelector(".qol-physical-scout")){const links=node("details","",{class:"qol-physical-scout"});links.append(node("summary","Invia a Scout"),...transferButtons(physical.artist,physical.title));element.append(links)}
     const artKey=scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title);const art=personalArt[artKey];const artBox=element.querySelector(".artwork");if(artBox){const old=artBox.querySelector(".qol-personal-art");if(validPersonalCover(art)){if(!old||old.dataset.src!==art){old?.remove();const image=node("img","",{class:"qol-personal-art loaded",alt:"Copertina personale"});image.dataset.src=art;const bytes=Uint8Array.from(atob(art.split(",")[1]),x=>x.charCodeAt(0)),url=URL.createObjectURL(new Blob([bytes],{type:"image/jpeg"}));image.onload=image.onerror=()=>URL.revokeObjectURL(url);image.src=url;artBox.append(image)}}else old?.remove()}
     if(!element.querySelector(".qol-art-controls")&&(!qolActionsOrigin||qolActionsOrigin.id!==id)){const controls=node("div","",{class:"qol-art-controls"}),label=node("label","Copertina personale"),file=node("input","",{type:"file",accept:"image/jpeg,image/png,image/webp"});file.addEventListener("change",async()=>{try{if(!file.files[0]||!confirm("Confermi di poter utilizzare e condividere questa immagine personale?"))return;const data=await makePersonalCover(file.files[0]),next={...personalArt,[artKey]:data};if(JSON.stringify(next).length>1200000)throw Error("Archivio copertine personali pieno.");localStorage.setItem("accord-qol:personal-art",JSON.stringify(next));personalArt=next;render();report("Copertina personale salvata.")}catch(e){report(e.message,true)}finally{file.value=""}});label.append(file);controls.append(label);const remove=node("button","Rimuovi copertina personale",{type:"button",class:"secondary"});remove.addEventListener("click",()=>{delete personalArt[artKey];qolWrite("personal-art",personalArt);render()});controls.append(remove);const target=element.querySelector(".album-options");if(target)target.append(controls);else{const details=node("details","",{class:"qol-physical-art"});details.append(node("summary","Copertina personale"),controls);element.append(details)}}
     element.querySelector(".qol-watch")?.remove();const tracked=(scoutImported?.rows||[]).filter(x=>x.priority!=="paused"&&scoutIdentity(x.artist,x.album)===scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title));if(tracked.length){const badge=node("p","Scout · "+[...new Set(tracked.map(x=>x.format==="Vinyl"?"Vinile":"CD"))].join(" + "),{class:"qol-watch muted",title:"Ultimo backup Scout importato, non aggiornamento live"});(element.querySelector(".album-metadata")||element).append(badge)}
@@ -1321,6 +1320,58 @@ window.addEventListener("storage", (event) => {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }
 });
+function transferButtons(artist, title) {
+  return [["CD","CD"],["Vinyl","vinile"]].map(([format,label]) => {
+    const button = node("button","Invia "+label+" a Scout",{type:"button",class:"secondary qol-scout"});
+    button.onclick = async () => {
+      button.disabled = true;
+      try { await sendTransfer(artist,title,format); report("Disco in attesa. Apri Scout dalla sua icona e conferma in Da importare."); }
+      catch (e) { report(e.message,true); }
+      finally { button.disabled = false; }
+    };
+    return button;
+  });
+}
+const inbox = $("transferInbox");
+let inboxBusy = false;
+async function refreshInbox() {
+  if (inboxBusy) return;
+  inboxBusy = true;
+  try {
+    const rows = await pendingTransfers();
+    inbox.replaceChildren(node("summary","Da importare da Scout ("+rows.length+")"));
+    if (!rows.length) inbox.append(node("p","Nessun acquisto in attesa."));
+    const choices = rows.map(row => {
+      const label = node("label",""), check = node("input","",{type:"checkbox"});
+      check.checked = true;
+      label.append(check,document.createTextNode(row.artist+" — "+row.album+" · "+(row.format==="CD"?"CD":"Vinile")));
+      inbox.append(label);
+      return {row,check};
+    });
+    if (rows.length) {
+      const apply = node("button","Importa selezionati",{type:"button"});
+      apply.onclick = async () => {
+        if (inboxBusy || busy) return;
+        const selected = choices.filter(x=>x.check.checked).map(x=>x.row);
+        if (!selected.length) return;
+        inboxBusy = true; apply.disabled = true;
+        try {
+          if (!mutate(()=>store.addPhysical(selected.map(x=>({artist:x.artist,title:x.album,cd:x.format==="CD",vinyl:x.format==="Vinyl"}))))) return;
+          await acknowledgeTransfers(selected);
+          report("Acquisti importati sul dispositivo. Sincronizza per aggiornare la raccolta condivisa.");
+        } catch(e) { report("Verifica della coda non riuscita. Puoi ripetere l’importazione senza duplicare i supporti. "+e.message,true); }
+        finally { inboxBusy = false; apply.disabled = false; void refreshInbox(); }
+      };
+      inbox.append(apply);
+    }
+  } catch(e) { inbox.replaceChildren(node("summary","Da importare da Scout"),node("p",e.message)); }
+  finally {
+    const retry = node("button","Aggiorna elenco",{type:"button"}); retry.onclick=refreshInbox;
+    inbox.append(retry); inboxBusy = false;
+  }
+}
+void refreshInbox();
+document.addEventListener("visibilitychange",()=>{if (!document.hidden) void refreshInbox();});
 function receiveScout(){if(busy||!store)return;const intent=importIntent(location.hash);if(!intent)return;window.history.replaceState(null,"",location.pathname+location.search);if(confirm("Aggiungere alla collezione "+intent.artist+" — "+intent.title+" ("+(intent.cd?"CD":"Vinile")+")?"))mutate(()=>store.addPhysical([intent]))}
 window.addEventListener("hashchange",receiveScout);
 if(!new URL(location.href).searchParams.has("code"))receiveScout();
