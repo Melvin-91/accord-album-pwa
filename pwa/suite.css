@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.1 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.2 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -146,4 +146,22 @@
 @media(forced-colors:active){
  [data-accord-suite] :is(button,a,summary,input,select,textarea):focus-visible{outline:2px solid Highlight}
  [data-accord-suite] :is(nav.orbit-dock,nav.dock) [aria-current=page]{border-color:Highlight}
+}
+
+/* Suite 1.2: reflow without clipping or hiding controls. */
+[data-accord-suite] main{min-width:0;overflow-wrap:anywhere}
+[data-accord-suite] :is(.quiet-link,.section-head a,.back-link){white-space:normal;overflow-wrap:anywhere}
+[data-accord-suite] :is(.quiet-link,.back-link){text-underline-offset:3px}
+[data-accord-suite] #qolBulk:not([hidden]){display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;max-width:100%;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-card)}
+[data-accord-suite] #qolBulk>#qolSelected{grid-column:1/-1;color:var(--muted);font-size:.8125rem}
+[data-accord-suite] #qolBulk>:is(label,button){width:100%;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+[data-accord-suite] #qolBulk :is(select,input){min-width:0;max-width:100%;width:100%}
+[data-accord-suite] .album-card:has(.qol-select)>*{min-width:0;max-width:100%;overflow-wrap:anywhere}
+[data-accord-suite] .album-card .qol-select{grid-area:auto;align-items:center;flex-wrap:wrap;min-width:0;max-width:100%;overflow-wrap:anywhere}
+[data-accord-suite] .album-card:has(.qol-select) :is(.card-actions,.album-state-line,.album-metadata){min-width:0;flex-wrap:wrap;overflow-wrap:anywhere}
+[data-accord-suite] .album-card:has(.qol-select) :is(a,button,summary){min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(a,button)>span{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+@media(max-width:400px){
+ [data-accord-suite] #qolBulk:not([hidden]){grid-template-columns:minmax(0,1fr);padding:12px}
+ [data-accord-suite] #albumList:has(.qol-select){grid-template-columns:minmax(0,1fr)}
 }
