@@ -278,7 +278,7 @@ async function runDurationRecovery(records) {
 }
 function fetchAddedDuration(album) {
   recordLocalAdded(album.id);
-  void (async () => {
+  return (async () => {
     try {
       const client = await services();
       const saved = await updateAlbumDuration(album, client);
@@ -1440,6 +1440,16 @@ async function chooseSupportAlbum(support, previous = null) {
     if(!selected){notice="Scegli una scheda o modifica la ricerca.";continue}
     const found=store.duplicate(selected);
     const album=found?.album || selected;
+    if (!resultCoverUrls.has(album.id) && !urls.has(album.id)) {
+      try {
+        const data=await covers.get(album.id);
+        if(data) urls.set(album.id,URL.createObjectURL(new Blob([data],{type:"image/jpeg"})));
+        else {
+          const url=await covers.getUrl(album.id);
+          if(url && trustedCoverUrl(url)) resultCoverUrls.set(album.id,url);
+        }
+      } catch { /* La scheda resta consultabile se la copertina locale è indisponibile. */ }
+    }
     const confirm=await choice("Conferma la scheda album",[comparison(album),node("p",found?
       "Il supporto sarà associato a questa scheda della raccolta.":"Questa scheda verrà aggiunta alla raccolta con il supporto scelto.")],
       [["cancel","Indietro"],["use","Conferma associazione"]]);
@@ -1450,7 +1460,7 @@ async function chooseSupportAlbum(support, previous = null) {
       if(store.add(album))throw Error("Raccolta cambiata. Ripeti la scelta.");
     }
     store.associateSupport(album.id,support,previous);
-    if(!found){await cacheCatalogCover(album.id);fetchAddedDuration(album)}
+    if(!found){await cacheCatalogCover(album.id);await fetchAddedDuration(album)}
     render();
     return album;
   }
