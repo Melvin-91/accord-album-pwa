@@ -6,7 +6,7 @@ export function requiresManualSwitch(href,target,platform) {
 export function companionShortcutURL(target) {
  return "shortcuts://run-shortcut?name="+encodeURIComponent(new URL(target).hostname==="melvin-91.github.io"?"Apri Accord Album":"Apri Accord Scout");
 }
-export function installSuiteSwitch(target,notify,runtime={navigator,matchMedia,document,location:window.location}) {
+export function installSuiteSwitch(target,notify,runtime={navigator,matchMedia:query=>window.matchMedia(query),document,location:window.location}) {
  const nav=runtime.navigator,platform={standalone:nav.standalone===true||runtime.matchMedia("(display-mode: standalone)").matches,userAgent:nav.userAgent,platform:nav.platform,maxTouchPoints:nav.maxTouchPoints};
  if(!requiresManualSwitch(target,target,platform))return;
  const shortcut=companionShortcutURL(target);
