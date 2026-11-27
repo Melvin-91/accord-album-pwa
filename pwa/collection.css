@@ -233,3 +233,11 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflo
 [data-accord-suite] #qolChips:not(:empty){margin-bottom:10px}
 [data-accord-suite] #returnToFilters:not([hidden]){margin-bottom:12px}
 @media(max-width:400px){[data-accord-suite] #collectionTools>summary{max-width:120px;overflow-wrap:anywhere;text-align:center}[data-accord-suite] #collectionTools>summary .command-icon{flex-shrink:0}}
+
+/* Only the integrated support controls are visible in the album sheet. */
+[data-accord-suite] #qolActionsDialog .physical-card-control{display:none}
+[data-accord-suite] .album-card:has(.qol-physical-scout)>.physical-card-control{display:none}
+[data-accord-suite] #qolActionsDialog .suite-supports{border-top:1px solid var(--line);margin-top:4px}
+[data-accord-suite] #qolActionsDialog .qol-art-controls{min-width:0}
+[data-accord-suite] #qolActionsDialog .qol-art-controls input{max-width:100%}
+[data-accord-suite] #qolActionsDialog .suite-section-label{font-size:.6875rem;letter-spacing:.1em;color:var(--muted);margin:0}

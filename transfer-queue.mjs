@@ -63,3 +63,37 @@ export async function acknowledgeTransfers(rows) {
     return ids.length > 0;
   });
 }
+
+const OUTBOX="accord-suite:desired-outbox";
+function outbox(){const rows=JSON.parse(localStorage.getItem(OUTBOX)||"[]");if(!Array.isArray(rows)||!rows.every(row=>valid(row)&&typeof row.wanted==="boolean"))throw Error("Coda locale desideri non valida.");return rows}
+export function localWishIntents(){return outbox()}
+export function queueWishIntent(artist,album,format,wanted){
+ const row={id:crypto.randomUUID(),artist,album,format,wanted};if(!valid(row)||typeof wanted!=="boolean")throw Error("Supporto non valido.");
+ const rows=outbox().filter(x=>identity(x)!==identity(row));rows.push(row);localStorage.setItem(OUTBOX,JSON.stringify(rows));return row;
+}
+let flushing=false;
+export async function flushWishIntents(){
+ if(flushing)return;flushing=true;
+ try{
+  const rows=outbox();if(!rows.length)return;
+  const {box:remote}=await read(peer);
+  await update(box=>{
+   box.sent=box.sent.filter(x=>!remote.received.includes(x.id));
+   for(const row of rows){
+    if(remote.received.includes(row.id)||box.sent.some(x=>x.id===row.id))continue;
+    box.sent=box.sent.filter(x=>identity(x)!==identity(row));
+    box.sent.push(row);
+   }
+   return true;
+  });
+  const sent=new Set(rows.map(x=>x.id));localStorage.setItem(OUTBOX,JSON.stringify(outbox().filter(x=>!sent.has(x.id))));
+ }finally{flushing=false}
+}
+export async function readScoutWishlist(){
+ const [local,remote]=await Promise.all([read(own),read(peer)]);
+ const response=await request(peer,"/contents/wishlist.json?ref=main");
+ if(!response.ok)throw Error("Wishlist Scout non raggiungibile (HTTP "+response.status+").");
+ const file=await response.json(),rows=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(file.content),c=>c.charCodeAt(0))));
+ if(!Array.isArray(rows)||rows.length>1000||!rows.every(x=>typeof x.artist==="string"&&typeof x.album==="string"&&["CD","Vinyl"].includes(x.format)))throw Error("Wishlist Scout non valida.");
+ return {rows,pending:local.box.sent.filter(x=>!remote.box.received.includes(x.id)&&typeof x.wanted==="boolean"),checkedAt:Date.now()};
+}

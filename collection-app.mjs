@@ -1,5 +1,5 @@
 import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
-import {pendingTransfers, sendTransfer, acknowledgeTransfers} from "./transfer-queue.mjs?v=1";
+import {pendingTransfers, acknowledgeTransfers, queueWishIntent, flushWishIntents, readScoutWishlist, localWishIntents} from "./transfer-queue.mjs?v=2";
 import {installSuiteSwitch} from "./suite-switch.mjs?v=3";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
@@ -31,6 +31,7 @@ const qolWrite=(key,value)=>{try{localStorage.setItem("accord-qol:"+key,JSON.str
 let qolReverse=!!qolRead("reverse",false),qolMulti=false;
 const qolSelection=new Set();
 let scoutImported=qolRead("scout-import",null),personalArt=qolRead("personal-art",{});if(!personalArt||typeof personalArt!=="object"||Array.isArray(personalArt))personalArt={};
+let scoutLive=null,suiteSyncBusy=false,suitePhysicalDirty=false;
 let qolActionsOrigin=null,localAdded=qolRead("added-local",{});if(!localAdded||typeof localAdded!=="object"||Array.isArray(localAdded))localAdded={};
 const recordLocalAdded=id=>{localAdded[id]=Date.now();qolWrite("added-local",localAdded)};
 const stateIcon = (status) => commandIconElement(commandIconName(states[status]), document);
@@ -540,8 +541,7 @@ function albumCard(album, favorite, duration) {
   const remove = node("button", "Rimuovi", { type: "button", "data-control": "remove", class: "secondary" });
   remove.addEventListener("click", () => run(() => confirmRemoval([album.id])));
   const management = node("div", "", { class: "dialog-actions" });
-  management.append(remove);
-  management.append(...transferButtons(album.artist,album.name));
+  management.className="suite-album-menu-group";management.append(node("p","RIPRODUZIONE",{class:"suite-section-label"}));
   options.append(management);
   if (/^tidal:[1-9][0-9]*$/.test(album.id)) {
     const preview = node("button", "Anteprima TIDAL · 30 s", { type: "button", class: "secondary" });
@@ -558,8 +558,8 @@ function albumCard(album, favorite, duration) {
         ? "tidal" : album.id.startsWith("qobuz:") ? "qobuz" : "spotify", report });
     } catch (error) { report(error.message, true); }
   });
-  management.append(openWith);footer.append(favoriteButton, open); card.append(footer, options);
-  options.querySelector("summary").addEventListener("click",event=>{event.preventDefault();if(busy||$("qolActionsDialog").open)return;closeAlbumOptions();const mosaic=$("qolView").value==="mosaic";qolActionsOrigin={options,id:album.id,footer:mosaic?footer:null,card};$("qolActionsTitle").textContent=album.name;$("qolActionsBody").replaceChildren(...(mosaic?[footer]:[]),...[...options.children].slice(1));$("qolActionsDialog").showModal()});
+  management.append(openWith);remove.textContent="Rimuovi album";remove.classList.add("suite-danger");const danger=node("div","",{class:"suite-album-menu-group"});danger.append(remove);options.append(danger);footer.append(favoriteButton, open); card.append(footer, options);
+  options.querySelector("summary").addEventListener("click",event=>{event.preventDefault();if(busy||$("qolActionsDialog").open)return;closeAlbumOptions();const mosaic=$("qolView").value==="mosaic";qolActionsOrigin={options,id:album.id,footer:mosaic?footer:null,card};$("qolActionsTitle").textContent=album.name;$("qolActionsBody").replaceChildren(...(mosaic?[footer]:[]),...[...options.children].slice(1));const body=$("qolActionsBody");const supports=supportPanel(album.artist,album.name);body.insertBefore(supports,body.querySelector(".suite-album-menu-group"));const cover=body.querySelector(".qol-art-controls");if(cover&&!cover.parentElement.matches("details")){const d=node("details","",{class:"filter-disclosure suite-album-menu-group"});d.append(node("summary","Copertina personale"),cover);body.insertBefore(d,danger)}body.append(danger);$("qolActionsDialog").showModal()});
   return card;
 }
 function closeAlbumOptions(except = null) {
@@ -615,10 +615,10 @@ function render() {
     const { element } = cards.get(id);
     physicalCollection.decorateCard(element, album || { artist: physical.artist, name: physical.title },
       physical || { cd: false, vinyl: false });
-    if(!album&&!element.querySelector(".qol-physical-scout")){const links=node("details","",{class:"qol-physical-scout"});links.append(node("summary","Invia a Scout"),...transferButtons(physical.artist,physical.title));element.append(links)}
+    if(!album&&!element.querySelector(".qol-physical-scout")){const links=node("details","",{class:"qol-physical-scout"});links.append(node("summary","Gestisci supporti"),supportPanel(physical.artist,physical.title));element.append(links)}
     const artKey=scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title);const art=personalArt[artKey];const artBox=element.querySelector(".artwork");if(artBox){const old=artBox.querySelector(".qol-personal-art");if(validPersonalCover(art)){if(!old||old.dataset.src!==art){old?.remove();const image=node("img","",{class:"qol-personal-art loaded",alt:"Copertina personale"});image.dataset.src=art;const bytes=Uint8Array.from(atob(art.split(",")[1]),x=>x.charCodeAt(0)),url=URL.createObjectURL(new Blob([bytes],{type:"image/jpeg"}));image.onload=image.onerror=()=>URL.revokeObjectURL(url);image.src=url;artBox.append(image)}}else old?.remove()}
     if(!element.querySelector(".qol-art-controls")&&(!qolActionsOrigin||qolActionsOrigin.id!==id)){const controls=node("div","",{class:"qol-art-controls"}),label=node("label","Copertina personale"),file=node("input","",{type:"file",accept:"image/jpeg,image/png,image/webp"});file.addEventListener("change",async()=>{try{if(!file.files[0]||!confirm("Confermi di poter utilizzare e condividere questa immagine personale?"))return;const data=await makePersonalCover(file.files[0]),next={...personalArt,[artKey]:data};if(JSON.stringify(next).length>1200000)throw Error("Archivio copertine personali pieno.");localStorage.setItem("accord-qol:personal-art",JSON.stringify(next));personalArt=next;render();report("Copertina personale salvata.")}catch(e){report(e.message,true)}finally{file.value=""}});label.append(file);controls.append(label);const remove=node("button","Rimuovi copertina personale",{type:"button",class:"secondary"});remove.addEventListener("click",()=>{delete personalArt[artKey];qolWrite("personal-art",personalArt);render()});controls.append(remove);const target=element.querySelector(".album-options");if(target)target.append(controls);else{const details=node("details","",{class:"qol-physical-art"});details.append(node("summary","Copertina personale"),controls);element.append(details)}}
-    element.querySelector(".qol-watch")?.remove();const tracked=(scoutImported?.rows||[]).filter(x=>x.priority!=="paused"&&scoutIdentity(x.artist,x.album)===scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title));if(tracked.length){const badge=node("p","Scout · "+[...new Set(tracked.map(x=>x.format==="Vinyl"?"Vinile":"CD"))].join(" + "),{class:"qol-watch muted",title:"Ultimo backup Scout importato, non aggiornamento live"});(element.querySelector(".album-metadata")||element).append(badge)}
+    element.querySelector(".qol-watch")?.remove();const tracked=(scoutLive?.rows||scoutImported?.rows||[]).filter(x=>x.priority!=="paused"&&scoutIdentity(x.artist,x.album)===scoutIdentity(album?.artist||physical?.artist,album?.name||physical?.title));if(tracked.length){const badge=node("p","Scout · "+[...new Set(tracked.map(x=>x.format==="Vinyl"?"Vinile":"CD"))].join(" + "),{class:"qol-watch muted",title:scoutLive?"Wishlist Scout verificata":"Ultimo backup Scout importato, non aggiornamento live"});(element.querySelector(".album-metadata")||element).append(badge)}
     let select=element.querySelector(".qol-select");
     if(qolMulti&&album){if(!select){select=node("label","Seleziona",{class:"qol-select"});const check=node("input","",{type:"checkbox","aria-label":"Seleziona "+album.name});select.prepend(check);check.addEventListener("change",()=>{if(check.checked)qolSelection.add(id);else qolSelection.delete(id);$("qolSelected").textContent=qolSelection.size+" selezionati"});element.prepend(select)}select.querySelector("input").checked=qolSelection.has(id)}else select?.remove();
     return element;
@@ -1048,7 +1048,7 @@ $("qolStats").addEventListener("click",()=>run(async()=>{const {visible}=collect
 function scoutStatus(){ $("qolScoutStatus").textContent=scoutImported?"Backup importato il "+new Date(scoutImported.imported_at).toLocaleString("it-IT")+". Dati non in tempo reale.":"Nessun backup Scout importato."}scoutStatus();$("qolScoutFile").addEventListener("change",async()=>{try{const f=$("qolScoutFile").files[0];if(!f||f.size>5000000)throw Error("File non valido.");scoutImported=scoutSnapshot(JSON.parse(await f.text()));qolWrite("scout-import",scoutImported);scoutStatus();render()}catch(e){report(e.message,true)}finally{$("qolScoutFile").value=""}});$("qolScoutClear").addEventListener("click",()=>{scoutImported=null;qolWrite("scout-import",null);scoutStatus();render()});
 $("qolScoutRead").addEventListener("click",()=>run(async()=>{scoutImported=await readScoutPersonal(localStorage.getItem("accord-album-token"));qolWrite("scout-import",scoutImported);scoutStatus();report("Dati Scout aggiornati in sola lettura.")}));
 $("qolArtExport").addEventListener("click",()=>{if(!store||!confirm("Esportare artista, titolo, anno, generi e sole copertine personali autorizzate? Nessun token o copertina dei cataloghi streaming."))return;const {visible}=collectionRows(store.state.albums,store.state.physical);const content=JSON.stringify(personalCards(visible,personalArt));const url=URL.createObjectURL(new Blob([content],{type:"application/json"})),link=node("a","",{href:url,download:"accord-schede-personali.json"});document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000)});
-$("qolActionsClose").addEventListener("click",()=>$("qolActionsDialog").close());$("qolActionsDialog").addEventListener("close",()=>{const origin=qolActionsOrigin;qolActionsOrigin=null;if(origin?.options.isConnected){for(const c of [...origin.options.children].slice(1))c.remove();if(origin.footer&&origin.card.isConnected)origin.card.insertBefore(origin.footer,origin.options);origin.options.append(...$("qolActionsBody").children)}else $("qolActionsBody").replaceChildren();render();[...$("albumList").children].find(c=>c.dataset.id===origin?.id)?.querySelector("summary")?.focus({preventScroll:true})});
+$("qolActionsClose").addEventListener("click",()=>$("qolActionsDialog").close());$("qolActionsDialog").addEventListener("close",()=>{const origin=qolActionsOrigin;qolActionsOrigin=null;if(origin?.options.isConnected){$("qolActionsBody").querySelector(".suite-supports")?.remove();const cover=$("qolActionsBody").querySelector(".qol-art-controls");if(cover?.parentElement.matches("details"))cover.parentElement.replaceWith(cover);for(const c of [...origin.options.children].slice(1))c.remove();if(origin.footer&&origin.card.isConnected)origin.card.insertBefore(origin.footer,origin.options);origin.options.append(...$("qolActionsBody").children)}else $("qolActionsBody").replaceChildren();render();[...$("albumList").children].find(c=>c.dataset.id===origin?.id)?.querySelector("summary")?.focus({preventScroll:true})});
 $("qolGenreApply").addEventListener("click",()=>{const g=$("qolGenre").value.trim();if(!g||!qolSelection.size||busy)return;if(confirm("Aggiungere il genere a "+qolSelection.size+" album?")){if(mutate(()=>store.addGenreMany([...qolSelection],g)))$("qolClear").click()}});
 for(const [id,format] of [["qolCD","cd"],["qolVinyl","vinyl"]])$(id).addEventListener("click",()=>{if(!qolSelection.size||busy)return;if(confirm("Segnare "+qolSelection.size+" supporti come posseduti?")){if(mutate(()=>store.addPhysicalMany([...qolSelection],format)))$("qolClear").click()}});
 $("qolPick").addEventListener("click",()=>run(async()=>{const timeLabel=node("label","Minuti disponibili (0 = nessun limite)"),minutesInput=node("input","",{type:"number",min:"0",max:"1440",value:"60"});timeLabel.append(minutesInput);const ratingLabel=node("label","Voto minimo (0 = qualsiasi)"),ratingInput=node("select");for(const v of [0,2,3,3.5,4,4.5,5])ratingInput.append(node("option",v===0?"Qualsiasi":String(v).replace(".",","),{value:String(v)}));ratingLabel.append(ratingInput);if(await choice("Cosa ascolto oggi?",[node("p","Uso anche i filtri correnti: genere, stato, supporto e preferiti."),timeLabel,ratingLabel],[["cancel","Annulla"],["pick","Suggerisci"]])!=="pick")return;const minutes=Number(minutesInput.value),minRating=Number(ratingInput.value);if(!Number.isFinite(minutes)||minutes<0||minutes>1440)return;const {visible}=collectionRows(store.state.albums,store.state.physical,collectionFilters()),candidates=listeningCandidates(visible,store.durations(),minutes,minRating);if(!candidates.length){report("Nessun album compatibile con i filtri e la durata.");return}const picked=candidates[Math.floor(Math.random()*candidates.length)];if(await choice("Cosa ascolto oggi?",[node("p",picked.artist+" — "+picked.name)], [["cancel","Chiudi"],["show","Mostra album"]])==="show")revealCollectionAlbum(picked.id)}));
@@ -1331,17 +1331,59 @@ window.addEventListener("storage", (event) => {
     report("Raccolta modificata in un'altra scheda. Ricarica prima di continuare.", true);
   }
 });
-function transferButtons(artist, title) {
-  return [["CD","CD"],["Vinyl","vinile"]].map(([format,label]) => {
-    const button = node("button","Invia "+label+" a Scout",{type:"button",class:"secondary qol-scout"});
-    button.onclick = async () => {
-      button.disabled = true;
-      try { await sendTransfer(artist,title,format); report("Disco in attesa. Apri Scout dal pulsante in alto e conferma in Da importare."); }
-      catch (e) { report(e.message,true); }
-      finally { button.disabled = false; }
-    };
-    return button;
-  });
+function supportPanel(artist,title){
+ const panel=node("section","",{class:"suite-supports"});panel.dataset.suiteSupport="1";
+ function draw(){
+  panel.replaceChildren(node("p","SUPPORTI FISICI",{class:"suite-section-label"}));
+  const same=x=>scoutIdentity(x.artist,x.album||x.title)===scoutIdentity(artist,title);
+  const physical=store.state.physical.find(x=>same(x))||{};
+  let local=[];try{local=localWishIntents()}catch{}
+  for(const [format,key,name] of [["CD","cd","CD"],["Vinyl","vinyl","Vinile"]]){
+   const row=node("div","",{class:"suite-support-row"}),choices=node("div","",{class:"suite-view-picker",role:"group","aria-label":name});
+   const pending=[...(scoutLive?.pending||[]),...local].filter(x=>same(x)&&x.format===format).at(-1);
+   const wanted=pending?pending.wanted:!!scoutLive?.rows.some(x=>same(x)&&x.format===format);
+   const owned=!!physical[key],current=owned?"owned":wanted?"wanted":"none";
+   row.append(node("label",name));
+   for(const [value,label] of [["none","Nessuno"],["wanted","Desiderato"],["owned","Posseduto"]]){
+    const button=node("button",label,{type:"button",class:"secondary","aria-pressed":String(current===value)});
+    button.disabled=busy||(!scoutLive&&value!=="owned"&&value!=="wanted"&&!owned);
+    button.onclick=async()=>{
+     if(busy)return;
+     if(value===current&&!(owned&&wanted&&value==="owned"))return;
+     if(owned&&value!=="owned"&&!confirm("Rimuovere "+name+" dai supporti posseduti?"))return;
+     try{
+      if(value==="wanted"){queueWishIntent(artist,title,format,true);if(owned){store.setPhysicalFormat(artist,title,key,false);suitePhysicalDirty=true}}
+      else if(value==="owned"){if(!owned){store.setPhysicalFormat(artist,title,key,true);suitePhysicalDirty=true}if(wanted&&confirm("Interrompere anche la ricerca in Scout per "+name+"?"))queueWishIntent(artist,title,format,false)}
+      else {if(wanted)queueWishIntent(artist,title,format,false);if(owned){store.setPhysicalFormat(artist,title,key,false);suitePhysicalDirty=true}}
+      if(suitePhysicalDirty)localStorage.setItem("accord-suite:physical-pending","1");
+      draw();void refreshSuite();
+     }catch(e){report(e.message,true);draw()}
+    };choices.append(button)
+   }
+   row.append(choices,node("p",pending?"Sincronizzazione Scout in attesa":owned?(wanted?"Posseduto · anche monitorato":"Presente nella raccolta fisica"):wanted?"Monitorato da Scout":scoutLive?"Non monitorato":"Stato Scout non verificato",{class:"muted"}));panel.append(row)
+  }
+ }
+ draw();panel.refreshSupport=draw;return panel;
+}
+async function safePhysicalSync(){
+ if(!sync||busy||sync.uncertainWrite())return false;
+ let completed=false;await run(async()=>{completed=await sync.sync({chooseConflicts:async()=>null,confirm:async p=>!p.migrating&&!p.coversOutgoing&&!p.linksOutgoing&&!(p.linkChangesIncoming||[]).length&&!(p.durationOutgoing||[]).length&&!(p.durationIncoming||[]).length&&JSON.stringify(p.local)===JSON.stringify(p.albums)&&JSON.stringify(p.remote)===JSON.stringify(p.albums),onProgress:()=>{}});});
+ return !!completed;
+}
+async function refreshSuite(){
+ if(suiteSyncBusy||busy||!store||!navigator.onLine)return;
+ suiteSyncBusy=true;
+ try{
+  await flushWishIntents();scoutLive=await readScoutWishlist();
+  for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.();
+  if(!$("qolActionsDialog").open)render();
+ }catch(e){/* Local intents are retained until a confirmed mailbox write. */}
+ try{
+  if(suitePhysicalDirty||localStorage.getItem("accord-suite:physical-pending")==="1"){
+   if(await safePhysicalSync()){suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending")}
+  }
+ }catch{}
+ finally{suiteSyncBusy=false;for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.()}
 }
 const inbox = $("transferInbox");
 const pendingNotice = $("pendingTransfersNotice");
@@ -1351,9 +1393,15 @@ async function refreshInbox() {
   if (inboxBusy) return;
   inboxBusy = true;
   try {
-    const rows = await pendingTransfers();
+    let rows = await pendingTransfers();
+    const automatic=rows.filter(x=>x.automatic===true);
+    if(automatic.length&&!busy&&store){
+      if(mutate(()=>store.addPhysical(automatic.map(x=>({artist:x.artist,title:x.album,cd:x.format==="CD",vinyl:x.format==="Vinyl"}))))){suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1");
+        if(await safePhysicalSync()){await acknowledgeTransfers(automatic);suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending");rows=rows.filter(x=>!automatic.some(a=>a.id===x.id));}
+      }
+    }
     pendingNotice.hidden = rows.length === 0;
-    pendingNotice.textContent = rows.length + (rows.length === 1 ? " acquisto da importare da Scout" : " acquisti da importare da Scout");
+    pendingNotice.textContent = rows.length + (rows.length === 1 ? " acquisto da sincronizzare da Scout" : " acquisti da sincronizzare da Scout");
     inbox.replaceChildren(node("summary","Da importare da Scout ("+rows.length+")"));
     if (!rows.length) inbox.append(node("p","Nessun acquisto in attesa."));
     const choices = rows.map(row => {
@@ -1372,8 +1420,9 @@ async function refreshInbox() {
         inboxBusy = true; apply.disabled = true;
         try {
           if (!mutate(()=>store.addPhysical(selected.map(x=>({artist:x.artist,title:x.album,cd:x.format==="CD",vinyl:x.format==="Vinyl"}))))) return;
-          await acknowledgeTransfers(selected);
-          report("Acquisti importati sul dispositivo. Sincronizza per aggiornare la raccolta condivisa.");
+          suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1");
+          if(await safePhysicalSync()){await acknowledgeTransfers(selected);suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending");report("Acquisti sincronizzati.");}
+          else report("Acquisti salvati sul dispositivo. Completa Sincronizza per confermare la raccolta condivisa.");
         } catch(e) { report("Verifica della coda non riuscita. Puoi ripetere l’importazione senza duplicare i supporti. "+e.message,true); }
         finally { inboxBusy = false; apply.disabled = false; void refreshInbox(); }
       };
@@ -1385,8 +1434,10 @@ async function refreshInbox() {
     inbox.append(retry); inboxBusy = false;
   }
 }
-void refreshInbox();
-document.addEventListener("visibilitychange",()=>{if (!document.hidden) void refreshInbox();});
+void refreshInbox();void refreshSuite();
+document.addEventListener("visibilitychange",()=>{if (!document.hidden){void refreshInbox();void refreshSuite()}});
+window.addEventListener("online",()=>{void refreshInbox();void refreshSuite()});
+setInterval(()=>{if(!document.hidden&&!busy){void refreshInbox();void refreshSuite()}},90000);
 function receiveScout(){if(busy||!store)return;const intent=importIntent(location.hash);if(!intent)return;window.history.replaceState(null,"",location.pathname+location.search);if(confirm("Aggiungere alla collezione "+intent.artist+" — "+intent.title+" ("+(intent.cd?"CD":"Vinile")+")?"))mutate(()=>store.addPhysical([intent]))}
 window.addEventListener("hashchange",receiveScout);
 if(!new URL(location.href).searchParams.has("code"))receiveScout();

@@ -31,3 +31,11 @@ test("reciprocal mailboxes preserve formats, receipts and concurrent sends",asyn
   assert.deepEqual(await pendingTransfers(),[]);
   assert.equal(own.received.length,1);
 });
+
+test("offline wish intent is persistent and last explicit choice replaces previous choice",async t=>{
+ const {queueWishIntent,localWishIntents}=await import("./transfer-queue.mjs");
+ const storage=new Map();Object.defineProperty(globalThis,"localStorage",{configurable:true,value:{getItem:k=>storage.get(k)??null,setItem:(k,v)=>storage.set(k,v)}});
+ t.after(()=>delete globalThis.localStorage);
+ queueWishIntent("Artist","Album","CD",true);queueWishIntent("Artist","Album","Vinyl",true);queueWishIntent("Artist","Album","CD",false);
+ assert.equal(localWishIntents().length,2);assert.equal(localWishIntents().find(x=>x.format==="CD").wanted,false);assert.equal(localWishIntents().find(x=>x.format==="Vinyl").wanted,true);
+});

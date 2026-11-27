@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.5 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.6 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -233,3 +233,17 @@
 [data-accord-suite] .suite-view-picker{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
 [data-accord-suite] .suite-view-picker button{min-width:0;padding:8px 4px;font-size:.75rem}
 [data-accord-suite] .suite-view-picker button[aria-pressed=true]{background:var(--soft);color:var(--accent);border-color:var(--accent)}
+
+/* Shared navigation geometry and structured support controls. */
+[data-accord-suite] :is(nav.dock,nav.orbit-dock){width:min(calc(100% - 24px),480px);max-width:calc(100% - 24px)}
+[data-accord-suite] :is(nav.dock,nav.orbit-dock)>:is(a,button){flex:1 1 0;min-width:0;width:auto;min-height:64px;font-size:.6875rem}
+[data-accord-suite] .suite-supports{display:grid;gap:10px;padding:12px 0}
+[data-accord-suite] .suite-support-row{display:grid;gap:6px;min-width:0}
+[data-accord-suite] .suite-support-row>label{font-weight:600;color:var(--ink)}
+[data-accord-suite] .suite-support-row .suite-view-picker button{min-height:44px}
+[data-accord-suite] .suite-support-row .muted{margin:0;font-size:.75rem}
+[data-accord-suite] .suite-album-menu-group{display:grid;gap:8px;margin:0;padding:12px 0;border-top:1px solid var(--line)}
+[data-accord-suite] .suite-album-menu-group>button{width:100%;text-align:left}
+[data-accord-suite] .suite-album-menu-group .suite-section-label{font-size:.6875rem;letter-spacing:.1em;color:var(--muted);margin:0}
+[data-accord-suite] .suite-danger{color:var(--danger)!important}
+[data-accord-suite] .suite-support-row button[aria-pressed=true]{background:var(--soft);color:var(--accent);border-color:var(--accent)}
