@@ -31,7 +31,7 @@ const qolWrite=(key,value)=>{try{localStorage.setItem("accord-qol:"+key,JSON.str
 let qolReverse=!!qolRead("reverse",false),qolMulti=false;
 const qolSelection=new Set();
 let scoutImported=qolRead("scout-import",null),personalArt=qolRead("personal-art",{});if(!personalArt||typeof personalArt!=="object"||Array.isArray(personalArt))personalArt={};
-let scoutLive=null,suiteSyncBusy=false,suitePhysicalDirty=false;
+let scoutLive=null,suiteSyncBusy=false,suitePhysicalDirty=false,suiteRefreshQueued=false;
 let qolActionsOrigin=null,localAdded=qolRead("added-local",{});if(!localAdded||typeof localAdded!=="object"||Array.isArray(localAdded))localAdded={};
 const recordLocalAdded=id=>{localAdded[id]=Date.now();qolWrite("added-local",localAdded)};
 const stateIcon = (status) => commandIconElement(commandIconName(states[status]), document);
@@ -1373,19 +1373,21 @@ async function safePhysicalSync(){
  return !!completed;
 }
 async function refreshSuite(){
- if(suiteSyncBusy||busy||!store||!navigator.onLine)return;
+ if(suiteSyncBusy||busy){suiteRefreshQueued=true;return;}
+ if(!store||!navigator.onLine)return;
+ suiteRefreshQueued=false;
  suiteSyncBusy=true;
  try{
-  await flushWishIntents();scoutLive=await readScoutWishlist();
+  await flushWishIntents();const next=await readScoutWishlist();const changed=!scoutLive||JSON.stringify([next.rows,next.pending])!==JSON.stringify([scoutLive.rows,scoutLive.pending]);scoutLive=next;
   for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.();
-  if(!$("qolActionsDialog").open)render();
+  if(changed&&!document.querySelector("dialog[open]"))render();
  }catch(e){/* Local intents are retained until a confirmed mailbox write. */}
  try{
   if(suitePhysicalDirty||localStorage.getItem("accord-suite:physical-pending")==="1"){
    if(await safePhysicalSync()){suitePhysicalDirty=false;localStorage.removeItem("accord-suite:physical-pending")}
   }
  }catch{}
- finally{suiteSyncBusy=false;for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.()}
+ finally{suiteSyncBusy=false;for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.();if(suiteRefreshQueued&&!busy&&!document.hidden)setTimeout(()=>void refreshSuite(),500)}
 }
 const inbox = $("transferInbox");
 const pendingNotice = $("pendingTransfersNotice");
@@ -1437,9 +1439,9 @@ async function refreshInbox() {
   }
 }
 void refreshInbox();void refreshSuite();
-document.addEventListener("visibilitychange",()=>{if (!document.hidden){void refreshInbox();void refreshSuite()}});
-window.addEventListener("online",()=>{void refreshInbox();void refreshSuite()});
-setInterval(()=>{if(!document.hidden&&!busy){void refreshInbox();void refreshSuite()}},90000);
+const resumeSuite=()=>{if(!document.hidden&&navigator.onLine){void refreshInbox();void refreshSuite()}};
+document.addEventListener("visibilitychange",resumeSuite);window.addEventListener("pageshow",resumeSuite);window.addEventListener("focus",resumeSuite);window.addEventListener("online",resumeSuite);
+setInterval(resumeSuite,20000);
 function receiveScout(){if(busy||!store)return;const intent=importIntent(location.hash);if(!intent)return;window.history.replaceState(null,"",location.pathname+location.search);if(confirm("Aggiungere alla collezione "+intent.artist+" — "+intent.title+" ("+(intent.cd?"CD":"Vinile")+")?"))mutate(()=>store.addPhysical([intent]))}
 window.addEventListener("hashchange",receiveScout);
 if(!new URL(location.href).searchParams.has("code"))receiveScout();
