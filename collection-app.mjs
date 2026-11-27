@@ -1,6 +1,6 @@
 import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
 import {pendingTransfers, sendTransfer, acknowledgeTransfers} from "./transfer-queue.mjs?v=1";
-import {installSuiteSwitch} from "./suite-switch.mjs?v=2";
+import {installSuiteSwitch} from "./suite-switch.mjs?v=3";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
 import { createCollectionStore, createCollectionCoverCache } from "./collection-store.mjs?v=15";
@@ -1028,8 +1028,8 @@ $("qolSave").addEventListener("click",()=>{const name=prompt("Nome della vista")
 $("qolLoad").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""){const v=qolSaved()[Number(value)];if(v)qolApplyView(v.view)}});
 $("qolDelete").addEventListener("click",()=>{const value=$("qolSaved").value;if(value!==""&&confirm("Eliminare questa vista salvata?")){qolWrite("views",qolSaved().filter((_,i)=>i!==Number(value)));qolRefreshSaved()}});
 const legacyAppearance={...store?.state.preferences,theme:qolRead("theme","copper")};
-const mountSuiteAppearance=()=>mountAppearance($("suiteAppearance"),{storage:localStorage,legacy:legacyAppearance,onChange:p=>{$("qolTheme").value=p.theme;qolWrite("theme",p.theme)}});
-$("qolTheme").value=mountSuiteAppearance().theme;$("qolTheme").addEventListener("change",()=>{const p=applyAppearance(document.documentElement,{...readAppearance(localStorage,legacyAppearance),theme:$("qolTheme").value});qolWrite("theme",p.theme);try{localStorage.setItem("accord-suite:appearance",JSON.stringify(p))}catch{}mountSuiteAppearance()});
+const mountSuiteAppearance=()=>mountAppearance($("suiteAppearance"),{storage:localStorage,legacy:legacyAppearance,onChange:p=>qolWrite("theme",p.theme)});
+mountSuiteAppearance();
 $("qolMulti").addEventListener("click",()=>{qolMulti=!qolMulti;qolSelection.clear();$("qolMulti").setAttribute("aria-pressed",String(qolMulti));$("qolBulk").hidden=!qolMulti;render()});
 $("qolClear").addEventListener("click",()=>{qolMulti=false;qolSelection.clear();$("qolBulk").hidden=true;$("qolMulti").setAttribute("aria-pressed","false");render()});
 $("qolApply").addEventListener("click",()=>{if(busy||!store||!qolSelection.size)return;const ids=[...qolSelection];if(confirm("Cambiare stato di "+ids.length+" album?")){if(mutate(()=>store.updateMany(ids,{status:$("qolBulkState").value})))$("qolClear").click()}});
@@ -1325,7 +1325,7 @@ function transferButtons(artist, title) {
     const button = node("button","Invia "+label+" a Scout",{type:"button",class:"secondary qol-scout"});
     button.onclick = async () => {
       button.disabled = true;
-      try { await sendTransfer(artist,title,format); report("Disco in attesa. Apri Scout dalla sua icona e conferma in Da importare."); }
+      try { await sendTransfer(artist,title,format); report("Disco in attesa. Apri Scout dal pulsante in alto e conferma in Da importare."); }
       catch (e) { report(e.message,true); }
       finally { button.disabled = false; }
     };
