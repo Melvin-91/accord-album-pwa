@@ -1,4 +1,4 @@
-/* Accord Suite design system 1.6 — canonical, shared byte-for-byte by Album and Scout. */
+/* Accord Suite design system 1.7 — canonical, shared byte-for-byte by Album and Scout. */
 :root[data-accord-suite]{
  color-scheme:dark;font-family:"Segoe UI",system-ui,sans-serif;font-size:16px;line-height:1.5;font-synthesis:none;text-rendering:optimizeLegibility;
  --bg:#15191e;--ink:#f4efe9;--surface:#1c2229;--paper:var(--surface);--raised:#262d36;--navigation:#11151a;
@@ -247,3 +247,22 @@
 [data-accord-suite] .suite-album-menu-group .suite-section-label{font-size:.6875rem;letter-spacing:.1em;color:var(--muted);margin:0}
 [data-accord-suite] .suite-danger{color:var(--danger)!important}
 [data-accord-suite] .suite-support-row button[aria-pressed=true]{background:var(--soft);color:var(--accent);border-color:var(--accent)}
+
+/* Fixed, equal-width navigation slots; never split labels mid-word. */
+[data-accord-suite] :is(nav.orbit-dock,nav.dock){
+ width:min(calc(100% - 24px),480px)!important;max-width:calc(100% - 24px)!important;
+ display:flex;gap:4px;padding:6px;box-sizing:border-box;
+}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(a,button){
+ flex:1 1 0!important;width:0!important;min-width:0;padding:9px 2px;
+ font-size:clamp(11px,3.1vw,.75rem);line-height:1.25;
+ white-space:nowrap;overflow-wrap:normal;word-break:normal;
+}
+[data-accord-suite] :is(nav.orbit-dock,nav.dock) :is(a,button)>span{
+ max-width:100%;white-space:nowrap;overflow-wrap:normal;word-break:normal;
+}
+[data-accord-suite] nav.dock .update-notice:not([hidden]){display:contents}
+[data-accord-suite] nav.dock #app-update-button{width:0!important;font-size:clamp(11px,3.1vw,.75rem);padding:9px 2px}
+@media(max-width:360px){
+ [data-accord-suite] :is(nav.orbit-dock,nav.dock){width:calc(100% - 16px)!important;max-width:calc(100% - 16px)!important;gap:2px;padding:4px}
+}

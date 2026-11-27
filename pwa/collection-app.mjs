@@ -653,7 +653,9 @@ function render() {
   $("lastSync").textContent = `Ultima conferma GitHub: ${confirmed} · modifiche locali in attesa: ${pending}`;
   $("headerSyncState").textContent = store.state.lastSync ? "Raccolta condivisa" : "Raccolta sul dispositivo";
   const verificationRequired = Boolean(sync?.uncertainWrite());
-  $("sync").textContent = verificationRequired ? "Verifica su GitHub" : "Sincronizza";
+  $("sync").textContent = verificationRequired ? "Verifica" : "Sincron.";
+  $("sync").setAttribute("aria-label", verificationRequired ? "Verifica su GitHub" : "Sincronizza");
+  $("sync").title = verificationRequired ? "Verifica su GitHub" : "Sincronizza";
   $("sync").setAttribute("aria-describedby", "syncSummary");
   $("syncSummary").textContent = `Ultima conferma: ${confirmed} · ${pending} modifiche locali in attesa`
     + (verificationRequired ? " · verifica in sola lettura richiesta" : "");
