@@ -107,6 +107,12 @@ function report(message, error = false) {
   $("feedback").textContent = message;
   $("feedback").classList.toggle("error", error);
   $("feedback").setAttribute("role", error ? "alert" : "status");
+  if ($("qolActionsDialog").open) {
+    const feedback = $("actionFeedback");
+    feedback.hidden = false;
+    feedback.textContent = message;
+    feedback.classList.toggle("error", error);
+  }
   if ($("addDialog").open) {
     $("catalogStatus").textContent = message;
     $("catalogStatus").classList.toggle("error", error);
@@ -301,7 +307,7 @@ async function run(action) {
   finally { busy = false; render(); disable(); for(const p of document.querySelectorAll("[data-suite-support]"))p.refreshSupport?.(); }
 }
 function mutate(action) {
-  if (busy || !store) return;
+  if (busy || !store) { report("Raccolta occupata. Riprova tra poco.", true); return false; }
   try { action(); render(); report("Modifica salvata sul dispositivo. Sincronizza per aggiornare la raccolta condivisa."); return true; }
   catch (error) { report(error.message, true); return false; }
 }
@@ -509,12 +515,22 @@ function albumCard(album, favorite, duration) {
   statusLabel.prepend(stateIcon(album.status));
   Object.entries(states).forEach(([value, label]) => status.append(node("option", label, { value })));
   status.value = album.status; statusLabel.append(status);
-  status.addEventListener("change", () => mutate(() => store.update(album.id, { status: status.value })));
+  status.addEventListener("change", () => {
+    if (!mutate(() => store.update(album.id, { status: status.value }))) {
+      const saved = store.state.albums.find(item => item.id === album.id);
+      status.value = saved?.status ?? "";
+    }
+  });
   const ratingLabel = node("label", "Voto"), rating = node("select", "", { "data-control": "rating" });
   rating.append(node("option", "Senza voto", { value: "" }));
   for (let value = 0.5; value <= 5; value += 0.5) rating.append(node("option", String(value).replace(".", ","), { value }));
   rating.value = album.rating === null ? "" : String(album.rating); ratingLabel.append(rating);
-  rating.addEventListener("change", () => mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null })));
+  rating.addEventListener("change", () => {
+    if (!mutate(() => store.update(album.id, { rating: rating.value ? Number(rating.value) : null }))) {
+      const saved = store.state.albums.find(item => item.id === album.id);
+      rating.value = saved?.rating ?? "";
+    }
+  });
   controls.append(statusLabel, ratingLabel); options.append(controls);
   const footer = node("div", "", { class: "card-actions" }), target = musicService();
   let playback = null;
@@ -559,7 +575,7 @@ function albumCard(album, favorite, duration) {
     } catch (error) { report(error.message, true); }
   });
   management.append(openWith);remove.textContent="Rimuovi album";remove.classList.add("suite-danger");const danger=node("div","",{class:"suite-album-menu-group"});danger.append(remove);options.append(danger);footer.append(favoriteButton, open); card.append(footer, options);
-  options.querySelector("summary").addEventListener("click",event=>{event.preventDefault();if(busy||$("qolActionsDialog").open)return;closeAlbumOptions();const mosaic=$("qolView").value==="mosaic";qolActionsOrigin={options,id:album.id,footer:mosaic?footer:null,card};$("qolActionsTitle").textContent=album.name;$("qolActionsBody").replaceChildren(...(mosaic?[footer]:[]),...[...options.children].slice(1));const body=$("qolActionsBody");const supports=supportPanel(album.artist,album.name);body.insertBefore(supports,body.querySelector(".suite-album-menu-group"));const cover=body.querySelector(".qol-art-controls");if(cover&&!cover.parentElement.matches("details")){const d=node("details","",{class:"filter-disclosure suite-album-menu-group"});d.append(node("summary","Copertina personale"),cover);body.insertBefore(d,danger)}body.append(danger);$("qolActionsDialog").showModal()});
+  options.querySelector("summary").addEventListener("click",event=>{event.preventDefault();if(busy||$("qolActionsDialog").open)return;closeAlbumOptions();const mosaic=$("qolView").value==="mosaic";qolActionsOrigin={options,id:album.id,footer:mosaic?footer:null,card};$("actionFeedback").hidden=true;$("qolActionsTitle").textContent=album.name;$("qolActionsBody").replaceChildren(...(mosaic?[footer]:[]),...[...options.children].slice(1));const body=$("qolActionsBody");const supports=supportPanel(album.artist,album.name);body.insertBefore(supports,body.querySelector(".suite-album-menu-group"));const cover=body.querySelector(".qol-art-controls");if(cover&&!cover.parentElement.matches("details")){const d=node("details","",{class:"filter-disclosure suite-album-menu-group"});d.append(node("summary","Copertina personale"),cover);body.insertBefore(d,danger)}body.append(danger);$("qolActionsDialog").showModal()});
   return card;
 }
 function closeAlbumOptions(except = null) {
@@ -1363,7 +1379,8 @@ function supportPanel(artist,title){
   lastDraw=signature;
   panel.replaceChildren(node("p","SUPPORTI FISICI",{class:"suite-section-label"}));
   const same=x=>scoutIdentity(x.artist,x.album||x.title)===scoutIdentity(artist,title);
-  const physical=store.state.physical.find(x=>same(x))||{};
+  const albumKey=physicalKey(artist,title);
+  const physical=store.state.physical.find(x=>physicalKey(x.artist,x.title)===albumKey)||{};
   let local=[];try{local=localWishIntents()}catch{}
   for(const [format,key,name] of [["CD","cd","CD"],["Vinyl","vinyl","Vinile"]]){
    const row=node("div","",{class:"suite-support-row"}),choices=node("div","",{class:"suite-view-picker",role:"group","aria-label":name});
@@ -1383,7 +1400,7 @@ function supportPanel(artist,title){
       else if(value==="owned"){if(!owned){store.setPhysicalFormat(artist,title,key,true);suitePhysicalDirty=true}if(wanted&&confirm("Interrompere anche la ricerca in Scout per "+name+"?"))queueWishIntent(artist,title,format,false)}
       else {if(wanted)queueWishIntent(artist,title,format,false);if(owned){store.setPhysicalFormat(artist,title,key,false);suitePhysicalDirty=true}}
       if(suitePhysicalDirty)localStorage.setItem("accord-suite:physical-pending","1");
-      draw();void refreshSuite();
+      draw();report(name+" · "+label+". Modifica salvata sul dispositivo.");void refreshSuite();
      }catch(e){lastDraw="";report(e.message,true);draw()}
     };choices.append(button)
    }
