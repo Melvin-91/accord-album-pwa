@@ -1,5 +1,5 @@
 import {readAppearance,applyAppearance,mountAppearance} from "./suite-accessibility.mjs?v=1";
-import {pendingTransfers, acknowledgeTransfers, queueWishIntent, flushWishIntents, readScoutWishlist, localWishIntents} from "./transfer-queue.mjs?v=2";
+import {importMatchedPurchases, pendingTransfers, acknowledgeTransfers, queueWishIntent, flushWishIntents, readScoutWishlist, localWishIntents} from "./transfer-queue.mjs?v=3";
 import {installSuiteSwitch} from "./suite-switch.mjs?v=3";
 import { exportCredentials, decryptCredentials, restoreCredentials } from "./credential-backup.mjs?v=1";
 import { reconcileAlbumCards, validateAlbum } from "./core.mjs?v=54";
@@ -1509,22 +1509,12 @@ async function refreshInbox() {
   try {
     let rows = await pendingTransfers();
     if(!busy && navigator.onLine && !document.querySelector("dialog[open]")){
-      const automatic=rows.filter(row=>row.automatic===true&&!row.cancelled).map(row=>({row,matches:store.state.albums.filter(album=>scoutIdentity(album.artist,album.name)===scoutIdentity(row.artist,row.album))})).filter(x=>x.matches.length===1);
-      if(automatic.length){
-        try{
-          for(const {row,matches:[album]} of automatic){
-            const key=row.format==="CD"?"cd":"vinyl";
-            const existing=store.state.physical.find(p=>physicalKey(p.artist,p.title)===physicalKey(album.artist,album.name));
-            if(!existing?.[key])store.setPhysicalFormat(album.artist,album.name,key,true);
-          }
-          suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1");
-          if(await safePhysicalSync()){
-            const confirmed=automatic.filter(({row,matches:[album]})=>store.state.physical.some(p=>physicalKey(p.artist,p.title)===physicalKey(album.artist,album.name)&&p[row.format==="CD"?"cd":"vinyl"])).map(x=>x.row);
-            await acknowledgeTransfers(confirmed);
-            const ids=new Set(confirmed.map(x=>x.id));rows=rows.filter(x=>!ids.has(x.id));
-          }
-        }catch(e){report("Acquisto Scout in attesa di sincronizzazione: "+e.message,true)}
-      }
+      try {
+        rows=await importMatchedPurchases(rows,{store,albumKey:scoutIdentity,physicalKey,sync:safePhysicalSync,
+          markPending:()=>{suitePhysicalDirty=true;localStorage.setItem("accord-suite:physical-pending","1")},
+          acknowledge:acknowledgeTransfers});
+      } catch(e){report("Acquisto Scout in attesa di sincronizzazione: "+e.message,true)}
+
     }
     pendingNotice.hidden = rows.length === 0;
     pendingNotice.textContent = rows.length + (rows.length === 1 ? " acquisto da sincronizzare da Scout" : " acquisti da sincronizzare da Scout");
@@ -1534,7 +1524,12 @@ async function refreshInbox() {
       if(row.cancelled===true){
         const key=row.format==="CD"?"cd":"vinyl";
         const matches=store.state.physical.filter(p=>physicalKey(p.artist,p.title)===physicalKey(row.artist,row.album)&&p[key]);
-        if(!matches.length){await acknowledgeTransfers([row]);continue;}
+        if(!matches.length){
+          if(!await safePhysicalSync())continue;
+          if(!store.state.physical.some(p=>physicalKey(p.artist,p.title)===physicalKey(row.artist,row.album)&&p[key])){
+            await acknowledgeTransfers([row]);continue;
+          }
+        }
         const button=node("button","Annullamento Scout: "+row.artist+" — "+row.album+" · "+(key==="cd"?"CD":"Vinile"),{type:"button"});
         button.onclick=async()=>{
           if(busy||inboxBusy)return;

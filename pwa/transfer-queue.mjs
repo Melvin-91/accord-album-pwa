@@ -97,3 +97,24 @@ export async function readScoutWishlist(){
  if(!Array.isArray(rows)||rows.length>1000||!rows.every(x=>typeof x.artist==="string"&&typeof x.album==="string"&&["CD","Vinyl"].includes(x.format)))throw Error("Wishlist Scout non valida.");
  return {rows,pending:local.box.sent.filter(x=>!remote.box.received.includes(x.id)&&typeof x.wanted==="boolean"),checkedAt:Date.now()};
 }
+
+export async function importMatchedPurchases(rows, {store, albumKey, physicalKey, sync, markPending, acknowledge}) {
+  const matches = [];
+  for (const row of rows) {
+    if (!row.automatic || row.cancelled) continue;
+    const albums = store.state.albums.filter(album => albumKey(album.artist, album.name) === albumKey(row.artist, row.album));
+    if (albums.length !== 1) continue;
+    const [album] = albums;
+    const key = row.format === "CD" ? "cd" : "vinyl";
+    const present = () => store.state.physical.some(entry => physicalKey(entry.artist, entry.title) === physicalKey(album.artist, album.name) && entry[key]);
+    if (!present()) store.setPhysicalFormat(album.artist, album.name, key, true);
+    matches.push({row, present});
+  }
+  if (!matches.length) return rows;
+  markPending();
+  if (!await sync()) return rows;
+  const confirmed = matches.filter(match => match.present()).map(match => match.row);
+  await acknowledge(confirmed);
+  const ids = new Set(confirmed.map(row => row.id));
+  return rows.filter(row => !ids.has(row.id));
+}
